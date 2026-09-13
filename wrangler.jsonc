@@ -1,0 +1,80 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "diggo-fun",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-09-13",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/media/*", "/webhooks/*"]
+  },
+  "vars": {
+    "ENVIRONMENT": "production",
+    "SOLANA_CLUSTER": "devnet",
+    "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+    "VANITY_SUFFIX": "diggo"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "diggo-db",
+      "migrations_dir": "./migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "TOKEN_CACHE"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "TOKEN_MEDIA",
+      "bucket_name": "diggo-token-media"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MARKETS",
+        "class_name": "TokenMarket"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["TokenMarket"]
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "INDEXING_QUEUE",
+        "queue": "diggo-indexing"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "diggo-indexing",
+        "max_batch_size": 20,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "dead_letter_queue": "diggo-indexing-dlq"
+      }
+    ]
+  },
+  "workflows": [
+    {
+      "binding": "EPOCH_WORKFLOW",
+      "name": "diggo-epoch",
+      "class_name": "EpochWorkflow",
+      "schedules": ["*/5 * * * *"]
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

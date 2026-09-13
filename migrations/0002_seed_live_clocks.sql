@@ -1,0 +1,5 @@
+UPDATE tokens
+SET next_block_at = unixepoch() +
+  CASE symbol WHEN 'BYTE' THEN 54 WHEN 'DRILL' THEN 102 WHEN 'STONE' THEN 221 ELSE 278 END,
+    next_epoch_at = unixepoch() +
+  CASE symbol WHEN 'BYTE' THEN 80200 WHEN 'DRILL' THEN 225120 WHEN 'STONE' THEN 151200 ELSE 346000 END;

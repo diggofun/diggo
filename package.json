@@ -1,0 +1,37 @@
+{
+  "name": "diggo-fun",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:worker": "wrangler dev",
+    "build": "tsc -b && vite build",
+    "check": "npm run typecheck && npm run test && npm run build && wrangler deploy --dry-run",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run",
+    "types": "wrangler types",
+    "db:local": "wrangler d1 migrations apply diggo-db --local"
+  },
+  "dependencies": {
+    "@noble/curves": "latest",
+    "@solana/kit": "^8.3.0",
+    "@solana/kit-plugin-wallet": "^0.20.0",
+    "@solana/react": "^8.3.0",
+    "bs58": "latest",
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "@types/node": "^26.5.1",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "vitest": "latest",
+    "wrangler": "latest"
+  }
+}
