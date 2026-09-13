@@ -20,12 +20,14 @@
     {
       "binding": "DB",
       "database_name": "diggo-db",
+      "database_id": "b985e043-b65e-4103-8f72-d4c98d47d1cf",
       "migrations_dir": "./migrations"
     }
   ],
   "kv_namespaces": [
     {
-      "binding": "TOKEN_CACHE"
+      "binding": "TOKEN_CACHE",
+      "id": "d40b446e286b4c3fa6141e9eeaf983e1"
     }
   ],
   "r2_buckets": [
