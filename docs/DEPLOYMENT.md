@@ -8,7 +8,7 @@ Wrangler declares the following bindings and validates them in dry-run mode:
 | --- | --- | --- |
 | `ASSETS` | Workers Static Assets | React frontend |
 | `DB` | D1 | token index, launch jobs, events and history |
-| `TOKEN_MEDIA` | R2 | uploaded token artwork |
+| Supabase `token-media` | Supabase Storage | private uploaded token artwork, delivered through the Worker |
 | `TOKEN_CACHE` | KV | hot token lists, rate hints and signed wallet sessions |
 | `MARKETS` | Durable Objects | one strongly consistent live stream per mint |
 | `INDEXING_QUEUE` | Queues | Helius ingestion and retry isolation |
@@ -20,6 +20,7 @@ Create a queue named `diggo-indexing-dlq` before production deployment if automa
 
 - `TURNSTILE_SECRET`: private key for the production Turnstile widget.
 - `HELIUS_WEBHOOK_AUTH`: exact authorization header configured in Helius, including `Bearer `.
+- `SUPABASE_SERVICE_ROLE_KEY`: Supabase secret key used only by the Worker to upload and retrieve private artwork.
 
 The repository contains only Cloudflare's public always-pass development site key. Replace it before using a production hostname.
 

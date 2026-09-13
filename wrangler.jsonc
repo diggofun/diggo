@@ -13,6 +13,7 @@
   "vars": {
     "ENVIRONMENT": "production",
     "SOLANA_CLUSTER": "devnet",
+    "SUPABASE_URL": "https://mtkvvcybpasehmscueox.supabase.co",
     "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
     "VANITY_SUFFIX": "diggo"
   },
@@ -28,12 +29,6 @@
     {
       "binding": "TOKEN_CACHE",
       "id": "d40b446e286b4c3fa6141e9eeaf983e1"
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "TOKEN_MEDIA",
-      "bucket_name": "diggo-token-media"
     }
   ],
   "durable_objects": {

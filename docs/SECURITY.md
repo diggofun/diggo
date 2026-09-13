@@ -12,7 +12,7 @@ Cloudflare is an index, cache and coordination layer. It must never be authorita
 - Helius delivery uses timing-safe authorization-header comparison.
 - D1 input is handled with bound prepared statements.
 - Queue inserts use transaction signatures for idempotency.
-- R2 uploads accept images only and cap payloads at 2 MB.
+- Supabase Storage is private; Worker-mediated uploads accept PNG, JPEG, and WebP only and cap payloads at 2 MB.
 - Static assets set CSP, anti-framing, MIME-sniffing, referrer and permission headers.
 - Worker logs use request IDs and do not echo internal errors to clients.
 

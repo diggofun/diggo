@@ -1,6 +1,6 @@
 # Diggo.fun
 
-Diggo.fun is a Solana meme-coin launchpad wrapped in a finite-reserve mining game. This repository contains a production-shaped Cloudflare MVP: a React frontend, Worker API, D1 index, R2 media storage, KV cache and wallet sessions, per-token Durable Objects, Helius event queues, a scheduled epoch Workflow, and Turnstile protection.
+Diggo.fun is a Solana meme-coin launchpad wrapped in a finite-reserve mining game. This repository contains a production-shaped Cloudflare MVP: a React frontend, Worker API, D1 index, private Supabase Storage for token media, KV cache and wallet sessions, per-token Durable Objects, Helius event queues, a scheduled epoch Workflow, and Turnstile protection.
 
 The UI is functional on devnet. The actual Solana programs and vanity-key generation service are deliberately outside this web repository; the launch API creates a secure job and requires every completed mint address to end in `diggo`.
 
@@ -37,11 +37,12 @@ The check runs TypeScript, economic-invariant tests, the production frontend bui
    ```bash
    npx wrangler secret put TURNSTILE_SECRET
    npx wrangler secret put HELIUS_WEBHOOK_AUTH
+   npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
    ```
 
    Store the Helius value including its scheme, for example `Bearer <long-random-value>`, and put the exact same value in Helius `authHeader`.
 
-3. Deploy the Worker and automatically provision declared bindings:
+3. Deploy the Worker and automatically provision declared Cloudflare bindings:
 
    ```bash
    npm run build

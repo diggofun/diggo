@@ -19,6 +19,7 @@ import type {
 interface SecretBindings {
   TURNSTILE_SECRET?: string;
   HELIUS_WEBHOOK_AUTH?: string;
+  SUPABASE_SERVICE_ROLE_KEY?: string;
 }
 
 interface CloudflareSubtleCrypto extends SubtleCrypto {
@@ -64,6 +65,8 @@ const JSON_HEADERS = {
 
 const TOKEN_CACHE_KEY = "tokens:v1";
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const SUPABASE_MEDIA_BUCKET = "token-media";
+const IMAGE_CONTENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const textEncoder = new TextEncoder();
 
 function json(data: unknown, init: ResponseInit = {}): Response {
@@ -237,16 +240,27 @@ async function uploadMedia(request: Request, env: RuntimeEnv): Promise<Response>
   if (!wallet) return apiError("Wallet authentication required", 401);
   const form = await request.formData();
   const file = form.get("file");
-  if (!(file instanceof File) || !file.type.startsWith("image/")) {
-    return apiError("Select an image file");
+  if (!(file instanceof File) || !IMAGE_CONTENT_TYPES.has(file.type)) {
+    return apiError("Select a PNG, JPEG, or WebP image");
   }
   if (file.size > MAX_IMAGE_BYTES) return apiError("Image must be 2 MB or smaller", 413);
+  if (!env.SUPABASE_SERVICE_ROLE_KEY) return apiError("Token artwork uploads are not configured", 503);
   const extension = file.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "bin";
   const key = `uploads/${wallet}/${crypto.randomUUID()}.${extension}`;
-  await env.TOKEN_MEDIA.put(key, file.stream(), {
-    httpMetadata: { contentType: file.type, cacheControl: "public, max-age=31536000, immutable" },
-    customMetadata: { uploader: wallet },
+  const response = await fetch(`${env.SUPABASE_URL}/storage/v1/object/${SUPABASE_MEDIA_BUCKET}/${key}`, {
+    method: "POST",
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "content-type": file.type,
+      "x-upsert": "false",
+    },
+    body: file.stream(),
   });
+  if (!response.ok) {
+    console.warn(JSON.stringify({ event: "media.upload_failed", status: response.status }));
+    return apiError("Artwork upload failed", 502);
+  }
   return json({ key, url: `/media/${key}` }, { status: 201 });
 }
 
@@ -305,13 +319,21 @@ async function heliusWebhook(request: Request, env: RuntimeEnv): Promise<Respons
 async function serveMedia(pathname: string, env: RuntimeEnv): Promise<Response> {
   const key = decodeURIComponent(pathname.slice("/media/".length));
   if (!key || key.includes("..")) return apiError("Invalid media key");
-  const object = await env.TOKEN_MEDIA.get(key);
-  if (!object) return apiError("Media not found", 404);
+  if (!env.SUPABASE_SERVICE_ROLE_KEY) return apiError("Media delivery is not configured", 503);
+  const response = await fetch(`${env.SUPABASE_URL}/storage/v1/object/${SUPABASE_MEDIA_BUCKET}/${key}`, {
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+    },
+  });
+  if (response.status === 404) return apiError("Media not found", 404);
+  if (!response.ok) return apiError("Media delivery failed", 502);
   const headers = new Headers();
-  object.writeHttpMetadata(headers);
-  headers.set("etag", object.httpEtag);
+  headers.set("content-type", response.headers.get("content-type") ?? "application/octet-stream");
+  const etag = response.headers.get("etag");
+  if (etag) headers.set("etag", etag);
   headers.set("cache-control", "public, max-age=31536000, immutable");
-  return new Response(object.body, { headers });
+  return new Response(response.body, { headers });
 }
 
 async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionContext): Promise<Response> {
