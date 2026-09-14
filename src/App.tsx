@@ -9,7 +9,9 @@ import {
   useWallets,
 } from "@solana/kit-plugin-wallet/react";
 import bs58 from "bs58";
-import { toDataURL } from "qrcode";
+import "./walletConnect";
+import { useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect as useAppKitDisconnect } from "@reown/appkit/react";
+import type { Provider as WalletConnectSolanaProvider } from "@reown/appkit-adapter-solana/react";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -35,6 +37,7 @@ import {
   Trophy,
   TrendingUp,
   Users,
+  Wallet,
   X,
   Zap,
 } from "lucide-react";
@@ -76,6 +79,7 @@ import {
   quoteBuy,
   quoteSell,
   sellOnChain,
+  type DiggoWallet,
 } from "./solanaProgram";
 import type { DecodedLaunchMarket, DecodedMine } from "../shared/program";
 
@@ -115,6 +119,48 @@ function countdown(target: number, now: number): string {
   return [hours, minutes, secs].map((part) => String(part).padStart(2, "0")).join(":");
 }
 
+export interface ConnectedDiggoWallet {
+  kind: "kit" | "walletconnect";
+  /** Base58 wallet address — always a plain string, unlike @solana/kit's branded Address. */
+  address: string;
+  /** Pass this to src/solanaProgram.ts on-chain actions (buyOnChain, assignPowerOnChain, …). */
+  wallet: DiggoWallet;
+  signMessage(message: Uint8Array): Promise<Uint8Array>;
+}
+
+/**
+ * Unifies the two ways a player can connect: a Wallet Standard extension (desktop, most mobile
+ * in-app browsers — see src/solana.ts) or a WalletConnect-paired wallet via QR code (see
+ * src/walletConnect.ts, for browsers with no extension to detect at all). Every other component
+ * in this file talks to this hook instead of either underlying SDK directly, so on-chain actions
+ * and message-signing work identically regardless of which path the player used to connect.
+ */
+function useDiggoWallet(): ConnectedDiggoWallet | null {
+  const standard = useConnectedWallet(solanaClient);
+  const standardSignMessage = useSignMessage(solanaClient);
+  const wcAccount = useAppKitAccount({ namespace: "solana" });
+  const { walletProvider: wcProvider } = useAppKitProvider<WalletConnectSolanaProvider>("solana");
+
+  if (standard?.signer) {
+    return {
+      kind: "kit",
+      address: String(standard.account.address),
+      wallet: standard.signer,
+      signMessage: (message) => standardSignMessage.dispatchAsync(message),
+    };
+  }
+  if (wcAccount.isConnected && wcAccount.address && wcProvider) {
+    const wcAddress = wcAccount.address;
+    return {
+      kind: "walletconnect",
+      address: wcAddress,
+      wallet: { kind: "walletconnect", address: address(wcAddress), provider: wcProvider },
+      signMessage: (message) => wcProvider.signMessage(message),
+    };
+  }
+  return null;
+}
+
 function BrandMark() {
   return (
     <a className="brand" href="/" aria-label="Diggo.fun home">
@@ -132,10 +178,11 @@ function WalletControl({
   onAuthenticated(wallet: string): void;
 }) {
   const wallets = useWallets(solanaClient);
-  const connected = useConnectedWallet(solanaClient);
+  const connected = useDiggoWallet();
   const connect = useConnect(solanaClient);
-  const disconnect = useDisconnect(solanaClient);
-  const signMessage = useSignMessage(solanaClient);
+  const standardDisconnect = useDisconnect(solanaClient);
+  const { disconnect: wcDisconnect } = useAppKitDisconnect();
+  const { open: openWalletConnect } = useAppKit();
   const [open, setOpen] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
 
@@ -143,10 +190,9 @@ function WalletControl({
     if (!connected) return;
     setSigningIn(true);
     try {
-      const wallet = String(connected.account.address);
-      const challenge = await getChallenge(wallet);
-      const signature = await signMessage.dispatchAsync(new TextEncoder().encode(challenge.message));
-      const verified = await verifyWallet(wallet, challenge.nonce, bs58.encode(signature));
+      const challenge = await getChallenge(connected.address);
+      const signature = await connected.signMessage(new TextEncoder().encode(challenge.message));
+      const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature));
       onAuthenticated(verified.wallet);
       track("wallet_signed_in", { network: "solana-devnet" });
     } catch {
@@ -156,15 +202,19 @@ function WalletControl({
     }
   }
 
+  async function disconnectWallet() {
+    if (connected?.kind === "walletconnect") await wcDisconnect({ namespace: "solana" });
+    else standardDisconnect.dispatch();
+  }
+
   if (connected) {
-    const wallet = String(connected.account.address);
-    const isAuthenticated = session === wallet;
+    const isAuthenticated = session === connected.address;
     return (
       <div className="wallet-control signed-wallet">
         <button className="wallet-button" disabled={signingIn} onClick={() => void signIn()} title="Sign in with wallet">
-          {signingIn ? "Signing…" : isAuthenticated ? shortAddress(wallet) : "Sign in"}
+          {signingIn ? "Signing…" : isAuthenticated ? shortAddress(connected.address) : "Sign in"}
         </button>
-        <button className="wallet-disconnect" onClick={() => disconnect.dispatch()} title="Disconnect wallet (your secure session stays active)">×</button>
+        <button className="wallet-disconnect" onClick={() => void disconnectWallet()} title="Disconnect wallet (your secure session stays active)">×</button>
       </div>
     );
   }
@@ -175,56 +225,21 @@ function WalletControl({
       {open && (
         <div className="wallet-menu">
           <strong>Choose a Wallet Standard wallet</strong>
-          {wallets.length ? wallets.map((wallet) => (
+          {wallets.length > 0 ? wallets.map((wallet) => (
             <button key={wallet.name} disabled={connect.isRunning} onClick={() => { connect.dispatch(wallet); setOpen(false); track("wallet_connected", { network: "solana-devnet" }); }}>
               {wallet.icon && <img src={wallet.icon} alt="" />} {wallet.name}
             </button>
-          )) : <WalletMobileAccess />}
+          )) : <p>No compatible browser wallet found on this device.</p>}
+          <button
+            type="button"
+            className="wallet-walletconnect-button"
+            onClick={() => { setOpen(false); void openWalletConnect({ view: "Connect", namespace: "solana" }); track("walletconnect_opened", { network: "solana-devnet" }); }}
+          >
+            <Wallet size={16} /> Connect Wallet
+          </button>
+          <small>WalletConnect covers phones and any wallet not detected above.</small>
         </div>
       )}
-    </div>
-  );
-}
-
-function WalletMobileAccess() {
-  const mobileLink = useMemo(() => {
-    const dappUrl = window.location.href;
-    return `https://phantom.app/ul/browse/${encodeURIComponent(dappUrl)}?ref=${encodeURIComponent(window.location.origin)}`;
-  }, []);
-  const [qrCode, setQrCode] = useState("");
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    void toDataURL(mobileLink, {
-      width: 160,
-      margin: 1,
-      color: { dark: "#1d1d19", light: "#f7f4ea" },
-    }).then((value) => {
-      if (!cancelled) setQrCode(value);
-    }).catch(() => {
-      if (!cancelled) setQrCode("");
-    });
-    return () => { cancelled = true; };
-  }, [mobileLink]);
-
-  async function copyMobileLink() {
-    try {
-      await navigator.clipboard.writeText(mobileLink);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1_600);
-    } catch {
-      setCopied(false);
-    }
-  }
-
-  return (
-    <div className="wallet-mobile-access">
-      <p>No compatible browser wallet found on this device.</p>
-      <a className="wallet-mobile-open" href={mobileLink}>Open Diggo in Phantom</a>
-      {qrCode && <img className="wallet-qr" src={qrCode} alt="QR code to open Diggo in Phantom on your phone" />}
-      <button type="button" className="wallet-copy-link" onClick={() => void copyMobileLink()}>{copied ? "Mobile link copied" : "Copy mobile link"}</button>
-      <small>Open Diggo in your wallet’s in-app browser to use any Wallet Standard wallet. The secure session then remains available in this browser for 7 days.</small>
     </div>
   );
 }
@@ -280,8 +295,7 @@ function CreateModal({
   config: DiggoConfig;
   onLaunched(token: TokenSummary): void;
 }) {
-  const connected = useConnectedWallet(solanaClient);
-  const signMessage = useSignMessage(solanaClient);
+  const connected = useDiggoWallet();
   const [name, setName] = useState("");
   const [symbol, setSymbol] = useState("");
   const [description, setDescription] = useState("");
@@ -296,25 +310,23 @@ function CreateModal({
   const onTurnstileToken = useCallback((token: string) => setTurnstileToken(token), []);
 
   async function authenticate(): Promise<void> {
-    const wallet = connected ? String(connected.account.address) : undefined;
-    if (!wallet) throw new Error("Connect a wallet that supports message signing");
-    const challenge = await getChallenge(wallet);
-    const signature = await signMessage.dispatchAsync(new TextEncoder().encode(challenge.message));
-    const verified = await verifyWallet(wallet, challenge.nonce, bs58.encode(signature));
+    if (!connected) throw new Error("Connect a wallet that supports message signing");
+    const challenge = await getChallenge(connected.address);
+    const signature = await connected.signMessage(new TextEncoder().encode(challenge.message));
+    const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature));
     onAuthenticated(verified.wallet);
     track("wallet_signed_in", { network: "solana-devnet" });
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!connected?.signer) {
+    if (!connected) {
       setMessage("Connect a wallet that can sign transactions before launching.");
       return;
     }
     setState("working");
     try {
-      const wallet = String(connected.account.address);
-      if (session !== wallet) await authenticate();
+      if (session !== connected.address) await authenticate();
       setMessage(file ? "Uploading artwork…" : "Preparing your launch…");
       const imageUrl = file ? await uploadTokenImage(file) : undefined;
 
@@ -326,7 +338,7 @@ function CreateModal({
       setMessage("Waiting for your wallet signature to launch on-chain…");
       const launch = await launchCoinOnChain(
         programAddress,
-        connected.signer,
+        connected.wallet,
         protocol.treasury,
         protocol.reserveBps,
         protocol.discoveryReserveBps,
@@ -360,15 +372,14 @@ function CreateModal({
 
   async function recoverLaunch(event: FormEvent) {
     event.preventDefault();
-    if (!connected?.signer) {
+    if (!connected) {
       setRecoveryMessage("Connect the creator wallet before recovering this launch.");
       return;
     }
     setRecovering(true);
     setRecoveryMessage("");
     try {
-      const wallet = String(connected.account.address);
-      if (session !== wallet) await authenticate();
+      if (session !== connected.address) await authenticate();
       const token = await registerLaunchedToken(recoveryMint.trim(), {});
       onLaunched(token);
       setRecoveryMessage(`${token.symbol} is now indexed and live in Diggo.`);
@@ -698,7 +709,7 @@ function DiggoSwapPanel({
 }: {
   token: TokenSummary;
   programAddress: string;
-  signer: TransactionSigner | null;
+  signer: DiggoWallet | null;
   onTraded(): void;
 }) {
   const walletAddress = signer?.address ?? null;
@@ -957,8 +968,7 @@ export default function App() {
     programId: "",
     vanitySuffix: "diggo",
   });
-  const connected = useConnectedWallet(solanaClient);
-  const signMessage = useSignMessage(solanaClient);
+  const connected = useDiggoWallet();
   const page = useMemo(() => {
     const routes: Record<string, string> = {
       "/": "home",
@@ -996,12 +1006,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!session || !connected || session !== String(connected.account.address)) {
+    if (!session || !connected || session !== connected.address) {
       setPlayer(null);
       return;
     }
-    const wallet = String(connected.account.address);
-    getPlayerProfile(wallet).then(setPlayer).catch(() => setPlayer(null));
+    getPlayerProfile(connected.address).then(setPlayer).catch(() => setPlayer(null));
   }, [session, connected]);
 
   const featured = selected ?? tokens[0];
@@ -1020,11 +1029,11 @@ export default function App() {
     });
   }
 
-  async function ensureSession(wallet: string): Promise<void> {
-    if (session === wallet) return;
-    const challenge = await getChallenge(wallet);
-    const signature = await signMessage.dispatchAsync(new TextEncoder().encode(challenge.message));
-    const verified = await verifyWallet(wallet, challenge.nonce, bs58.encode(signature));
+  async function ensureSession(): Promise<void> {
+    if (!connected || session === connected.address) return;
+    const challenge = await getChallenge(connected.address);
+    const signature = await connected.signMessage(new TextEncoder().encode(challenge.message));
+    const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature));
     setSession(verified.wallet);
     track("wallet_signed_in", { network: "solana-devnet" });
   }
@@ -1034,11 +1043,10 @@ export default function App() {
     setActivating(true);
     setActivateError("");
     try {
-      const wallet = String(connected.account.address);
-      await ensureSession(wallet);
-      const challenge = await getActivationChallenge(wallet);
-      const signature = await signMessage.dispatchAsync(new TextEncoder().encode(challenge.message));
-      const result = await activateMineRequest(wallet, challenge.nonce, bs58.encode(signature), featured.mint);
+      await ensureSession();
+      const challenge = await getActivationChallenge(connected.address);
+      const signature = await connected.signMessage(new TextEncoder().encode(challenge.message));
+      const result = await activateMineRequest(connected.address, challenge.nonce, bs58.encode(signature), featured.mint);
       setPlayer(result.player);
       setMiningReport(result.report);
       track("mine_activated", { streak: result.report.streak, network: "solana-devnet" });
@@ -1062,8 +1070,8 @@ export default function App() {
       // mine so real block-reward accounting matches the game's "active mine" state. A failure
       // here (e.g. the player's on-chain Player account doesn't exist yet) doesn't block the
       // off-chain switch above, which is what the ORE/streak/discovery loop actually runs on.
-      if (config.programId && connected?.signer) {
-        assignPowerOnChain(address(config.programId), connected.signer, address(mint)).catch(() => {});
+      if (config.programId && connected) {
+        assignPowerOnChain(address(config.programId), connected.wallet, address(mint)).catch(() => {});
       }
     } catch (error) {
       setActivateError(error instanceof Error ? error.message : "Switch failed");
@@ -1071,10 +1079,10 @@ export default function App() {
   }
 
   async function handleClaimRewards() {
-    if (!connected?.signer || !config.programId || !featured) return;
+    if (!connected || !config.programId || !featured) return;
     setActivateError("");
     try {
-      await claimRewardsOnChain(address(config.programId), connected.signer, address(featured.mint));
+      await claimRewardsOnChain(address(config.programId), connected.wallet, address(featured.mint));
       track("rewards_claimed", { network: "solana-devnet" });
       await refreshFeaturedToken();
     } catch (error) {
@@ -1194,7 +1202,7 @@ export default function App() {
               {isMiningActive && (
                 <span><Clock3 size={13} /> resets in {countdown(Math.floor((player.activationExpiresAt ?? 0)), now)}</span>
               )}
-              {connected?.signer && (
+              {connected && (
                 <button type="button" className="claim-rewards-button" onClick={() => void handleClaimRewards()}>
                   <Coins size={12} /> Claim on-chain rewards
                 </button>
@@ -1228,7 +1236,7 @@ export default function App() {
           estimatedReward={estimatedReward}
           onManageCrew={() => setCrewOpen(true)}
           onClaim={() => void handleClaimRewards()}
-          canClaim={Boolean(connected?.signer)}
+          canClaim={Boolean(connected)}
         />
       )}
 
@@ -1297,7 +1305,7 @@ export default function App() {
         <DiggoSwapPanel
           token={featured}
           programAddress={config.programId}
-          signer={connected?.signer ?? null}
+          signer={connected?.wallet ?? null}
           onTraded={() => void refreshFeaturedToken()}
         />
       )}

@@ -15,15 +15,16 @@
   },
   "dependencies": {
     "@noble/curves": "latest",
+    "@reown/appkit": "^1.8.23",
+    "@reown/appkit-adapter-solana": "^1.8.23",
     "@solana/kit": "^8.3.0",
     "@solana/kit-plugin-wallet": "^0.20.0",
     "@solana/react": "^8.3.0",
-    "@types/qrcode": "^1.5.6",
+    "@solana/web3.js": "^1.99.0",
     "bs58": "latest",
     "lightweight-charts": "^4.2.3",
     "lucide-react": "latest",
     "posthog-js": "^1.431.2",
-    "qrcode": "^1.5.4",
     "react": "latest",
     "react-dom": "latest"
   },
