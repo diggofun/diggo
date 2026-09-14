@@ -2,6 +2,8 @@ import { DurableObject } from "cloudflare:workers";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import bs58 from "bs58";
 import { normalizeHeliusEvent } from "../shared/helius";
+import { DEFAULT_DEVNET_RPC, getChainRpc, readTokenFromChain, syncTokenToD1 } from "./chain";
+import { keeperClaimDiscovery, keeperSyncCrewPower } from "./keeper";
 import {
   DISCOVERY_DEFAULTS,
   GAMEPLAY_DEFAULTS,
@@ -24,7 +26,7 @@ import type {
   ActivationState,
   DiscoveryRecord,
   IndexingEvent,
-  LaunchRequest,
+  LeaderboardEntry,
   MarketSnapshot,
   MarketTrade,
   MiningReport,
@@ -37,6 +39,10 @@ interface SecretBindings {
   TURNSTILE_SECRET?: string;
   HELIUS_WEBHOOK_AUTH?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
+  /** Devnet RPC URL, e.g. a Helius endpoint. Falls back to the public devnet RPC when unset. */
+  DIGGO_RPC_URL?: string;
+  /** Keeper's base58-encoded 64-byte secret key, JSON-array-stringified (see docs/CUSTODY.md). */
+  DIGGO_KEEPER_SECRET_KEY?: string;
 }
 
 interface CloudflareSubtleCrypto extends SubtleCrypto {
@@ -55,6 +61,7 @@ interface TokenRow {
   image_key: string | null;
   status: TokenStatus;
   price_usd: number;
+  price_sol: number;
   change_24h: number;
   market_cap_usd: number;
   reserve_remaining: number;
@@ -64,6 +71,7 @@ interface TokenRow {
   next_block_at: number;
   next_epoch_at: number;
   created_at: number;
+  decimals: number;
 }
 
 interface ChallengeRecord {
@@ -125,13 +133,8 @@ function apiError(message: string, status = 400): Response {
 }
 
 function mapToken(row: TokenRow): TokenSummary {
-  const now = Math.floor(Date.now() / 1_000);
-  const nextBlockAt =
-    row.next_block_at > now ? row.next_block_at : now + (300 - ((now - row.next_block_at) % 300));
-  const nextEpochAt =
-    row.next_epoch_at > now
-      ? row.next_epoch_at
-      : now + (604_800 - ((now - row.next_epoch_at) % 604_800));
+  // next_block_at / next_epoch_at are real on-chain timestamps refreshed every 5 minutes by
+  // the cron sync (see syncAllTokensFromChain) — they are not advanced synthetically here.
   return {
     mint: row.mint,
     slug: row.slug,
@@ -141,6 +144,7 @@ function mapToken(row: TokenRow): TokenSummary {
     creator: row.creator,
     imageUrl: row.image_key ? `/media/${row.image_key}` : null,
     status: row.status,
+    priceSol: row.price_sol,
     priceUsd: row.price_usd,
     change24h: row.change_24h,
     marketCapUsd: row.market_cap_usd,
@@ -148,9 +152,10 @@ function mapToken(row: TokenRow): TokenSummary {
     reserveTotal: row.reserve_total,
     rewardPerBlock: row.reward_per_block,
     networkPower: row.network_power,
-    nextBlockAt,
-    nextEpochAt,
+    nextBlockAt: row.next_block_at,
+    nextEpochAt: row.next_epoch_at,
     createdAt: row.created_at,
+    decimals: row.decimals,
   };
 }
 
@@ -174,12 +179,12 @@ async function readJson<T>(request: Request, maxBytes = 32_768): Promise<T> {
   return JSON.parse(raw) as T;
 }
 
-async function checkRateLimit(request: Request, env: RuntimeEnv, bucket: string): Promise<boolean> {
+async function checkRateLimit(request: Request, env: RuntimeEnv, bucket: string, limit = 12): Promise<boolean> {
   const ip = request.headers.get("cf-connecting-ip") ?? "local";
   const windowId = Math.floor(Date.now() / 60_000);
   const key = `rate:${bucket}:${ip}:${windowId}`;
   const count = Number((await env.TOKEN_CACHE.get(key)) ?? "0");
-  if (count >= 12) return false;
+  if (count >= limit) return false;
   await env.TOKEN_CACHE.put(key, String(count + 1), { expirationTtl: 120 });
   return true;
 }
@@ -375,39 +380,154 @@ async function uploadMedia(request: Request, env: RuntimeEnv): Promise<Response>
   return json({ key, url: `/media/${key}` }, { status: 201 });
 }
 
-async function createLaunch(request: Request, env: RuntimeEnv): Promise<Response> {
-  if (!(await checkRateLimit(request, env, "launch"))) return apiError("Too many requests", 429);
+/**
+ * Registers a token the caller's own wallet just launched directly on-chain (see
+ * src/solanaProgram.ts — the frontend builds and sends the launch_token transaction itself;
+ * there is no server-side vanity-mint queue any more, since the mint is a PDA and cannot be
+ * ground for a vanity suffix). This endpoint never invents data: it reads the Mine/LaunchMarket
+ * accounts straight from chain and refuses to proceed if they don't exist yet, and it only
+ * accepts creator-supplied metadata (description/artwork) after confirming the session wallet
+ * matches the on-chain creator recorded in the Mine account.
+ */
+async function registerLaunchedToken(request: Request, env: RuntimeEnv): Promise<Response> {
+  if (!(await checkRateLimit(request, env, "register"))) return apiError("Too many requests", 429);
   const wallet = await sessionWallet(request, env);
   if (!wallet) return apiError("Wallet authentication required", 401);
-  const body = await readJson<Partial<LaunchRequest>>(request);
-  if (body.creator !== wallet) return apiError("Creator must match authenticated wallet", 403);
-  if (!body.name || body.name.length > 32) return apiError("Name must be 1–32 characters");
-  if (!body.symbol || !/^[A-Z0-9]{2,10}$/.test(body.symbol)) {
-    return apiError("Ticker must contain 2–10 uppercase letters or digits");
+  const body = await readJson<{ mint?: string; description?: string; imageUrl?: string }>(request);
+  if (!isBase58Address(body.mint)) return apiError("Invalid mint address");
+  if (body.description !== undefined && body.description.length > 280) {
+    return apiError("Description must be 280 characters or fewer");
   }
-  if (!body.description || body.description.length > 280) {
-    return apiError("Description must be 1–280 characters");
+
+  let chainCreator: string;
+  try {
+    chainCreator = (await readTokenFromChain(env, body.mint)).creator;
+  } catch {
+    return apiError("This mint has not launched on-chain yet — wait for the transaction to confirm and retry", 404);
   }
-  if (!(await verifyTurnstile(body.turnstileToken ?? "", request, env))) {
-    return apiError("Turnstile verification failed", 403);
-  }
-  const id = crypto.randomUUID();
+  if (chainCreator !== wallet) return apiError("Only the launch creator can register this token", 403);
+
   const imageKey = body.imageUrl?.startsWith("/media/") ? body.imageUrl.slice(7) : null;
+  const token = await syncTokenToD1(env, body.mint, {
+    description: body.description?.trim() ?? "",
+    imageKey,
+  });
   await env.DB.prepare(
-    "INSERT INTO launch_requests (id, creator, name, symbol, description, image_key, vanity_suffix) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    "INSERT INTO launch_requests (id, creator, name, symbol, description, image_key, vanity_suffix, status, mint) VALUES (?1,?2,?3,?4,?5,?6,?7,'LAUNCHED',?8)",
   )
-    .bind(id, wallet, body.name.trim(), body.symbol, body.description.trim(), imageKey, env.VANITY_SUFFIX)
+    .bind(crypto.randomUUID(), wallet, token.name, token.symbol, token.description, imageKey, env.VANITY_SUFFIX, body.mint)
     .run();
-  console.log(JSON.stringify({ event: "launch.queued", id, wallet, symbol: body.symbol }));
-  return json(
-    {
-      id,
-      status: "QUEUED",
-      vanitySuffix: env.VANITY_SUFFIX,
-      message: `Vanity mint generation queued. The final address must end in ${env.VANITY_SUFFIX}.`,
-    },
-    { status: 202 },
-  );
+  await env.TOKEN_CACHE.delete(TOKEN_CACHE_KEY);
+  console.log(JSON.stringify({ event: "launch.registered", wallet, mint: body.mint, symbol: token.symbol }));
+  return json({ token }, { status: 201 });
+}
+
+/**
+ * Records a trade the caller's own wallet just executed on-chain (buy or sell against a mine's
+ * bonding curve — see src/solanaProgram.ts) so the DiggoSwap chart has something to draw. This
+ * only feeds display data, never account/reward state, so verification is deliberately light:
+ * confirm the signature is a real, successful, recent transaction before trusting its side/amount.
+ * price/market_cap in the `tokens` row are always re-derived from a fresh on-chain read, never
+ * from the client-supplied price.
+ */
+async function recordTrade(request: Request, env: RuntimeEnv, mint: string): Promise<Response> {
+  if (!(await checkRateLimit(request, env, "trade-record", 60))) return apiError("Too many requests", 429);
+  const body = await readJson<{ signature?: string; side?: "buy" | "sell"; amount?: number }>(request);
+  if (!body.signature || (body.side !== "buy" && body.side !== "sell") || typeof body.amount !== "number") {
+    return apiError("Invalid trade payload");
+  }
+  const rpc = getChainRpc(env);
+  let confirmed = false;
+  try {
+    const status = await rpc
+      .getSignatureStatuses([body.signature as never])
+      .send();
+    const value = status.value[0];
+    confirmed = value !== null && value.err === null && value.confirmationStatus !== null;
+  } catch {
+    confirmed = false;
+  }
+  if (!confirmed) return apiError("Transaction is not a confirmed on-chain signature", 400);
+
+  let chain;
+  try {
+    chain = await readTokenFromChain(env, mint);
+  } catch {
+    return apiError("Unknown mint", 404);
+  }
+
+  const timestamp = Math.floor(Date.now() / 1_000);
+  await env.DB.batch([
+    env.DB.prepare(
+      "INSERT OR IGNORE INTO trades (signature, mint, side, price_usd, price_sol, amount, block_time) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+    ).bind(body.signature, mint, body.side, chain.priceUsd, chain.priceSol, body.amount, timestamp),
+    env.DB.prepare("UPDATE tokens SET price_usd = ?1, price_sol = ?2, market_cap_usd = ?3 WHERE mint = ?4").bind(
+      chain.priceUsd,
+      chain.priceSol,
+      chain.marketCapUsd,
+      mint,
+    ),
+  ]);
+  const market = env.MARKETS.getByName(mint);
+  await market.applyTrade({
+    signature: body.signature,
+    side: body.side,
+    priceSol: chain.priceSol,
+    priceUsd: chain.priceUsd,
+    amount: body.amount,
+    timestamp,
+  });
+  await env.TOKEN_CACHE.delete(TOKEN_CACHE_KEY);
+  return json({ ok: true, priceUsd: chain.priceUsd, priceSol: chain.priceSol });
+}
+
+const RPC_METHOD_ALLOWLIST = new Set([
+  "getAccountInfo",
+  "getMultipleAccounts",
+  "getBalance",
+  "getLatestBlockhash",
+  "getSignatureStatuses",
+  "getTokenAccountBalance",
+  "getMinimumBalanceForRentExemption",
+  "sendTransaction",
+  "simulateTransaction",
+  "getSlot",
+  "getVersion",
+]);
+
+/**
+ * Proxies JSON-RPC calls to the configured Solana RPC (a Helius devnet endpoint, when
+ * DIGGO_RPC_URL is set as a secret) so the API key never reaches the browser. The frontend's
+ * @solana/kit RPC client is pointed at this relative path instead of the upstream URL directly.
+ * Restricted to a read/send allowlist — no admin or account-mutating RPC methods.
+ */
+async function proxyRpc(request: Request, env: RuntimeEnv): Promise<Response> {
+  if (!(await checkRateLimit(request, env, "rpc", 240))) return apiError("Too many requests", 429);
+  const raw = await request.text();
+  if (raw.length > 65_536) return apiError("Payload too large", 413);
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return apiError("Invalid JSON-RPC payload");
+  }
+  const calls = Array.isArray(payload) ? payload : [payload];
+  for (const call of calls) {
+    const method = (call as { method?: unknown })?.method;
+    if (typeof method !== "string" || !RPC_METHOD_ALLOWLIST.has(method)) {
+      return apiError(`RPC method not allowed: ${String(method)}`, 403);
+    }
+  }
+  const upstream = await fetch(env.DIGGO_RPC_URL || DEFAULT_DEVNET_RPC, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: raw,
+  });
+  const text = await upstream.text();
+  return new Response(text, {
+    status: upstream.status,
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
 }
 
 async function heliusWebhook(request: Request, env: RuntimeEnv): Promise<Response> {
@@ -577,6 +697,10 @@ async function rollDiscovery(
   )
     .bind(id, wallet, target.mint, target.symbol, rarity, tokenAmount, valueUsd, createdAt)
     .run();
+  // The real memecoin payout happens asynchronously via the keeper (see processQueueEvent /
+  // worker/keeper.ts) — this request returns before the on-chain transfer lands, same as every
+  // other game-state write here; the discovery is already visible to the player as ELIGIBLE.
+  await env.INDEXING_QUEUE.send({ type: "claim_discovery", discoveryId: id } satisfies IndexingEvent);
 
   return {
     id,
@@ -685,6 +809,9 @@ async function activateMine(request: Request, env: RuntimeEnv): Promise<Response
     usedFreeze: streakResult.usedFreeze,
     discovery,
   };
+  if (activeMint) {
+    await env.INDEXING_QUEUE.send({ type: "sync_power", wallet, mint: activeMint } satisfies IndexingEvent);
+  }
   const updated = await env.DB.prepare("SELECT * FROM players WHERE wallet = ?1").bind(wallet).first<PlayerRow>();
   return json({ report, player: rowToProfile(updated ?? { ...row, ore_balance: newOreBalance }, now) });
 }
@@ -717,6 +844,9 @@ async function crewUpgrade(request: Request, env: RuntimeEnv): Promise<Response>
 
   const updated = await env.DB.prepare("SELECT * FROM players WHERE wallet = ?1").bind(wallet).first<PlayerRow>();
   if (!updated) return apiError("Upgrade failed", 500);
+  if (updated.active_mint) {
+    await env.INDEXING_QUEUE.send({ type: "sync_power", wallet, mint: updated.active_mint } satisfies IndexingEvent);
+  }
   return json({ player: rowToProfile(updated, Math.floor(Date.now() / 1_000)), spent: cost });
 }
 
@@ -738,6 +868,7 @@ async function switchMine(request: Request, env: RuntimeEnv): Promise<Response> 
   await env.DB.prepare("UPDATE players SET active_mint = ?1 WHERE wallet = ?2").bind(mint, wallet).run();
   const updated = await env.DB.prepare("SELECT * FROM players WHERE wallet = ?1").bind(wallet).first<PlayerRow>();
   if (!updated) return apiError("Switch failed", 500);
+  await env.INDEXING_QUEUE.send({ type: "sync_power", wallet, mint } satisfies IndexingEvent);
   return json({ player: rowToProfile(updated, now) });
 }
 
@@ -776,6 +907,34 @@ async function listDiscoveries(request: Request, env: RuntimeEnv, wallet: string
     createdAt: row.created_at,
   }));
   return json({ discoveries });
+}
+
+async function leaderboards(env: RuntimeEnv, ctx: ExecutionContext): Promise<Response> {
+  const select = `
+    SELECT wallet, miners_level, drills_level, carts_level, foreman_level, storage_level,
+           streak, active_days, ore_balance, active_mint
+    FROM players WHERE risk_state = 'NORMAL'
+  `;
+  const rows = (await env.DB.prepare(select).all<PlayerRow>()).results;
+  const entries = rows.map((row) => ({
+    rank: 0,
+    wallet: row.wallet,
+    power: crewPower(crewLevelsOf(row)),
+    streak: row.streak,
+    activeDays: row.active_days,
+    oreBalance: row.ore_balance,
+    activeMint: row.active_mint,
+  } satisfies LeaderboardEntry));
+  const ranked = (values: LeaderboardEntry[], key: "power" | "streak") =>
+    values
+      .slice()
+      .sort((a, b) => b[key] - a[key] || b.activeDays - a.activeDays)
+      .slice(0, 20)
+      .map((entry, index) => ({ ...entry, rank: index + 1 }));
+  const mines = (await loadTokens(env, ctx, 20)).tokens
+    .slice()
+    .sort((a, b) => b.networkPower - a.networkPower || b.marketCapUsd - a.marketCapUsd);
+  return json({ miners: ranked(entries, "power"), streaks: ranked(entries, "streak"), mines });
 }
 
 async function serveMedia(pathname: string, env: RuntimeEnv): Promise<Response> {
@@ -818,6 +977,7 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
     if (request.method === "GET" && pathname === "/api/tokens") {
       return listTokens(env, ctx, tokenLimit(url.searchParams.get("limit")));
     }
+    if (request.method === "GET" && pathname === "/api/leaderboards") return leaderboards(env, ctx);
     const tokenMatch = pathname.match(/^\/api\/tokens\/([^/]+)$/);
     if (request.method === "GET" && tokenMatch) return tokenBySlug(tokenMatch[1], env);
     const liveMatch = pathname.match(/^\/api\/tokens\/([^/]+)\/live$/);
@@ -825,6 +985,8 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
       const market = env.MARKETS.getByName(liveMatch[1]);
       return market.fetch(request);
     }
+    const tradeMatch = pathname.match(/^\/api\/tokens\/([^/]+)\/trades$/);
+    if (request.method === "POST" && tradeMatch) return recordTrade(request, env, tradeMatch[1]);
     if (request.method === "POST" && pathname === "/api/auth/challenge") {
       return createChallenge(request, env);
     }
@@ -832,7 +994,10 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
       return verifyWallet(request, env);
     }
     if (request.method === "POST" && pathname === "/api/media") return uploadMedia(request, env);
-    if (request.method === "POST" && pathname === "/api/tokens") return createLaunch(request, env);
+    if (request.method === "POST" && pathname === "/api/tokens/register") {
+      return registerLaunchedToken(request, env);
+    }
+    if (request.method === "POST" && pathname === "/api/rpc") return proxyRpc(request, env);
     if (request.method === "POST" && pathname === "/api/mine/activate/challenge") {
       return activateChallenge(request, env);
     }
@@ -869,9 +1034,13 @@ async function processQueueEvent(event: IndexingEvent, env: RuntimeEnv): Promise
     const { trade, mint } = event;
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT OR IGNORE INTO trades (signature, mint, side, price_usd, amount, block_time) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-      ).bind(trade.signature, mint, trade.side, trade.priceUsd, trade.amount, trade.timestamp),
-      env.DB.prepare("UPDATE tokens SET price_usd = ?1 WHERE mint = ?2").bind(trade.priceUsd, mint),
+        "INSERT OR IGNORE INTO trades (signature, mint, side, price_usd, price_sol, amount, block_time) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+      ).bind(trade.signature, mint, trade.side, trade.priceUsd, trade.priceSol, trade.amount, trade.timestamp),
+      env.DB.prepare("UPDATE tokens SET price_usd = ?1, price_sol = ?2 WHERE mint = ?3").bind(
+        trade.priceUsd,
+        trade.priceSol,
+        mint,
+      ),
     ]);
     const market = env.MARKETS.getByName(mint);
     await market.applyTrade(trade);
@@ -892,8 +1061,52 @@ async function processQueueEvent(event: IndexingEvent, env: RuntimeEnv): Promise
       .run();
     return;
   }
-  await env.TOKEN_CACHE.delete(TOKEN_CACHE_KEY);
-  console.log(JSON.stringify({ event: "epoch.sync", mint: event.mint, timestamp: event.timestamp }));
+  if (event.type === "epoch_sync") {
+    // Re-read this mine's Mine/LaunchMarket accounts straight from chain — this is what keeps
+    // price/reserve/status honest between real trade events (which require a Helius webhook
+    // that is not wired up yet; see docs/ARCHITECTURE.md "Not yet wired").
+    try {
+      await syncTokenToD1(env, event.mint);
+    } catch (error) {
+      console.error(JSON.stringify({ event: "epoch.sync_failed", mint: event.mint, error: String(error) }));
+    }
+    await env.TOKEN_CACHE.delete(TOKEN_CACHE_KEY);
+    return;
+  }
+  if (event.type === "sync_power") {
+    const row = await env.DB.prepare("SELECT * FROM players WHERE wallet = ?1").bind(event.wallet).first<PlayerRow>();
+    if (!row) return;
+    const power = crewPower(crewLevelsOf(row));
+    try {
+      const signature = await keeperSyncCrewPower(env, event.wallet, event.mint, BigInt(power));
+      if (signature) {
+        await env.DB.prepare("UPDATE players SET power_synced_onchain = 1 WHERE wallet = ?1").bind(event.wallet).run();
+        console.log(JSON.stringify({ event: "keeper.power_synced", wallet: event.wallet, mint: event.mint, power, signature }));
+      }
+    } catch (error) {
+      console.error(JSON.stringify({ event: "keeper.power_sync_failed", wallet: event.wallet, mint: event.mint, error: String(error) }));
+    }
+    return;
+  }
+  if (event.type === "claim_discovery") {
+    const discovery = await env.DB.prepare("SELECT * FROM discoveries WHERE id = ?1 AND status = 'ELIGIBLE'")
+      .bind(event.discoveryId)
+      .first<{ id: string; wallet: string; mint: string; token_amount: number }>();
+    if (!discovery) return; // already claimed, or blocked since it was queued — nothing to do
+    const token = await env.DB.prepare("SELECT decimals FROM tokens WHERE mint = ?1").bind(discovery.mint).first<{ decimals: number }>();
+    const decimals = token?.decimals ?? 6;
+    const amountRaw = BigInt(Math.round(discovery.token_amount * 10 ** decimals));
+    try {
+      const signature = await keeperClaimDiscovery(env, discovery.wallet, discovery.mint, amountRaw);
+      await env.DB.prepare("UPDATE discoveries SET status = 'CLAIMED', tx_signature = ?1 WHERE id = ?2")
+        .bind(signature, discovery.id)
+        .run();
+      console.log(JSON.stringify({ event: "keeper.discovery_claimed", id: discovery.id, wallet: discovery.wallet, signature }));
+    } catch (error) {
+      console.error(JSON.stringify({ event: "keeper.discovery_claim_failed", id: discovery.id, error: String(error) }));
+    }
+    return;
+  }
 }
 
 export class TokenMarket extends DurableObject<RuntimeEnv> {
@@ -904,19 +1117,25 @@ export class TokenMarket extends DurableObject<RuntimeEnv> {
         CREATE TABLE IF NOT EXISTS trades (
           signature TEXT PRIMARY KEY,
           side TEXT NOT NULL,
+          price_sol REAL NOT NULL DEFAULT 0,
           price_usd REAL NOT NULL,
           amount REAL NOT NULL,
           timestamp INTEGER NOT NULL
         )
       `);
+      const columns = this.ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(trades)").toArray();
+      if (!columns.some((column) => column.name === "price_sol")) {
+        this.ctx.storage.sql.exec("ALTER TABLE trades ADD COLUMN price_sol REAL NOT NULL DEFAULT 0");
+      }
     });
   }
 
   async applyTrade(trade: MarketTrade): Promise<void> {
     this.ctx.storage.sql.exec(
-      "INSERT OR IGNORE INTO trades VALUES (?, ?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO trades (signature, side, price_sol, price_usd, amount, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
       trade.signature,
       trade.side,
+      trade.priceSol,
       trade.priceUsd,
       trade.amount,
       trade.timestamp,
@@ -930,14 +1149,16 @@ export class TokenMarket extends DurableObject<RuntimeEnv> {
       .exec<{
         signature: string;
         side: "buy" | "sell";
+        price_sol: number;
         price_usd: number;
         amount: number;
         timestamp: number;
-      }>("SELECT * FROM trades ORDER BY timestamp DESC LIMIT 25")
+      }>("SELECT * FROM trades ORDER BY timestamp DESC LIMIT 200")
       .toArray();
     const recentTrades = trades.map((trade) => ({
       signature: trade.signature,
       side: trade.side,
+      priceSol: trade.price_sol,
       priceUsd: trade.price_usd,
       amount: trade.amount,
       timestamp: trade.timestamp,
@@ -965,7 +1186,9 @@ export class TokenMarket extends DurableObject<RuntimeEnv> {
 }
 
 async function queueEpochSync(env: RuntimeEnv): Promise<number> {
-  const result = await env.DB.prepare("SELECT mint FROM tokens WHERE status = 'MINING_ACTIVE'").all<{
+  // Every launched mine gets re-read from chain — including pre-graduation LAUNCHING mines,
+  // whose bonding-curve price moves with every buy/sell just as much as a graduated one's.
+  const result = await env.DB.prepare("SELECT mint FROM tokens WHERE status != 'FULLY_MINED'").all<{
     mint: string;
   }>();
   const timestamp = Date.now();
