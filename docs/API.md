@@ -2,6 +2,7 @@
 
 | Method | Route | Purpose |
 | --- | --- | --- |
+| `GET` | `/api/bootstrap?limit=1000` | one request for public runtime config and up to 1,000 cached token cards |
 | `GET` | `/api/config` | public cluster, Turnstile site key and suffix |
 | `GET` | `/api/tokens` | KV-cached token discovery list backed by D1 |
 | `GET` | `/api/tokens/:slug` | token detail |

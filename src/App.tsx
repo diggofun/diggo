@@ -32,7 +32,7 @@ import {
 } from "lucide-react";
 
 import type { LaunchRequest, TokenSummary } from "../shared/types";
-import { getChallenge, getTokens, queueLaunch, uploadTokenImage, verifyWallet } from "./api";
+import { getBootstrap, getChallenge, queueLaunch, uploadTokenImage, verifyWallet } from "./api";
 import { track } from "./analytics";
 import { TokenOrb } from "./components/TokenOrb";
 import { TurnstileBox } from "./components/TurnstileBox";
@@ -284,7 +284,7 @@ export default function App() {
   const [session, setSession] = useState<string | null>(null);
 
   useEffect(() => {
-    getTokens().then((result) => {
+    getBootstrap().then((result) => {
       setTokens(result);
       setSelected(result[0]);
     });

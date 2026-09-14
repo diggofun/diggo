@@ -90,26 +90,17 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return data;
 }
 
-export async function getTokens(): Promise<TokenSummary[]> {
+export async function getBootstrap(): Promise<TokenSummary[]> {
   try {
-    const response = await fetch("/api/tokens");
-    const data = await parseResponse<{ tokens: TokenSummary[] }>(response);
+    const response = await fetch("/api/bootstrap?limit=1000");
+    const data = await parseResponse<{
+      tokens: TokenSummary[];
+      config: { posthogApiKey?: string; posthogHost?: string };
+    }>(response);
+    void startAnalytics(data.config);
     return data.tokens.length ? data.tokens : FALLBACK_TOKENS;
   } catch {
     return FALLBACK_TOKENS;
-  }
-}
-
-export async function loadPublicConfig(): Promise<void> {
-  try {
-    const response = await fetch("/api/config");
-    const config = await parseResponse<{
-      posthogApiKey?: string;
-      posthogHost?: string;
-    }>(response);
-    void startAnalytics(config);
-  } catch {
-    // Analytics must never block the app when its endpoint is unavailable.
   }
 }
 

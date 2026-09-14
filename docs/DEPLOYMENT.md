@@ -50,6 +50,10 @@ The Worker includes a best-effort KV limiter as defense in depth. KV is eventual
 
 Workers Logs and Traces are enabled with full sampling for the MVP. Reduce `head_sampling_rate` once traffic grows. Logs are structured JSON and intentionally omit secrets, wallet signatures and Turnstile tokens.
 
+## Initial page load
+
+The frontend makes one Worker request on entry: `GET /api/bootstrap?limit=1000`. It returns public runtime configuration and up to 1,000 token summaries. The Worker reads the token batch from KV for 60 seconds; a D1 read occurs only after a cache miss. Individual token cards do not trigger follow-up Worker requests.
+
 ## Order of operations
 
 1. `npm run check`

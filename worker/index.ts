@@ -63,7 +63,8 @@ const JSON_HEADERS = {
   "cache-control": "no-store",
 };
 
-const TOKEN_CACHE_KEY = "tokens:v1";
+const TOKEN_CACHE_KEY = "tokens:v2:1000";
+const MAX_BOOTSTRAP_TOKENS = 1_000;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const SUPABASE_MEDIA_BUCKET = "token-media";
 const IMAGE_CONTENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
@@ -170,15 +171,51 @@ async function sessionWallet(request: Request, env: RuntimeEnv): Promise<string 
   return env.TOKEN_CACHE.get(`auth:session:${header.slice(7)}`);
 }
 
-async function listTokens(env: RuntimeEnv, ctx: ExecutionContext): Promise<Response> {
+function tokenLimit(value: string | null): number {
+  const parsed = Number(value ?? MAX_BOOTSTRAP_TOKENS);
+  if (!Number.isFinite(parsed)) return MAX_BOOTSTRAP_TOKENS;
+  return Math.min(Math.max(Math.trunc(parsed), 1), MAX_BOOTSTRAP_TOKENS);
+}
+
+async function loadTokens(
+  env: RuntimeEnv,
+  ctx: ExecutionContext,
+  limit: number,
+): Promise<{ tokens: TokenSummary[]; source: "kv" | "d1" }> {
   const cached = await env.TOKEN_CACHE.get<TokenSummary[]>(TOKEN_CACHE_KEY, "json");
-  if (cached) return json({ tokens: cached, source: "kv" });
+  if (cached) return { tokens: cached.slice(0, limit), source: "kv" };
   const result = await env.DB.prepare(
-    "SELECT * FROM tokens ORDER BY CASE status WHEN 'MINING_ACTIVE' THEN 0 WHEN 'LAUNCHING' THEN 1 ELSE 2 END, market_cap_usd DESC",
-  ).all<TokenRow>();
+    "SELECT * FROM tokens ORDER BY CASE status WHEN 'MINING_ACTIVE' THEN 0 WHEN 'LAUNCHING' THEN 1 ELSE 2 END, market_cap_usd DESC LIMIT ?1",
+  ).bind(MAX_BOOTSTRAP_TOKENS).all<TokenRow>();
   const tokens = result.results.map(mapToken);
   ctx.waitUntil(env.TOKEN_CACHE.put(TOKEN_CACHE_KEY, JSON.stringify(tokens), { expirationTtl: 60 }));
-  return json({ tokens, source: "d1" });
+  return { tokens: tokens.slice(0, limit), source: "d1" };
+}
+
+async function listTokens(
+  env: RuntimeEnv,
+  ctx: ExecutionContext,
+  limit: number,
+): Promise<Response> {
+  return json(await loadTokens(env, ctx, limit));
+}
+
+async function bootstrap(
+  env: RuntimeEnv,
+  ctx: ExecutionContext,
+  limit: number,
+): Promise<Response> {
+  const tokenData = await loadTokens(env, ctx, limit);
+  return json({
+    ...tokenData,
+    config: {
+      cluster: env.SOLANA_CLUSTER,
+      posthogApiKey: env.POSTHOG_API_KEY,
+      posthogHost: env.POSTHOG_HOST,
+      turnstileSiteKey: env.TURNSTILE_SITE_KEY,
+      vanitySuffix: env.VANITY_SUFFIX,
+    },
+  });
 }
 
 async function tokenBySlug(slug: string, env: RuntimeEnv): Promise<Response> {
@@ -349,7 +386,12 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
         vanitySuffix: env.VANITY_SUFFIX,
       });
     }
-    if (request.method === "GET" && pathname === "/api/tokens") return listTokens(env, ctx);
+    if (request.method === "GET" && pathname === "/api/bootstrap") {
+      return bootstrap(env, ctx, tokenLimit(url.searchParams.get("limit")));
+    }
+    if (request.method === "GET" && pathname === "/api/tokens") {
+      return listTokens(env, ctx, tokenLimit(url.searchParams.get("limit")));
+    }
     const tokenMatch = pathname.match(/^\/api\/tokens\/([^/]+)$/);
     if (request.method === "GET" && tokenMatch) return tokenBySlug(tokenMatch[1], env);
     const liveMatch = pathname.match(/^\/api\/tokens\/([^/]+)\/live$/);
