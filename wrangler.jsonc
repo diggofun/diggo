@@ -10,6 +10,12 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*", "/media/*", "/webhooks/*"]
   },
+  "routes": [
+    {
+      "pattern": "diggo.fun",
+      "custom_domain": true
+    }
+  ],
   "vars": {
     "ENVIRONMENT": "production",
     "SOLANA_CLUSTER": "devnet",
