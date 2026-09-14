@@ -39,7 +39,16 @@ export interface MarketTrade {
 
 export type IndexingEvent =
   | { type: "trade"; mint: string; trade: MarketTrade }
-  | { type: "helius"; payload: Record<string, unknown> }
+  | {
+      type: "helius";
+      signature: string;
+      mint: string;
+      eventType: string;
+      source: string;
+      slot: number | null;
+      timestamp: number | null;
+      payload: Record<string, unknown>;
+    }
   | { type: "epoch_sync"; mint: string; timestamp: number };
 
 export interface LaunchRequest {

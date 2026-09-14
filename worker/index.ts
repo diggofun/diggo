@@ -1,11 +1,7 @@
-import {
-  DurableObject,
-  WorkflowEntrypoint,
-  type WorkflowEvent,
-  type WorkflowStep,
-} from "cloudflare:workers";
+import { DurableObject } from "cloudflare:workers";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import bs58 from "bs58";
+import { normalizeHeliusEvent } from "../shared/helius";
 
 import type {
   IndexingEvent,
@@ -52,10 +48,6 @@ interface TokenRow {
 interface ChallengeRecord {
   wallet: string;
   message: string;
-}
-
-interface EpochParams {
-  source?: string;
 }
 
 const JSON_HEADERS = {
@@ -213,6 +205,7 @@ async function bootstrap(
       posthogApiKey: env.POSTHOG_API_KEY,
       posthogHost: env.POSTHOG_HOST,
       turnstileSiteKey: env.TURNSTILE_SITE_KEY,
+      programId: env.DIGGO_PROGRAM_ID,
       vanitySuffix: env.VANITY_SUFFIX,
     },
   });
@@ -342,15 +335,16 @@ async function heliusWebhook(request: Request, env: RuntimeEnv): Promise<Respons
   }
   const payload = await readJson<unknown>(request, 1_000_000);
   const events = Array.isArray(payload) ? payload : [payload];
-  await env.INDEXING_QUEUE.sendBatch(
-    events.map((item) => ({
-      body: {
-        type: "helius",
-        payload: typeof item === "object" && item !== null ? item : { value: item },
-      } satisfies IndexingEvent,
-    })),
-  );
-  return json({ accepted: events.length }, { status: 202 });
+  const normalized = events.map(normalizeHeliusEvent).filter((event) => event !== null);
+  if (normalized.length !== events.length || normalized.length === 0) {
+    return apiError("Invalid Helius event payload", 400);
+  }
+  for (let index = 0; index < normalized.length; index += 100) {
+    await env.INDEXING_QUEUE.sendBatch(
+      normalized.slice(index, index + 100).map((body) => ({ body })),
+    );
+  }
+  return json({ accepted: normalized.length });
 }
 
 async function serveMedia(pathname: string, env: RuntimeEnv): Promise<Response> {
@@ -383,6 +377,7 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
         posthogApiKey: env.POSTHOG_API_KEY,
         posthogHost: env.POSTHOG_HOST,
         turnstileSiteKey: env.TURNSTILE_SITE_KEY,
+        programId: env.DIGGO_PROGRAM_ID,
         vanitySuffix: env.VANITY_SUFFIX,
       });
     }
@@ -437,13 +432,16 @@ async function processQueueEvent(event: IndexingEvent, env: RuntimeEnv): Promise
     return;
   }
   if (event.type === "helius") {
-    const signature = typeof event.payload.signature === "string" ? event.payload.signature : crypto.randomUUID();
-    const mint = typeof event.payload.mint === "string" ? event.payload.mint : "unknown";
-    const blockTime = typeof event.payload.timestamp === "number" ? event.payload.timestamp : null;
     await env.DB.prepare(
-      "INSERT OR IGNORE INTO chain_events (signature, event_type, mint, payload, block_time) VALUES (?1, 'HELIUS', ?2, ?3, ?4)",
+      "INSERT OR IGNORE INTO chain_events (signature, event_type, mint, payload, block_time) VALUES (?1, ?2, ?3, ?4, ?5)",
     )
-      .bind(signature, mint, JSON.stringify(event.payload), blockTime)
+      .bind(
+        event.signature,
+        `HELIUS_${event.eventType}`,
+        event.mint,
+        JSON.stringify({ ...event.payload, diggoSource: event.source, diggoSlot: event.slot }),
+        event.timestamp,
+      )
       .run();
     return;
   }
@@ -519,27 +517,27 @@ export class TokenMarket extends DurableObject<RuntimeEnv> {
   }
 }
 
-export class EpochWorkflow extends WorkflowEntrypoint<RuntimeEnv, EpochParams> {
-  async run(_event: WorkflowEvent<EpochParams>, step: WorkflowStep): Promise<{ queued: number }> {
-    const mints = await step.do("load active mines", async () => {
-      const result = await this.env.DB.prepare(
-        "SELECT mint FROM tokens WHERE status = 'MINING_ACTIVE'",
-      ).all<{ mint: string }>();
-      return result.results.map((row) => row.mint);
-    });
-    await step.do("request chain synchronization", async () => {
-      await this.env.INDEXING_QUEUE.sendBatch(
-        mints.map((mint) => ({
-          body: { type: "epoch_sync", mint, timestamp: Date.now() } satisfies IndexingEvent,
-        })),
-      );
-    });
-    return { queued: mints.length };
+async function queueEpochSync(env: RuntimeEnv): Promise<number> {
+  const result = await env.DB.prepare("SELECT mint FROM tokens WHERE status = 'MINING_ACTIVE'").all<{
+    mint: string;
+  }>();
+  const timestamp = Date.now();
+  for (let index = 0; index < result.results.length; index += 100) {
+    await env.INDEXING_QUEUE.sendBatch(
+      result.results.slice(index, index + 100).map(({ mint }) => ({
+        body: { type: "epoch_sync", mint, timestamp } satisfies IndexingEvent,
+      })),
+    );
   }
+  return result.results.length;
 }
 
 export default {
   fetch: handleFetch,
+  async scheduled(_controller: ScheduledController, env: RuntimeEnv): Promise<void> {
+    const queued = await queueEpochSync(env);
+    console.log(JSON.stringify({ event: "epoch.cron", queued }));
+  },
   async queue(batch: MessageBatch<IndexingEvent>, env: RuntimeEnv): Promise<void> {
     for (const message of batch.messages) {
       try {

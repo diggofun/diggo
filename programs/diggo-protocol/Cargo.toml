@@ -1,0 +1,22 @@
+[package]
+name = "diggo-protocol"
+version = "0.1.0"
+description = "Non-custodial Diggo.fun launch, mining, and equipment protocol"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "diggo_protocol"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "=1.2.0", features = ["init-if-needed"] }
+anchor-spl = { version = "=1.2.0", features = ["associated_token", "token_2022"] }

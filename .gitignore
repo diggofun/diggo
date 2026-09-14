@@ -10,3 +10,8 @@ worker-configuration.d.ts
 .graphify_*.py
 graphify-out/.graphify_*
 graphify-out/
+target/
+.anchor/
+test-ledger/
+*.so
+*.keypair.json

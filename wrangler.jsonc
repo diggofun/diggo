@@ -23,6 +23,7 @@
     "POSTHOG_HOST": "https://us.i.posthog.com",
     "SUPABASE_URL": "https://mtkvvcybpasehmscueox.supabase.co",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAEzwvf6nnwXvXdMc",
+    "DIGGO_PROGRAM_ID": "Do5iBFkbb7Sp9V5gcM9GnoswK7owKGgVnvC4B1a3KwQJ",
     "VANITY_SUFFIX": "diggo"
   },
   "d1_databases": [
@@ -70,14 +71,9 @@
       }
     ]
   },
-  "workflows": [
-    {
-      "binding": "EPOCH_WORKFLOW",
-      "name": "diggo-epoch",
-      "class_name": "EpochWorkflow",
-      "schedules": ["*/5 * * * *"]
-    }
-  ],
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
