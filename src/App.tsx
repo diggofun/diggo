@@ -17,7 +17,6 @@ import {
   Clock3,
   Coins,
   Copy,
-  Database,
   Flame,
   Gauge,
   Gem,
@@ -116,7 +115,7 @@ function countdown(target: number, now: number): string {
 
 function BrandMark() {
   return (
-    <a className="brand" href="#top" aria-label="Diggo.fun home">
+    <a className="brand" href="/" aria-label="Diggo.fun home">
       <span className="brand-mark"><Pickaxe size={19} strokeWidth={2.8} /></span>
       <span>DIGGO<span className="brand-dot">.FUN</span></span>
     </a>
@@ -177,7 +176,6 @@ function WalletControl({
               {wallet.icon && <img src={wallet.icon} alt="" />} {wallet.name}
             </button>
           )) : <p>No compatible browser wallet found.</p>}
-          <small>Phantom, Solflare, Backpack and other Wallet Standard wallets work without a paid connector.</small>
         </div>
       )}
     </div>
@@ -782,12 +780,25 @@ export default function App() {
   });
   const connected = useConnectedWallet(solanaClient);
   const signMessage = useSignMessage(solanaClient);
+  const page = useMemo(() => {
+    const routes: Record<string, string> = {
+      "/": "home",
+      "/mine": "mine",
+      "/explore": "explore",
+      "/trade": "trade",
+      "/leaderboards": "leaderboards",
+      "/mines": "mines",
+      "/create": "create",
+    };
+    return routes[window.location.pathname] ?? "home";
+  }, []);
 
   useEffect(() => {
     getBootstrap()
       .then((result) => {
         setTokens(result.tokens);
-        setSelected(result.tokens[0] ?? null);
+        const requestedMint = new URLSearchParams(window.location.search).get("mint");
+        setSelected(result.tokens.find((token) => token.mint === requestedMint) ?? result.tokens[0] ?? null);
         setConfig(result.config);
       })
       .finally(() => setLoadingTokens(false));
@@ -894,31 +905,41 @@ export default function App() {
     }
   }
 
-  function openDiggoTrade() {
-    const diggo = tokens.find((token) => token.symbol === "DIGGO") ?? tokens[0];
-    if (diggo) setSelected(diggo);
-    window.setTimeout(() => document.getElementById("swap")?.scrollIntoView({ behavior: "smooth" }), 0);
-  }
-
   if (loadingTokens) return <div className="loading-screen"><Pickaxe /> DIGGING UP THE DATA…</div>;
 
   return (
-    <main id="top">
+    <main id="top" className={`app page-${page}`}>
       <header className="site-header">
         <BrandMark />
         <nav aria-label="Main navigation">
-          <a href="#top"><Home size={13} /> Home</a>
-          <a href="#mine"><Pickaxe size={13} /> Mine</a>
-          <a href="#explore"><Search size={13} /> Explore</a>
-          <button type="button" onClick={openDiggoTrade}><TrendingUp size={13} /> Trade $DIGGO</button>
-          <a href="#leaderboards"><Trophy size={13} /> Leaderboards</a>
-          <a href="#mines"><LayoutDashboard size={13} /> Mines</a>
+          <a className={page === "home" ? "active" : ""} href="/"><Home size={13} /> Home</a>
+          <a className={page === "mine" ? "active" : ""} href="/mine"><Pickaxe size={13} /> Mine</a>
+          <a className={page === "explore" ? "active" : ""} href="/explore"><Search size={13} /> Explore</a>
+          <a className={page === "trade" ? "active" : ""} href="/trade"><TrendingUp size={13} /> Trade $DIGGO</a>
+          <a className={page === "leaderboards" ? "active" : ""} href="/leaderboards"><Trophy size={13} /> Leaderboards</a>
+          <a className={page === "mines" ? "active" : ""} href="/mines"><LayoutDashboard size={13} /> Mines</a>
         </nav>
         <div className="header-actions">
-          <button className="launch-button" onClick={() => setLaunchOpen(true)}><Plus size={16} /> Create a new coin</button>
+          <a className="launch-button" href="/create"><Plus size={16} /> Create a new coin</a>
           <WalletControl session={session} onAuthenticated={setSession} />
         </div>
       </header>
+
+      {page === "create" && (
+        <section className="create-coin-page page-shell">
+          <div>
+            <span className="eyebrow"><Plus size={14} /> Create a new coin</span>
+            <h1>START A<br /><span>NEW MINE.</span></h1>
+            <p>Create a fixed-supply Solana devnet coin, allocate its mining reserve, and optionally make the first real buy into its bonding curve.</p>
+          </div>
+          <div className="create-coin-card">
+            <span>DEVNET LAUNCH</span>
+            <h2>Everything settles on-chain.</h2>
+            <p>Your creator wallet signs the launch and, if selected, the initial liquidity buy in one transaction.</p>
+            <button className="primary-button" onClick={() => setLaunchOpen(true)}>Open launch builder <ArrowUpRight size={17} /></button>
+          </div>
+        </section>
+      )}
 
       <section className="hero page-shell" id="home">
         <div className="hero-copy">
@@ -929,8 +950,8 @@ export default function App() {
           <h1>MEME COINS<br />WORTH <span>DIGGING.</span></h1>
           <p>Launch a fixed-supply coin. Lock a finite reserve. Let the community mine every block with pure, provable power.</p>
           <div className="hero-actions">
-            <button className="primary-button" onClick={() => document.getElementById("mines")?.scrollIntoView({ behavior: "smooth" })}>Explore mines <Pickaxe size={18} /></button>
-            <button className="text-button" onClick={() => setLaunchOpen(true)}>Launch yours <ArrowUpRight size={17} /></button>
+            <a className="primary-button" href="/explore">Explore mines <Pickaxe size={18} /></a>
+            <a className="text-button" href="/create">Launch yours <ArrowUpRight size={17} /></a>
           </div>
           <div className="trust-row">
             <span><ShieldCheck size={15} /> Mint revoked</span>
@@ -994,7 +1015,7 @@ export default function App() {
           )}
           {activateError && <p className="form-message console-error">{activateError}</p>}
           {!connected ? (
-            <button className="mine-button" onClick={() => document.getElementById("top")?.scrollIntoView({ behavior: "smooth" })}>
+            <button className="mine-button" type="button">
               <Pickaxe size={18} /> Connect wallet to mine
             </button>
           ) : isMiningActive ? (
@@ -1030,7 +1051,7 @@ export default function App() {
         {sortedTokens.length ? (
           <>
             <div className="token-grid">
-              {sortedTokens.map((token) => <TokenCard key={token.mint} token={token} onSelect={(next) => { setSelected(next); window.scrollTo({ top: 0, behavior: "smooth" }); }} />)}
+              {sortedTokens.map((token) => <TokenCard key={token.mint} token={token} onSelect={(next) => { window.location.assign(`/mines?mint=${encodeURIComponent(next.mint)}`); }} />)}
             </div>
             <button className="outline-button">View all active mines <ChevronRight size={16} /></button>
           </>
@@ -1091,24 +1112,11 @@ export default function App() {
         </div>
       </section>
 
-      <section className="protocol page-shell" id="protocol">
-          <div className="protocol-copy"><div className="eyebrow"><Database size={14} /> Built in the open</div><h2>THE BACKEND<br />CAN’T TOUCH<br />YOUR ORE.</h2><p>Funds remain in user wallets. Only program-controlled liquidity and the mining reserve leave a wallet, under immutable Solana rules.</p><a href="/ARCHITECTURE.md" target="_blank" rel="noreferrer">Read the architecture <ArrowUpRight size={16} /></a></div>
-        <div className="stack-map">
-          <span className="map-label">DIGGO EDGE STACK</span>
-          <div className="stack-node main-node"><Zap /> Cloudflare Worker<small>API + static assets</small></div>
-          <div className="stack-node"><Database /> D1<small>index + history</small></div>
-          <div className="stack-node"><Radio /> Durable Objects<small>live markets</small></div>
-          <div className="stack-node"><Coins /> KV + Supabase Storage<small>cache + media</small></div>
-          <div className="stack-node"><ShieldCheck /> Turnstile + WAF<small>launch protection</small></div>
-          <div className="stack-footer"><span>Helius</span><i /> <span>Queues</span><i /> <span>Workflows</span><i /> <span>Solana</span></div>
-        </div>
-      </section>
-
       <section className="final-cta">
         <div className="page-shell"><span className="huge-pick"><Pickaxe /></span><div><span>THE NEXT MEME IS UNDERGROUND.</span><h2>START DIGGING.</h2></div><button className="primary-button invert" onClick={() => setLaunchOpen(true)}>Launch your coin <ArrowUpRight size={18} /></button></div>
       </section>
 
-      <footer className="site-footer page-shell"><BrandMark /><p>Finite supply. Infinite memes.</p><div><a href="#protocol">Docs</a><a href="#mines">Mines</a><a href="#top">X / Twitter</a></div><small>© 2026 Diggo.fun · Devnet MVP</small></footer>
+      <footer className="site-footer page-shell"><BrandMark /><p>Finite supply. Infinite memes.</p><div><a href="/mines">Mines</a><a href="/">X / Twitter</a></div><small>© 2026 Diggo.fun · Devnet MVP</small></footer>
       {launchOpen && (
         <CreateModal
           onClose={() => setLaunchOpen(false)}

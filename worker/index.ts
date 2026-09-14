@@ -1018,6 +1018,9 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
       return heliusWebhook(request, env);
     }
     if (request.method === "GET" && pathname.startsWith("/media/")) return serveMedia(pathname, env);
+    if (request.method === "GET" && pathname === "/ARCHITECTURE.md") {
+      return new Response("Not found", { status: 404, headers: { "cache-control": "no-store" } });
+    }
     if (pathname.startsWith("/api/") || pathname.startsWith("/webhooks/")) {
       return apiError("Route not found", 404);
     }
