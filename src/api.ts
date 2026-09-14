@@ -1,4 +1,5 @@
 import type { LaunchRequest, TokenSummary } from "../shared/types";
+import { startAnalytics } from "./analytics";
 
 export const FALLBACK_TOKENS: TokenSummary[] = [
   {
@@ -96,6 +97,19 @@ export async function getTokens(): Promise<TokenSummary[]> {
     return data.tokens.length ? data.tokens : FALLBACK_TOKENS;
   } catch {
     return FALLBACK_TOKENS;
+  }
+}
+
+export async function loadPublicConfig(): Promise<void> {
+  try {
+    const response = await fetch("/api/config");
+    const config = await parseResponse<{
+      posthogApiKey?: string;
+      posthogHost?: string;
+    }>(response);
+    void startAnalytics(config);
+  } catch {
+    // Analytics must never block the app when its endpoint is unavailable.
   }
 }
 

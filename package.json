@@ -20,6 +20,7 @@
     "@solana/react": "^8.3.0",
     "bs58": "latest",
     "lucide-react": "latest",
+    "posthog-js": "^1.431.2",
     "react": "latest",
     "react-dom": "latest"
   },

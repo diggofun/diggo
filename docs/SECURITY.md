@@ -8,6 +8,7 @@ Cloudflare is an index, cache and coordination layer. It must never be authorita
 
 - Wallet authentication uses a five-minute, single-use challenge and Ed25519 message verification.
 - Sessions are random, expire after one hour, and live in KV.
+- PostHog uses aggregate product events only. Session replay, autocapture, wallet-address identification, and wallet-signature collection are disabled.
 - Launches require server-side Turnstile verification; the secret is never exposed to the browser.
 - Helius delivery uses timing-safe authorization-header comparison.
 - D1 input is handled with bound prepared statements.
@@ -25,7 +26,7 @@ The web UI displays these claims, but they must be enforced by audited Solana pr
 3. creator and platform cannot withdraw reserve or protocol-controlled LP;
 4. changing mines settles the old cumulative reward index first;
 5. active power cannot be assigned twice;
-6. upgrades cannot mint supply and always follow the published 70/20/10 route;
+6. upgrades cannot mint supply or transfer user assets to a platform-controlled account;
 7. unsafe or thin price sources cannot value upgrades;
 8. fee routes match immutable or tightly governed configuration.
 

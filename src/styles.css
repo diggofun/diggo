@@ -32,6 +32,9 @@ a { color: inherit; text-decoration: none; }
 .launch-button { background: transparent; color: var(--ink); }
 .wallet-button { background: var(--ink); color: white; }
 .wallet-control { position: relative; }
+.signed-wallet { display: inline-flex; align-items: center; gap: 4px; }
+.wallet-disconnect { width: 26px; height: 26px; border: 1px solid var(--line); background: var(--paper); color: var(--muted); font-size: 18px; line-height: 1; }
+.wallet-disconnect:hover { border-color: var(--ink); color: var(--ink); }
 .wallet-menu { position: absolute; right: 0; top: 50px; width: 280px; padding: 16px; background: var(--paper); border: 1px solid var(--ink); box-shadow: 5px 5px 0 var(--acid); display: grid; gap: 9px; z-index: 40; }
 .wallet-menu > strong { font: 900 11px/1.4 Arial Black; text-transform: uppercase; }
 .wallet-menu > button { min-height: 42px; padding: 8px 10px; display: flex; align-items: center; gap: 9px; border: 1px solid var(--line); background: white; font-weight: 800; }

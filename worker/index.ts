@@ -343,6 +343,8 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
     if (request.method === "GET" && pathname === "/api/config") {
       return json({
         cluster: env.SOLANA_CLUSTER,
+        posthogApiKey: env.POSTHOG_API_KEY,
+        posthogHost: env.POSTHOG_HOST,
         turnstileSiteKey: env.TURNSTILE_SITE_KEY,
         vanitySuffix: env.VANITY_SUFFIX,
       });

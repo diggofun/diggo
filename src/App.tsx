@@ -33,6 +33,7 @@ import {
 
 import type { LaunchRequest, TokenSummary } from "../shared/types";
 import { getChallenge, getTokens, queueLaunch, uploadTokenImage, verifyWallet } from "./api";
+import { track } from "./analytics";
 import { TokenOrb } from "./components/TokenOrb";
 import { TurnstileBox } from "./components/TurnstileBox";
 import { solanaClient } from "./solana";
@@ -72,18 +73,46 @@ function BrandMark() {
   );
 }
 
-function WalletControl() {
+function WalletControl({
+  session,
+  onAuthenticated,
+}: {
+  session: string | null;
+  onAuthenticated(session: string): void;
+}) {
   const wallets = useWallets(solanaClient);
   const connected = useConnectedWallet(solanaClient);
   const connect = useConnect(solanaClient);
   const disconnect = useDisconnect(solanaClient);
+  const signMessage = useSignMessage(solanaClient);
   const [open, setOpen] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
+
+  async function signIn(): Promise<void> {
+    if (!connected) return;
+    setSigningIn(true);
+    try {
+      const wallet = String(connected.account.address);
+      const challenge = await getChallenge(wallet);
+      const signature = await signMessage.dispatchAsync(new TextEncoder().encode(challenge.message));
+      const verified = await verifyWallet(wallet, challenge.nonce, bs58.encode(signature));
+      onAuthenticated(verified.session);
+      track("wallet_signed_in", { network: "solana-devnet" });
+    } catch {
+      track("wallet_sign_in_failed", { network: "solana-devnet" });
+    } finally {
+      setSigningIn(false);
+    }
+  }
 
   if (connected) {
     return (
-      <button className="wallet-button" onClick={() => disconnect.dispatch()} title="Disconnect wallet">
-        {shortAddress(String(connected.account.address))}
-      </button>
+      <div className="wallet-control signed-wallet">
+        <button className="wallet-button" disabled={signingIn} onClick={() => void signIn()} title="Sign in with wallet">
+          {signingIn ? "Signing…" : session ? shortAddress(String(connected.account.address)) : "Sign in"}
+        </button>
+        <button className="wallet-disconnect" onClick={() => disconnect.dispatch()} title="Disconnect wallet">×</button>
+      </div>
     );
   }
 
@@ -94,7 +123,7 @@ function WalletControl() {
         <div className="wallet-menu">
           <strong>Choose a Wallet Standard wallet</strong>
           {wallets.length ? wallets.map((wallet) => (
-            <button key={wallet.name} disabled={connect.isRunning} onClick={() => { connect.dispatch(wallet); setOpen(false); }}>
+            <button key={wallet.name} disabled={connect.isRunning} onClick={() => { connect.dispatch(wallet); setOpen(false); track("wallet_connected", { network: "solana-devnet" }); }}>
               {wallet.icon && <img src={wallet.icon} alt="" />} {wallet.name}
             </button>
           )) : <p>No compatible browser wallet found.</p>}
@@ -143,7 +172,15 @@ function TokenCard({ token, onSelect }: { token: TokenSummary; onSelect(token: T
   );
 }
 
-function CreateModal({ onClose }: { onClose(): void }) {
+function CreateModal({
+  onClose,
+  session,
+  onAuthenticated,
+}: {
+  onClose(): void;
+  session: string | null;
+  onAuthenticated(session: string): void;
+}) {
   const connected = useConnectedWallet(solanaClient);
   const signMessage = useSignMessage(solanaClient);
   const [name, setName] = useState("");
@@ -161,6 +198,8 @@ function CreateModal({ onClose }: { onClose(): void }) {
     const challenge = await getChallenge(wallet);
     const signature = await signMessage.dispatchAsync(new TextEncoder().encode(challenge.message));
     const verified = await verifyWallet(wallet, challenge.nonce, bs58.encode(signature));
+    onAuthenticated(verified.session);
+    track("wallet_signed_in", { network: "solana-devnet" });
     return verified.session;
   }
 
@@ -173,9 +212,9 @@ function CreateModal({ onClose }: { onClose(): void }) {
     setState("working");
     setMessage("Requesting a wallet signature…");
     try {
-      const session = await authenticate();
-      setMessage(file ? "Uploading artwork to R2…" : "Preparing your launch…");
-      const imageUrl = file ? await uploadTokenImage(file, session) : undefined;
+      const activeSession = session ?? await authenticate();
+      setMessage(file ? "Uploading artwork…" : "Preparing your launch…");
+      const imageUrl = file ? await uploadTokenImage(file, activeSession) : undefined;
       const launch: LaunchRequest = {
         name,
         symbol: symbol.toUpperCase(),
@@ -184,7 +223,8 @@ function CreateModal({ onClose }: { onClose(): void }) {
         imageUrl,
         turnstileToken,
       };
-      const result = await queueLaunch(launch, session);
+      const result = await queueLaunch(launch, activeSession);
+      track("launch_submitted", { has_artwork: Boolean(file), network: "solana-devnet" });
       setMessage(`${result.message} Job ${result.id.slice(0, 8)} is queued.`);
       setState("done");
     } catch (error) {
@@ -199,7 +239,7 @@ function CreateModal({ onClose }: { onClose(): void }) {
         <button className="modal-close" onClick={onClose} aria-label="Close"><X size={20} /></button>
         <div className="eyebrow"><Sparkles size={14} /> Launch on Diggo</div>
         <h2 id="launch-title">Put your meme<br />on the map.</h2>
-        <p className="modal-intro">Every Diggo mint gets fixed supply, a program-locked 5% mining reserve, and a contract address ending in <b>diggo</b>.</p>
+        <p className="modal-intro">Every Diggo mint gets fixed supply, a program-locked 5% mining reserve, and a contract address ending in <b>diggo</b>. Diggo never holds user funds.</p>
         {state === "done" ? (
           <div className="success-panel">
             <span><Check size={28} /></span>
@@ -217,10 +257,10 @@ function CreateModal({ onClose }: { onClose(): void }) {
             <label className="file-input">
               <span>Token artwork</span>
               <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
-              <i>{file ? file.name : "PNG, JPG, WEBP or SVG · max 2 MB"}</i>
+              <i>{file ? file.name : "PNG, JPG or WEBP · max 2 MB"}</i>
             </label>
             <div className="launch-allocation">
-              <span>95% launch market</span><span>5% locked mining reserve</span><span>0% creator allocation</span>
+              <span>95% user-held launch supply</span><span>5% locked mining reserve</span><span>0% platform custody</span>
             </div>
             <TurnstileBox siteKey={TURNSTILE_SITE_KEY} onToken={onTurnstileToken} />
             {message && <p className="form-message">{message}</p>}
@@ -241,6 +281,7 @@ export default function App() {
   const [mining, setMining] = useState(false);
   const [launchOpen, setLaunchOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [session, setSession] = useState<string | null>(null);
 
   useEffect(() => {
     getTokens().then((result) => {
@@ -275,7 +316,7 @@ export default function App() {
         </nav>
         <div className="header-actions">
           <button className="launch-button" onClick={() => setLaunchOpen(true)}><Plus size={16} /> Launch coin</button>
-          <WalletControl />
+          <WalletControl session={session} onAuthenticated={setSession} />
         </div>
       </header>
 
@@ -291,7 +332,7 @@ export default function App() {
           <div className="trust-row">
             <span><ShieldCheck size={15} /> Mint revoked</span>
             <span><LockKeyhole size={15} /> Reserve locked</span>
-            <span><Coins size={15} /> Fixed supply</span>
+            <span><Coins size={15} /> Funds stay in your wallet</span>
           </div>
         </div>
 
@@ -349,7 +390,7 @@ export default function App() {
           </div>
           <div className="metric-panel"><Gauge /><span>Network power</span><strong>{compact(featured.networkPower)}</strong><small>across 12,842 miners</small></div>
           <div className="metric-panel"><Clock3 /><span>Next reduction</span><strong>{countdown(featured.nextEpochAt, now)}</strong><small>{compact(featured.rewardPerBlock)} → {compact(featured.rewardPerBlock * 0.75)} per block</small></div>
-          <div className="metric-panel"><Users /><span>Creator fees</span><strong>0.50%</strong><small>usage-based, no allocation</small></div>
+          <div className="metric-panel"><Users /><span>Custody</span><strong>NON-CUSTODIAL</strong><small>only the LP is program-controlled</small></div>
         </div>
       </section>
 
@@ -359,19 +400,19 @@ export default function App() {
           <div className="steps">
             <article><b>01</b><span className="step-icon"><Plus /></span><h3>Launch a coin</h3><p>Fixed supply, revoked authorities, 5% program-locked mining reserve.</p></article>
             <article><b>02</b><span className="step-icon"><Pickaxe /></span><h3>Assign power</h3><p>Pick one active mine. Every block pays your proportional share.</p></article>
-            <article><b>03</b><span className="step-icon"><Hammer /></span><h3>Upgrade gear</h3><p>Recycle 70%, burn 20%, route 10% to protocol. Get more power.</p></article>
+            <article><b>03</b><span className="step-icon"><Hammer /></span><h3>Upgrade gear</h3><p>Program rules settle upgrades on-chain. Your wallet stays in control.</p></article>
           </div>
         </div>
       </section>
 
       <section className="protocol page-shell" id="protocol">
-        <div className="protocol-copy"><div className="eyebrow"><Database size={14} /> Built in the open</div><h2>THE BACKEND<br />CAN’T TOUCH<br />YOUR ORE.</h2><p>Cloudflare makes Diggo fast. Solana remains the source of truth for reserves, rewards, burns and custody.</p><a href="/ARCHITECTURE.md" target="_blank" rel="noreferrer">Read the architecture <ArrowUpRight size={16} /></a></div>
+          <div className="protocol-copy"><div className="eyebrow"><Database size={14} /> Built in the open</div><h2>THE BACKEND<br />CAN’T TOUCH<br />YOUR ORE.</h2><p>Funds remain in user wallets. Only program-controlled liquidity and the mining reserve leave a wallet, under immutable Solana rules.</p><a href="/ARCHITECTURE.md" target="_blank" rel="noreferrer">Read the architecture <ArrowUpRight size={16} /></a></div>
         <div className="stack-map">
           <span className="map-label">DIGGO EDGE STACK</span>
           <div className="stack-node main-node"><Zap /> Cloudflare Worker<small>API + static assets</small></div>
           <div className="stack-node"><Database /> D1<small>index + history</small></div>
           <div className="stack-node"><Radio /> Durable Objects<small>live markets</small></div>
-          <div className="stack-node"><Coins /> KV + R2<small>cache + media</small></div>
+          <div className="stack-node"><Coins /> KV + Supabase Storage<small>cache + media</small></div>
           <div className="stack-node"><ShieldCheck /> Turnstile + WAF<small>launch protection</small></div>
           <div className="stack-footer"><span>Helius</span><i /> <span>Queues</span><i /> <span>Workflows</span><i /> <span>Solana</span></div>
         </div>
@@ -382,7 +423,7 @@ export default function App() {
       </section>
 
       <footer className="site-footer page-shell"><BrandMark /><p>Finite supply. Infinite memes.</p><div><a href="#protocol">Docs</a><a href="#mines">Mines</a><a href="#top">X / Twitter</a></div><small>© 2026 Diggo.fun · Devnet MVP</small></footer>
-      {launchOpen && <CreateModal onClose={() => setLaunchOpen(false)} />}
+      {launchOpen && <CreateModal onClose={() => setLaunchOpen(false)} session={session} onAuthenticated={setSession} />}
     </main>
   );
 }
