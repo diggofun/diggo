@@ -14,7 +14,7 @@
     "ENVIRONMENT": "production",
     "SOLANA_CLUSTER": "devnet",
     "SUPABASE_URL": "https://mtkvvcybpasehmscueox.supabase.co",
-    "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAEzwvf6nnwXvXdMc",
     "VANITY_SUFFIX": "diggo"
   },
   "d1_databases": [

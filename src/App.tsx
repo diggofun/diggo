@@ -37,7 +37,7 @@ import { TokenOrb } from "./components/TokenOrb";
 import { TurnstileBox } from "./components/TurnstileBox";
 import { solanaClient } from "./solana";
 
-const TURNSTILE_SITE_KEY = "1x00000000000000000000AA";
+const TURNSTILE_SITE_KEY = "0x4AAAAAAEzwvf6nnwXvXdMc";
 
 function compact(value: number): string {
   return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
