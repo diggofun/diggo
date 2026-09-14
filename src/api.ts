@@ -59,7 +59,7 @@ export async function verifyWallet(
   wallet: string,
   nonce: string,
   signature: string,
-): Promise<{ session: string }> {
+): Promise<{ wallet: string; expiresIn: number }> {
   const response = await fetch("/api/auth/verify", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -68,12 +68,17 @@ export async function verifyWallet(
   return parseResponse(response);
 }
 
-export async function uploadTokenImage(file: File, session: string): Promise<string> {
+export async function getWalletSession(): Promise<{ wallet: string } | null> {
+  const response = await fetch("/api/auth/session");
+  if (response.status === 401) return null;
+  return parseResponse(response);
+}
+
+export async function uploadTokenImage(file: File): Promise<string> {
   const form = new FormData();
   form.set("file", file);
   const response = await fetch("/api/media", {
     method: "POST",
-    headers: { authorization: `Bearer ${session}` },
     body: form,
   });
   const data = await parseResponse<{ url: string }>(response);
@@ -90,15 +95,24 @@ export async function uploadTokenImage(file: File, session: string): Promise<str
 export async function registerLaunchedToken(
   mint: string,
   metadata: { description?: string; imageUrl?: string },
-  session: string,
 ): Promise<TokenSummary> {
-  const response = await fetch("/api/tokens/register", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${session}` },
-    body: JSON.stringify({ mint, ...metadata }),
-  });
-  const data = await parseResponse<{ token: TokenSummary }>(response);
-  return data.token;
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      const response = await fetch("/api/tokens/register", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mint, ...metadata }),
+      });
+      const data = await parseResponse<{ token: TokenSummary }>(response);
+      return data.token;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("Could not register the on-chain launch");
+      if (!lastError.message.includes("not launched on-chain yet") || attempt === 5) break;
+      await new Promise((resolve) => window.setTimeout(resolve, 1_500 * (attempt + 1)));
+    }
+  }
+  throw lastError ?? new Error("Could not register the on-chain launch");
 }
 
 export async function getActivationChallenge(wallet: string): Promise<{ nonce: string; message: string }> {
@@ -124,10 +138,8 @@ export async function activateMine(
   return parseResponse(response);
 }
 
-export async function getPlayerProfile(wallet: string, session: string): Promise<PlayerProfile> {
-  const response = await fetch(`/api/player/${wallet}`, {
-    headers: { authorization: `Bearer ${session}` },
-  });
+export async function getPlayerProfile(wallet: string): Promise<PlayerProfile> {
+  const response = await fetch(`/api/player/${wallet}`);
   const data = await parseResponse<{ player: PlayerProfile }>(response);
   return data.player;
 }
@@ -149,23 +161,20 @@ export async function recordTrade(
   return parseResponse(response);
 }
 
-export async function switchMine(mint: string, session: string): Promise<PlayerProfile> {
+export async function switchMine(mint: string): Promise<PlayerProfile> {
   const response = await fetch("/api/mine/switch", {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${session}` },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({ mint }),
   });
   const data = await parseResponse<{ player: PlayerProfile }>(response);
   return data.player;
 }
 
-export async function upgradeCrew(
-  component: string,
-  session: string,
-): Promise<{ player: PlayerProfile; spent: number }> {
+export async function upgradeCrew(component: string): Promise<{ player: PlayerProfile; spent: number }> {
   const response = await fetch("/api/crew/upgrade", {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${session}` },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({ component }),
   });
   return parseResponse(response);

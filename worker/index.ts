@@ -120,11 +120,15 @@ const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const SUPABASE_MEDIA_BUCKET = "token-media";
 const IMAGE_CONTENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const textEncoder = new TextEncoder();
+const SESSION_COOKIE = "diggo_session";
+const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
 
 function json(data: unknown, init: ResponseInit = {}): Response {
+  const headers = new Headers(JSON_HEADERS);
+  new Headers(init.headers).forEach((value, key) => headers.set(key, value));
   return new Response(JSON.stringify(data), {
     ...init,
-    headers: { ...JSON_HEADERS, ...init.headers },
+    headers,
   });
 }
 
@@ -244,9 +248,23 @@ async function verifyTurnstile(
 }
 
 async function sessionWallet(request: Request, env: RuntimeEnv): Promise<string | null> {
+  const cookieMatch = request.headers.get("cookie")?.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`));
+  let cookieSession: string | null = null;
+  if (cookieMatch?.[1]) {
+    try {
+      cookieSession = decodeURIComponent(cookieMatch[1]);
+    } catch {
+      cookieSession = null;
+    }
+  }
   const header = request.headers.get("authorization");
-  if (!header?.startsWith("Bearer ")) return null;
-  return env.TOKEN_CACHE.get(`auth:session:${header.slice(7)}`);
+  const bearerSession = header?.startsWith("Bearer ") ? header.slice(7) : null;
+  const session = cookieSession ?? bearerSession;
+  return session ? env.TOKEN_CACHE.get(`auth:session:${session}`) : null;
+}
+
+function sessionCookie(session: string): string {
+  return `${SESSION_COOKIE}=${encodeURIComponent(session)}; Path=/; Max-Age=${SESSION_TTL_SECONDS}; HttpOnly; Secure; SameSite=Lax`;
 }
 
 function tokenLimit(value: string | null): number {
@@ -347,8 +365,18 @@ async function verifyWallet(request: Request, env: RuntimeEnv): Promise<Response
   if (!valid) return apiError("Invalid wallet signature", 401);
   await env.TOKEN_CACHE.delete(`auth:challenge:${body.nonce}`);
   const session = crypto.randomUUID().replaceAll("-", "");
-  await env.TOKEN_CACHE.put(`auth:session:${session}`, body.wallet, { expirationTtl: 3_600 });
-  return json({ session, wallet: body.wallet, expiresIn: 3_600 });
+  await env.TOKEN_CACHE.put(`auth:session:${session}`, body.wallet, { expirationTtl: SESSION_TTL_SECONDS });
+  return json(
+    { wallet: body.wallet, expiresIn: SESSION_TTL_SECONDS },
+    { headers: { "set-cookie": sessionCookie(session), "cache-control": "no-store" } },
+  );
+}
+
+async function walletSession(request: Request, env: RuntimeEnv): Promise<Response> {
+  const wallet = await sessionWallet(request, env);
+  return wallet
+    ? json({ wallet }, { headers: { "cache-control": "no-store" } })
+    : apiError("Wallet authentication required", 401);
 }
 
 async function uploadMedia(request: Request, env: RuntimeEnv): Promise<Response> {
@@ -992,6 +1020,9 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
     }
     if (request.method === "POST" && pathname === "/api/auth/verify") {
       return verifyWallet(request, env);
+    }
+    if (request.method === "GET" && pathname === "/api/auth/session") {
+      return walletSession(request, env);
     }
     if (request.method === "POST" && pathname === "/api/media") return uploadMedia(request, env);
     if (request.method === "POST" && pathname === "/api/tokens/register") {

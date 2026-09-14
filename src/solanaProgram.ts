@@ -151,7 +151,12 @@ async function signSendConfirm(
 
   if (isTransactionSendingSigner(feePayer)) {
     const signatureBytes = await signAndSendTransactionMessageWithSigners(message);
-    return getBase58Decoder().decode(signatureBytes) as string;
+    const signature = getBase58Decoder().decode(signatureBytes) as string;
+    // Wallet Standard's send-capable signers return as soon as the RPC accepts the transaction.
+    // The following API call reads the newly-created PDAs, so wait for confirmed state rather
+    // than racing the indexer and leaving an already-launched coin invisible in the dashboard.
+    await pollForConfirmation(signature, 60_000);
+    return signature;
   }
 
   const signedTx = await signTransactionMessageWithSigners(message);
