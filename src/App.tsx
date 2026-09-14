@@ -482,6 +482,104 @@ function DashboardOverview({ tokens, player }: { tokens: TokenSummary[]; player:
   );
 }
 
+function MiningDashboard({
+  token,
+  player,
+  now,
+  isMiningActive,
+  estimatedReward,
+  onManageCrew,
+  onClaim,
+  canClaim,
+}: {
+  token: TokenSummary;
+  player: PlayerProfile | null;
+  now: number;
+  isMiningActive: boolean;
+  estimatedReward: number;
+  onManageCrew(): void;
+  onClaim(): void;
+  canClaim: boolean;
+}) {
+  const orePercent = player ? Math.min(100, (player.oreBalance / Math.max(1, player.oreCapacity)) * 100) : 0;
+  const powerShare = player && token.networkPower > 0 ? (player.power / token.networkPower) * 100 : 0;
+  const tier = player ? crewTier(player.crewLevels) : null;
+  const projectedRewardPerBlock = player ? estimatedReward : token.rewardPerBlock;
+  const rewardProjection = Array.from({ length: 24 }, (_, index) => projectedRewardPerBlock * (index + 1));
+  const projectionMax = Math.max(1, rewardProjection.at(-1) ?? 1);
+  const projectionPoints = rewardProjection.map((value, index) => {
+    const x = 4 + (index / Math.max(1, rewardProjection.length - 1)) * 292;
+    const y = 94 - (value / projectionMax) * 78;
+    return `${x},${y}`;
+  }).join(" ");
+  const projectionArea = `4,94 ${projectionPoints} 296,94`;
+  return (
+    <section className="mining-dashboard page-shell">
+      <div className="mining-dashboard-heading">
+        <div><span className="eyebrow"><Pickaxe size={14} /> Mining dashboard</span><h2>YOUR MINING<br /><span>DESK.</span></h2></div>
+        <div className={`mining-status ${isMiningActive ? "active" : ""}`}><i /> {isMiningActive ? "Mining live" : player ? "Crew paused" : "Wallet not connected"}</div>
+      </div>
+
+      <div className="mining-kpis">
+        <article><span>ACTIVE MINE</span><strong>${token.symbol}</strong><small>{token.name}</small></article>
+        <article><span>YOUR POWER</span><strong>{player ? compact(player.power) : "—"}</strong><small>{player ? `${powerShare.toFixed(3)}% of network` : "connect a wallet to see it"}</small></article>
+        <article><span>NEXT BLOCK SHARE</span><strong>{player ? estimatedReward.toFixed(2) : "—"}</strong><small>${token.symbol} estimated</small></article>
+        <article><span>NEXT BLOCK</span><strong>{token.networkPower > 0 ? countdown(token.nextBlockAt, now) : "Waiting"}</strong><small>{compact(token.rewardPerBlock)} ${token.symbol} total reward</small></article>
+      </div>
+
+      {player ? (
+        <div className="mining-dashboard-grid">
+          <div className="ore-storage-panel">
+            <div><span>ORE STORAGE</span><strong>{Math.floor(player.oreBalance).toLocaleString()} <small>/ {player.oreCapacity.toLocaleString()}</small></strong></div>
+            <div className="ore-meter" aria-label={`${orePercent.toFixed(0)}% ORE storage full`}><i style={{ width: `${orePercent}%` }} /></div>
+            <small>{orePercent.toFixed(0)}% capacity · ORE upgrades your crew only</small>
+          </div>
+          <div className="crew-overview-panel">
+            <div className="crew-overview-head"><div><span>YOUR CREW</span><strong>{tier?.name}</strong></div><button className="outline-button" onClick={onManageCrew}>Manage crew <Hammer size={14} /></button></div>
+            <div className="crew-levels">
+              {(Object.keys(CREW_COMPONENT_LABELS) as CrewComponent[]).map((component) => <span key={component}><i>{CREW_COMPONENT_LABELS[component].slice(0, 1)}</i>{CREW_COMPONENT_LABELS[component]} <b>LV. {player.crewLevels[component]}</b></span>)}
+            </div>
+          </div>
+          <div className="mining-session-panel">
+            <span>SESSION</span>
+            <strong>{isMiningActive ? "Active" : "Inactive"}</strong>
+            <small>{isMiningActive ? `resets in ${countdown(Math.floor(player.activationExpiresAt ?? 0), now)}` : "activate your crew to earn block rewards"}</small>
+            <div className="mining-actions">
+              <button className="primary-button" onClick={onManageCrew}>Upgrade gear <Hammer size={15} /></button>
+              {canClaim && <button className="claim-rewards-button" onClick={onClaim}><Coins size={13} /> Claim on-chain</button>}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="mining-connect-panel"><Pickaxe size={26} /><div><strong>Connect your wallet to unlock your mining dashboard.</strong><p>Your crew level, ORE storage, reward share and claimable balance will appear here.</p></div></div>
+      )}
+
+        <div className="mining-charts">
+          <article className="reward-projection-chart">
+            <div className="mining-chart-heading"><div><span>{player ? "YOUR REWARD PROJECTION" : "MINE REWARD SCHEDULE"}</span><strong>{rewardProjection.at(-1)?.toFixed(2)} ${token.symbol}</strong></div><small>NEXT 24 BLOCKS</small></div>
+            <svg viewBox="0 0 300 100" role="img" aria-label={`Estimated cumulative ${token.symbol} reward over the next 24 blocks`}>
+              <path className="projection-grid" d="M4 18H296M4 56H296M4 94H296" />
+              <polygon className="projection-area" points={projectionArea} />
+              <polyline className="projection-line" points={projectionPoints} />
+            </svg>
+            <p>{player ? "Estimate based on your current power share. It changes if network power changes." : "Total mine emissions at the current per-block reward."}</p>
+          </article>
+          <article className="power-share-chart">
+            <div className="mining-chart-heading"><div><span>{player ? "NETWORK POWER SHARE" : "NETWORK POWER"}</span><strong>{player ? `${powerShare.toFixed(3)}%` : compact(token.networkPower)}</strong></div><small>LIVE SNAPSHOT</small></div>
+            <div className="power-ring-wrap">
+              <svg viewBox="0 0 120 120" role="img" aria-label={player ? `${powerShare.toFixed(3)} percent of the mining network power` : "Network mining power"}>
+                <circle className="power-ring-track" cx="60" cy="60" r="47" />
+                <circle className="power-ring-value" cx="60" cy="60" r="47" pathLength="100" strokeDasharray={`${player ? Math.max(0.8, Math.min(100, powerShare)) : 100} 100`} />
+              </svg>
+              <div><strong>{compact(player?.power ?? token.networkPower)}</strong><span>{player ? "YOUR POWER" : "NETWORK POWER"}</span></div>
+            </div>
+            <p>{player ? `${compact(token.networkPower)} total network power on $${token.symbol}.` : "Connect a wallet to see your exact power share."}</p>
+          </article>
+        </div>
+    </section>
+  );
+}
+
 function LeaderboardPanel({ tokens }: { tokens: TokenSummary[] }) {
   const [data, setData] = useState<Leaderboards>({ miners: [], streaks: [], mines: tokens });
   const [tab, setTab] = useState<"miners" | "streaks" | "mines">("miners");
@@ -1030,6 +1128,19 @@ export default function App() {
         </div>
         )}
       </section>
+
+      {page === "mine" && featured && (
+        <MiningDashboard
+          token={featured}
+          player={player}
+          now={now}
+          isMiningActive={isMiningActive}
+          estimatedReward={estimatedReward}
+          onManageCrew={() => setCrewOpen(true)}
+          onClaim={() => void handleClaimRewards()}
+          canClaim={Boolean(connected?.signer)}
+        />
+      )}
 
       <DashboardOverview tokens={tokens} player={player} />
 
