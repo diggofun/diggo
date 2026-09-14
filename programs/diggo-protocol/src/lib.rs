@@ -3,14 +3,15 @@ use anchor_lang::system_program::{self, Transfer as SolTransfer};
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token_interface::spl_token_2022::instruction::AuthorityType;
 use anchor_spl::token_interface::{
-    self, BurnChecked, Mint, MintTo, SetAuthority, TokenAccount, TokenInterface, TransferChecked,
+    self, Mint, MintTo, SetAuthority, TokenAccount, TokenInterface, TransferChecked,
 };
 
-declare_id!("Do5iBFkbb7Sp9V5gcM9GnoswK7owKGgVnvC4B1a3KwQJ");
+declare_id!("48WgfSPnEPitiasXV5B3aLpeAWtUisSt6YSR6djDZebC");
 
 pub const BPS: u128 = 10_000;
 pub const INDEX_SCALE: u128 = 1_000_000_000_000;
 pub const DEFAULT_RESERVE_BPS: u16 = 500;
+pub const DEFAULT_DISCOVERY_RESERVE_BPS: u16 = 50;
 pub const DEFAULT_REDUCTION_BPS: u16 = 2_500;
 pub const DEFAULT_BLOCK_INTERVAL: i64 = 300;
 pub const DEFAULT_EPOCH_LENGTH: i64 = 604_800;
@@ -18,20 +19,38 @@ pub const MAX_NAME_LEN: usize = 32;
 pub const MAX_SYMBOL_LEN: usize = 10;
 pub const MAX_URI_LEN: usize = 200;
 pub const MAX_SYNC_SEGMENTS: usize = 64;
+pub const STARTER_POWER: u64 = 100;
+/// Upper bound on power the keeper may push for a single player. Power comes from
+/// off-chain Crew progression that is funded only by ORE (a non-transferable game
+/// resource) — this cap limits the blast radius of a compromised keeper key rather
+/// than expressing any real economic curve.
+pub const MAX_KEEPER_POWER: u64 = 10_000_000;
 
 #[program]
 pub mod diggo_protocol {
     use super::*;
 
-    pub fn initialize_protocol(ctx: Context<InitializeProtocol>, treasury: Pubkey) -> Result<()> {
+    pub fn initialize_protocol(
+        ctx: Context<InitializeProtocol>,
+        treasury: Pubkey,
+        keeper: Pubkey,
+    ) -> Result<()> {
         require!(treasury != Pubkey::default(), DiggoError::InvalidTreasury);
+        require!(keeper != Pubkey::default(), DiggoError::InvalidKeeper);
         let protocol = &mut ctx.accounts.protocol;
         protocol.treasury = treasury;
+        protocol.keeper = keeper;
         protocol.reserve_bps = DEFAULT_RESERVE_BPS;
-        protocol.recycle_bps = 7_000;
-        protocol.burn_bps = 2_000;
-        protocol.protocol_bps = 1_000;
+        protocol.discovery_reserve_bps = DEFAULT_DISCOVERY_RESERVE_BPS;
         protocol.bump = ctx.bumps.protocol;
+        Ok(())
+    }
+
+    /// Rotates the backend keeper key without touching treasury, reserves or any
+    /// player balance. Only the current keeper can hand off to a new one.
+    pub fn rotate_keeper(ctx: Context<RotateKeeper>, new_keeper: Pubkey) -> Result<()> {
+        require!(new_keeper != Pubkey::default(), DiggoError::InvalidKeeper);
+        ctx.accounts.protocol.keeper = new_keeper;
         Ok(())
     }
 
@@ -39,15 +58,17 @@ pub mod diggo_protocol {
         validate_launch_args(&args, &ctx.accounts.protocol)?;
 
         let reserve_amount = mul_bps(args.total_supply, args.reserve_bps)?;
+        let discovery_amount = mul_bps(args.total_supply, args.discovery_reserve_bps)?;
         let market_amount = args
             .total_supply
             .checked_sub(reserve_amount)
+            .and_then(|value| value.checked_sub(discovery_amount))
             .ok_or(DiggoError::MathOverflow)?;
+        // The mint is a PDA derived from (creator, nonce), so its address cannot be
+        // ground for a vanity suffix — hitting 5 fixed base58 characters is ~1 in 656M.
+        // Vanity mints need the pump.fun approach (mint as an off-chain ground keypair
+        // passed in as a signer), which is a separate change.
         let mint_key = ctx.accounts.mint.key();
-        require!(
-            mint_key.to_string().ends_with("diggo"),
-            DiggoError::InvalidVanityMint
-        );
         let mine_bump = ctx.bumps.mine;
         let signer_seeds: &[&[&[u8]]] = &[&[b"mine", mint_key.as_ref(), &[mine_bump]]];
 
@@ -66,6 +87,14 @@ pub mod diggo_protocol {
             &ctx.accounts.mine,
             signer_seeds,
             reserve_amount,
+        )?;
+        mint_to(
+            &ctx.accounts.token_program,
+            &ctx.accounts.mint,
+            &ctx.accounts.discovery_vault,
+            &ctx.accounts.mine,
+            signer_seeds,
+            discovery_amount,
         )?;
 
         revoke_authority(
@@ -88,10 +117,12 @@ pub mod diggo_protocol {
         mine.mint = mint_key;
         mine.creator = ctx.accounts.creator.key();
         mine.reserve_vault = ctx.accounts.reserve_vault.key();
+        mine.discovery_vault = ctx.accounts.discovery_vault.key();
         mine.market_vault = ctx.accounts.market_vault.key();
         mine.fee_vault = ctx.accounts.fee_vault.key();
         mine.total_supply = args.total_supply;
         mine.remaining_reserve = reserve_amount;
+        mine.remaining_discovery_reserve = discovery_amount;
         mine.cumulative_distributed = 0;
         mine.total_power = 0;
         mine.reward_index = 0;
@@ -107,7 +138,6 @@ pub mod diggo_protocol {
             .ok_or(DiggoError::MathOverflow)?;
         mine.reduction_bps = args.reduction_bps;
         mine.minimum_reward = args.minimum_reward;
-        mine.base_upgrade_cost = args.base_upgrade_cost;
         mine.status = MineStatus::Launching;
         mine.name = args.name;
         mine.symbol = args.symbol;
@@ -128,6 +158,7 @@ pub mod diggo_protocol {
             creator: mine.creator,
             total_supply: args.total_supply,
             mining_reserve: reserve_amount,
+            discovery_reserve: discovery_amount,
             market_supply: market_amount,
         });
         Ok(())
@@ -255,8 +286,7 @@ pub mod diggo_protocol {
     pub fn initialize_player(ctx: Context<InitializePlayer>) -> Result<()> {
         let player = &mut ctx.accounts.player;
         player.owner = ctx.accounts.owner.key();
-        player.level = 1;
-        player.power = power_for_level(1)?;
+        player.power = STARTER_POWER;
         player.active_mine = Pubkey::default();
         player.bump = ctx.bumps.player;
         Ok(())
@@ -336,83 +366,59 @@ pub mod diggo_protocol {
         Ok(())
     }
 
-    pub fn upgrade_equipment(ctx: Context<UpgradeEquipment>, amount: u64) -> Result<()> {
-        sync_mine(&mut ctx.accounts.mine, Clock::get()?.unix_timestamp)?;
+    /// Pushes a player's off-chain, ORE-funded Crew power on-chain. Only the
+    /// protocol keeper may call this — real tokens or SOL never buy power;
+    /// power only ever comes from the backend's Crew progression accounting.
+    pub fn sync_crew_power(ctx: Context<SyncCrewPower>, new_power: u64) -> Result<()> {
+        require!(new_power <= MAX_KEEPER_POWER, DiggoError::PowerOutOfRange);
+        let now = Clock::get()?.unix_timestamp;
+        sync_mine(&mut ctx.accounts.mine, now)?;
         settle_position(&mut ctx.accounts.position, &ctx.accounts.mine)?;
-        let required_amount = upgrade_cost(
-            ctx.accounts.mine.base_upgrade_cost,
-            ctx.accounts.player.level,
-        )?;
-        require!(amount == required_amount, DiggoError::InvalidUpgradeCost);
-        let protocol = &ctx.accounts.protocol;
-        let recycle = mul_bps(amount, protocol.recycle_bps)?;
-        let burn = mul_bps(amount, protocol.burn_bps)?;
-        let fee = amount
-            .checked_sub(recycle)
-            .and_then(|value| value.checked_sub(burn))
-            .ok_or(DiggoError::MathOverflow)?;
-
-        transfer_from_user(
-            &ctx.accounts.token_program,
-            &ctx.accounts.mint,
-            &ctx.accounts.owner_tokens,
-            &ctx.accounts.reserve_vault,
-            &ctx.accounts.owner,
-            recycle,
-        )?;
-        transfer_from_user(
-            &ctx.accounts.token_program,
-            &ctx.accounts.mint,
-            &ctx.accounts.owner_tokens,
-            &ctx.accounts.fee_vault,
-            &ctx.accounts.owner,
-            fee,
-        )?;
-        token_interface::burn_checked(
-            CpiContext::new(
-                ctx.accounts.token_program.key(),
-                BurnChecked {
-                    mint: ctx.accounts.mint.to_account_info(),
-                    from: ctx.accounts.owner_tokens.to_account_info(),
-                    authority: ctx.accounts.owner.to_account_info(),
-                },
-            ),
-            burn,
-            ctx.accounts.mint.decimals,
-        )?;
 
         let mine = &mut ctx.accounts.mine;
-        mine.remaining_reserve = mine
-            .remaining_reserve
-            .checked_add(recycle)
-            .ok_or(DiggoError::MathOverflow)?;
-        if mine.status == MineStatus::FullyMined {
-            mine.status = MineStatus::MiningActive;
-        }
         let player = &mut ctx.accounts.player;
         let old_power = player.power;
-        player.level = player
-            .level
-            .checked_add(1)
-            .ok_or(DiggoError::MathOverflow)?;
-        player.power = power_for_level(player.level)?;
+        player.power = new_power;
         if player.active_mine == mine.key() {
             mine.total_power = mine
                 .total_power
                 .checked_sub(old_power)
-                .and_then(|value| value.checked_add(player.power))
+                .and_then(|value| value.checked_add(new_power))
                 .ok_or(DiggoError::MathOverflow)?;
-            ctx.accounts.position.assigned_power = player.power;
+            ctx.accounts.position.assigned_power = new_power;
             ctx.accounts.position.last_reward_index = mine.reward_index;
         }
-        emit!(EquipmentUpgraded {
-            owner: ctx.accounts.owner.key(),
+        emit!(CrewPowerSynced {
+            owner: ctx.accounts.player.owner,
             mint: ctx.accounts.mint.key(),
-            level: player.level,
-            power: player.power,
-            recycle,
-            burn,
-            fee,
+            power: new_power,
+        });
+        Ok(())
+    }
+
+    /// Pays out a server-authoritative random memecoin discovery from the
+    /// Discovery Reserve. Only the protocol keeper may call this, and only
+    /// after the backend's eligibility, budget and anti-abuse checks pass —
+    /// this instruction performs no RNG or eligibility logic itself.
+    pub fn claim_discovery(ctx: Context<ClaimDiscovery>, amount: u64) -> Result<()> {
+        require!(amount > 0, DiggoError::InvalidAmount);
+        let mine = &mut ctx.accounts.mine;
+        mine.remaining_discovery_reserve = mine
+            .remaining_discovery_reserve
+            .checked_sub(amount)
+            .ok_or(DiggoError::InsufficientDiscoveryReserve)?;
+        transfer_from_mine(
+            &ctx.accounts.token_program,
+            &ctx.accounts.mint,
+            &ctx.accounts.discovery_vault,
+            &ctx.accounts.recipient_tokens,
+            mine,
+            amount,
+        )?;
+        emit!(DiscoveryClaimed {
+            mint: ctx.accounts.mint.key(),
+            recipient: ctx.accounts.recipient.key(),
+            amount,
         });
         Ok(())
     }
@@ -434,7 +440,7 @@ pub struct LaunchTokenArgs {
     pub reduction_bps: u16,
     pub virtual_sol_reserve: u64,
     pub graduation_target: u64,
-    pub base_upgrade_cost: u64,
+    pub discovery_reserve_bps: u16,
 }
 
 #[derive(Accounts)]
@@ -455,6 +461,13 @@ pub struct InitializeProtocol<'info> {
     #[account(init, payer = payer, space = 8 + ProtocolConfig::INIT_SPACE, seeds = [b"protocol"], bump)]
     pub protocol: Account<'info, ProtocolConfig>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RotateKeeper<'info> {
+    pub keeper: Signer<'info>,
+    #[account(mut, seeds = [b"protocol"], bump = protocol.bump, has_one = keeper)]
+    pub protocol: Account<'info, ProtocolConfig>,
 }
 
 #[derive(Accounts)]
@@ -501,6 +514,16 @@ pub struct LaunchToken<'info> {
         bump,
     )]
     pub reserve_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        init,
+        payer = creator,
+        token::mint = mint,
+        token::authority = mine,
+        token::token_program = token_program,
+        seeds = [b"discovery-vault", mint.key().as_ref()],
+        bump,
+    )]
+    pub discovery_vault: InterfaceAccount<'info, TokenAccount>,
     #[account(
         init,
         payer = creator,
@@ -613,35 +636,57 @@ pub struct ClaimRewards<'info> {
 }
 
 #[derive(Accounts)]
-pub struct UpgradeEquipment<'info> {
-    #[account(mut)]
-    pub owner: Signer<'info>,
-    #[account(seeds = [b"protocol"], bump = protocol.bump)]
+pub struct SyncCrewPower<'info> {
+    pub keeper: Signer<'info>,
+    #[account(seeds = [b"protocol"], bump = protocol.bump, has_one = keeper)]
     pub protocol: Account<'info, ProtocolConfig>,
+    /// CHECK: the player's wallet; only used to derive PDAs, never signs here.
+    pub owner: UncheckedAccount<'info>,
     #[account(mut, seeds = [b"player", owner.key().as_ref()], bump = player.bump, has_one = owner)]
     pub player: Account<'info, Player>,
-    #[account(mut, has_one = mint, has_one = reserve_vault, has_one = fee_vault)]
+    #[account(mut, has_one = mint)]
     pub mine: Account<'info, Mine>,
     pub mint: InterfaceAccount<'info, Mint>,
-    #[account(mut, address = mine.reserve_vault)]
-    pub reserve_vault: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut, address = mine.fee_vault)]
-    pub fee_vault: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut, token::mint = mint, token::authority = owner)]
-    pub owner_tokens: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut, seeds = [b"position", mine.key().as_ref(), owner.key().as_ref()], bump = position.bump, has_one = owner, has_one = mine)]
+    #[account(mut, seeds = [b"position", mine.key().as_ref(), owner.key().as_ref()], bump = position.bump, has_one = mine)]
     pub position: Account<'info, MiningPosition>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimDiscovery<'info> {
+    #[account(mut)]
+    pub keeper: Signer<'info>,
+    #[account(seeds = [b"protocol"], bump = protocol.bump, has_one = keeper)]
+    pub protocol: Account<'info, ProtocolConfig>,
+    #[account(mut, has_one = mint, has_one = discovery_vault)]
+    pub mine: Account<'info, Mine>,
+    pub mint: InterfaceAccount<'info, Mint>,
+    #[account(mut, address = mine.discovery_vault)]
+    pub discovery_vault: InterfaceAccount<'info, TokenAccount>,
+    /// CHECK: reward recipient wallet; only used to derive/own the destination ATA.
+    pub recipient: UncheckedAccount<'info>,
+    #[account(
+        init_if_needed,
+        payer = keeper,
+        associated_token::mint = mint,
+        associated_token::authority = recipient,
+        associated_token::token_program = token_program,
+    )]
+    pub recipient_tokens: InterfaceAccount<'info, TokenAccount>,
     pub token_program: Interface<'info, TokenInterface>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
 }
 
 #[account]
 #[derive(InitSpace)]
 pub struct ProtocolConfig {
     pub treasury: Pubkey,
+    /// Backend authority permitted to push off-chain Crew power on-chain and
+    /// pay out server-approved discoveries. It can never move the launch
+    /// market, the treasury, or a player's claimable mining rewards.
+    pub keeper: Pubkey,
     pub reserve_bps: u16,
-    pub recycle_bps: u16,
-    pub burn_bps: u16,
-    pub protocol_bps: u16,
+    pub discovery_reserve_bps: u16,
     pub bump: u8,
 }
 
@@ -651,10 +696,12 @@ pub struct Mine {
     pub mint: Pubkey,
     pub creator: Pubkey,
     pub reserve_vault: Pubkey,
+    pub discovery_vault: Pubkey,
     pub market_vault: Pubkey,
     pub fee_vault: Pubkey,
     pub total_supply: u64,
     pub remaining_reserve: u64,
+    pub remaining_discovery_reserve: u64,
     pub cumulative_distributed: u64,
     pub total_power: u64,
     pub reward_index: u128,
@@ -666,7 +713,6 @@ pub struct Mine {
     pub epoch_ends_at: i64,
     pub reduction_bps: u16,
     pub minimum_reward: u64,
-    pub base_upgrade_cost: u64,
     pub status: MineStatus,
     #[max_len(MAX_NAME_LEN)]
     pub name: String,
@@ -693,7 +739,8 @@ pub struct LaunchMarket {
 #[derive(InitSpace)]
 pub struct Player {
     pub owner: Pubkey,
-    pub level: u16,
+    /// Mining Power derived off-chain from Crew progression and pushed here
+    /// exclusively by `sync_crew_power`. Never purchasable with real tokens.
     pub power: u64,
     pub active_mine: Pubkey,
     pub bump: u8,
@@ -723,6 +770,7 @@ pub struct TokenLaunched {
     pub creator: Pubkey,
     pub total_supply: u64,
     pub mining_reserve: u64,
+    pub discovery_reserve: u64,
     pub market_supply: u64,
 }
 #[event]
@@ -745,14 +793,16 @@ pub struct RewardsClaimed {
     pub amount: u64,
 }
 #[event]
-pub struct EquipmentUpgraded {
+pub struct CrewPowerSynced {
     pub owner: Pubkey,
     pub mint: Pubkey,
-    pub level: u16,
     pub power: u64,
-    pub recycle: u64,
-    pub burn: u64,
-    pub fee: u64,
+}
+#[event]
+pub struct DiscoveryClaimed {
+    pub mint: Pubkey,
+    pub recipient: Pubkey,
+    pub amount: u64,
 }
 
 fn validate_launch_args(args: &LaunchTokenArgs, protocol: &ProtocolConfig) -> Result<()> {
@@ -769,6 +819,14 @@ fn validate_launch_args(args: &LaunchTokenArgs, protocol: &ProtocolConfig) -> Re
     require!(args.total_supply > 0, DiggoError::InvalidAmount);
     require!(
         args.reserve_bps == protocol.reserve_bps,
+        DiggoError::InvalidReserveSplit
+    );
+    require!(
+        args.discovery_reserve_bps == protocol.discovery_reserve_bps,
+        DiggoError::InvalidReserveSplit
+    );
+    require!(
+        (args.reserve_bps as u32) + (args.discovery_reserve_bps as u32) < BPS as u32,
         DiggoError::InvalidReserveSplit
     );
     require!(
@@ -795,7 +853,6 @@ fn validate_launch_args(args: &LaunchTokenArgs, protocol: &ProtocolConfig) -> Re
         args.virtual_sol_reserve > 0 && args.graduation_target > 0,
         DiggoError::InvalidMarket
     );
-    require!(args.base_upgrade_cost > 0, DiggoError::InvalidUpgradeCost);
     Ok(())
 }
 
@@ -945,27 +1002,6 @@ pub fn reduced_reward(current: u64, reduction_bps: u16, minimum: u64) -> Result<
     Ok(current.saturating_sub(reduction).max(minimum))
 }
 
-pub fn power_for_level(level: u16) -> Result<u64> {
-    require!(level > 0 && level <= 100, DiggoError::MaximumLevel);
-    let n = level as u128;
-    let power = 100u128
-        .checked_mul(n.checked_mul(n).ok_or(DiggoError::MathOverflow)?)
-        .ok_or(DiggoError::MathOverflow)?;
-    u64::try_from(power).map_err(|_| error!(DiggoError::MathOverflow))
-}
-
-pub fn upgrade_cost(base_cost: u64, current_level: u16) -> Result<u64> {
-    require!(
-        current_level > 0 && current_level < 100,
-        DiggoError::MaximumLevel
-    );
-    let n = current_level as u128;
-    let cost = (base_cost as u128)
-        .checked_mul(n.checked_mul(n).ok_or(DiggoError::MathOverflow)?)
-        .ok_or(DiggoError::MathOverflow)?;
-    u64::try_from(cost).map_err(|_| error!(DiggoError::MathOverflow))
-}
-
 fn sync_mine(mine: &mut Mine, now: i64) -> Result<()> {
     if mine.status != MineStatus::MiningActive
         || now < mine.next_block_at
@@ -1086,14 +1122,14 @@ pub enum DiggoError {
     NoPowerAssigned,
     #[msg("No rewards are available")]
     NothingToClaim,
-    #[msg("Maximum equipment level reached")]
-    MaximumLevel,
-    #[msg("Upgrade payment does not match the immutable cost curve")]
-    InvalidUpgradeCost,
-    #[msg("Mint address must end in diggo")]
-    InvalidVanityMint,
     #[msg("Mine synchronization requires multiple calls")]
     SyncWindowTooLarge,
+    #[msg("Invalid keeper authority")]
+    InvalidKeeper,
+    #[msg("Keeper-supplied power exceeds the protocol safety bound")]
+    PowerOutOfRange,
+    #[msg("Discovery reserve does not have enough balance for this claim")]
+    InsufficientDiscoveryReserve,
 }
 
 #[cfg(test)]
@@ -1105,10 +1141,12 @@ mod tests {
             mint: Pubkey::default(),
             creator: Pubkey::default(),
             reserve_vault: Pubkey::default(),
+            discovery_vault: Pubkey::default(),
             market_vault: Pubkey::default(),
             fee_vault: Pubkey::default(),
             total_supply: 1_000_000,
             remaining_reserve,
+            remaining_discovery_reserve: 0,
             cumulative_distributed: 0,
             total_power: 1_000,
             reward_index: 0,
@@ -1120,7 +1158,6 @@ mod tests {
             epoch_ends_at: 604_800,
             reduction_bps: 2_500,
             minimum_reward: 1,
-            base_upgrade_cost: 1_000,
             status: MineStatus::MiningActive,
             name: "Test".into(),
             symbol: "TEST".into(),
@@ -1130,20 +1167,13 @@ mod tests {
     }
 
     #[test]
-    fn upgrade_split_conserves_supply() {
-        let amount = 1_000_003;
-        let recycle = mul_bps(amount, 7_000).unwrap();
-        let burn = mul_bps(amount, 2_000).unwrap();
-        let fee = amount - recycle - burn;
-        assert_eq!(recycle + burn + fee, amount);
-    }
-
-    #[test]
-    fn reserve_split_is_exact_and_bounded() {
-        assert_eq!(
-            mul_bps(1_000_000_000, DEFAULT_RESERVE_BPS).unwrap(),
-            50_000_000
-        );
+    fn reserve_and_discovery_split_never_exceed_supply() {
+        let total_supply = 1_000_000_000u64;
+        let reserve = mul_bps(total_supply, DEFAULT_RESERVE_BPS).unwrap();
+        let discovery = mul_bps(total_supply, DEFAULT_DISCOVERY_RESERVE_BPS).unwrap();
+        assert_eq!(reserve, 50_000_000);
+        assert_eq!(discovery, 5_000_000);
+        assert!(reserve + discovery < total_supply);
         assert!(mul_bps(u64::MAX, 10_000).is_ok());
     }
 
@@ -1169,17 +1199,8 @@ mod tests {
     }
 
     #[test]
-    fn power_curve_is_monotonic() {
-        for level in 1..100 {
-            assert!(power_for_level(level + 1).unwrap() > power_for_level(level).unwrap());
-        }
-    }
-
-    #[test]
-    fn upgrade_cost_curve_is_quadratic() {
-        assert_eq!(upgrade_cost(1_000, 1).unwrap(), 1_000);
-        assert_eq!(upgrade_cost(1_000, 10).unwrap(), 100_000);
-        assert!(upgrade_cost(1_000, 100).is_err());
+    fn keeper_power_sync_is_bounded() {
+        assert!(MAX_KEEPER_POWER > STARTER_POWER);
     }
 
     #[test]
