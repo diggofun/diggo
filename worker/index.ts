@@ -2,12 +2,33 @@ import { DurableObject } from "cloudflare:workers";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import bs58 from "bs58";
 import { normalizeHeliusEvent } from "../shared/helius";
+import {
+  DISCOVERY_DEFAULTS,
+  GAMEPLAY_DEFAULTS,
+  crewPower,
+  crewTier,
+  discoveryEligible,
+  discoveryTokenAmount,
+  discoveryValueUsd,
+  maturityBps,
+  nextStreak,
+  oreCapacity,
+  oreForActiveSeconds,
+  rollDiscoveryRarity,
+  upgradeOreCost,
+  type CrewComponent,
+  type CrewLevels,
+} from "../shared/economics";
 
 import type {
+  ActivationState,
+  DiscoveryRecord,
   IndexingEvent,
   LaunchRequest,
   MarketSnapshot,
   MarketTrade,
+  MiningReport,
+  PlayerProfile,
   TokenStatus,
   TokenSummary,
 } from "../shared/types";
@@ -48,6 +69,36 @@ interface TokenRow {
 interface ChallengeRecord {
   wallet: string;
   message: string;
+}
+
+interface PlayerRow {
+  wallet: string;
+  created_at: number;
+  miners_level: number;
+  drills_level: number;
+  carts_level: number;
+  foreman_level: number;
+  storage_level: number;
+  ore_balance: number;
+  streak: number;
+  streak_freezes: number;
+  active_days: number;
+  active_mint: string | null;
+  last_activation_at: number | null;
+  activation_expires_at: number | null;
+  ore_collected_at: number | null;
+  risk_state: "NORMAL" | "UNDER_REVIEW" | "HELD" | "BLOCKED";
+  risk_score: number;
+}
+
+function crewLevelsOf(row: PlayerRow): CrewLevels {
+  return {
+    miners: row.miners_level,
+    drills: row.drills_level,
+    carts: row.carts_level,
+    foreman: row.foreman_level,
+    storage: row.storage_level,
+  };
 }
 
 const JSON_HEADERS = {
@@ -131,6 +182,36 @@ async function checkRateLimit(request: Request, env: RuntimeEnv, bucket: string)
   if (count >= 12) return false;
   await env.TOKEN_CACHE.put(key, String(count + 1), { expirationTtl: 120 });
   return true;
+}
+
+/**
+ * A second, independent rate-limit dimension keyed by wallet rather than IP.
+ * Anti-bot invariant: a single wallet cannot hammer daily-activation, crew
+ * upgrade or discovery endpoints just because it rotates source IPs, and a
+ * single IP/device cannot be the only signal that gates many wallets either
+ * — see checkRateLimit for the IP dimension. Both must pass.
+ */
+async function checkWalletRateLimit(
+  env: RuntimeEnv,
+  wallet: string,
+  bucket: string,
+  limit: number,
+  windowSeconds = 60,
+): Promise<boolean> {
+  const windowId = Math.floor(Date.now() / (windowSeconds * 1_000));
+  const key = `rate:${bucket}:${wallet}:${windowId}`;
+  const count = Number((await env.TOKEN_CACHE.get(key)) ?? "0");
+  if (count >= limit) return false;
+  await env.TOKEN_CACHE.put(key, String(count + 1), { expirationTtl: windowSeconds * 2 });
+  return true;
+}
+
+async function recordRiskEvent(env: RuntimeEnv, wallet: string, kind: string, detail?: string): Promise<void> {
+  await env.DB.prepare(
+    "INSERT INTO risk_events (id, wallet, kind, detail) VALUES (?1, ?2, ?3, ?4)",
+  )
+    .bind(crypto.randomUUID(), wallet, kind, detail ?? null)
+    .run();
 }
 
 async function verifyTurnstile(
@@ -347,6 +428,356 @@ async function heliusWebhook(request: Request, env: RuntimeEnv): Promise<Respons
   return json({ accepted: normalized.length });
 }
 
+// ---------------------------------------------------------------------------
+// Mining Crew game loop (ORE, daily activation, discoveries).
+//
+// ORE and Crew progression are internal, non-transferable game state — they
+// are never sold and never bought with SOL, USDC or a memecoin (see
+// docs/ARCHITECTURE.md). This backend IS the authority for that state, same
+// as it already is for launch queueing and wallet sessions above; it is
+// still never authoritative for a player's actual token balance, which only
+// ever moves through the Solana program (see docs/SECURITY.md).
+// ---------------------------------------------------------------------------
+
+async function getOrCreatePlayer(env: RuntimeEnv, wallet: string): Promise<PlayerRow> {
+  const existing = await env.DB.prepare("SELECT * FROM players WHERE wallet = ?1").bind(wallet).first<PlayerRow>();
+  if (existing) return existing;
+  await env.DB.prepare("INSERT OR IGNORE INTO players (wallet) VALUES (?1)").bind(wallet).run();
+  const created = await env.DB.prepare("SELECT * FROM players WHERE wallet = ?1").bind(wallet).first<PlayerRow>();
+  if (!created) throw new Error("Failed to initialize player");
+  return created;
+}
+
+function activationStateOf(row: PlayerRow, now: number): ActivationState {
+  if (row.last_activation_at === null) return "NEVER_ACTIVATED";
+  return row.activation_expires_at !== null && now < row.activation_expires_at ? "ACTIVE" : "PAUSED";
+}
+
+function rowToProfile(row: PlayerRow, now: number): PlayerProfile {
+  const levels = crewLevelsOf(row);
+  const accountAgeSeconds = Math.max(0, now - row.created_at);
+  return {
+    wallet: row.wallet,
+    createdAt: row.created_at,
+    crewLevels: levels,
+    power: crewPower(levels),
+    oreBalance: row.ore_balance,
+    oreCapacity: oreCapacity(levels),
+    streak: row.streak,
+    streakFreezes: row.streak_freezes,
+    activationState: activationStateOf(row, now),
+    lastActivationAt: row.last_activation_at,
+    activationExpiresAt: row.activation_expires_at,
+    activeMint: row.active_mint,
+    accountAgeSeconds,
+    maturityBps: maturityBps(accountAgeSeconds),
+    discoveryEligible: discoveryEligible(accountAgeSeconds, row.active_days, crewTier(levels).tier),
+    riskState: row.risk_state,
+  };
+}
+
+async function activateChallenge(request: Request, env: RuntimeEnv): Promise<Response> {
+  if (!(await checkRateLimit(request, env, "mine-activate"))) return apiError("Too many requests", 429);
+  const { wallet } = await readJson<{ wallet?: string }>(request);
+  if (!isBase58Address(wallet)) return apiError("Invalid Solana wallet");
+  if (!(await checkWalletRateLimit(env, wallet, "mine-activate", 6, 300))) {
+    return apiError("Too many activation attempts, slow down", 429);
+  }
+  const nonce = crypto.randomUUID();
+  const message = [
+    "Activate Diggo Mining Crew",
+    `Wallet: ${wallet}`,
+    `Nonce: ${nonce}`,
+    "This request does not trigger a blockchain transaction.",
+  ].join("\n");
+  await env.TOKEN_CACHE.put(
+    `activate:challenge:${nonce}`,
+    JSON.stringify({ wallet, message } satisfies ChallengeRecord),
+    { expirationTtl: 300 },
+  );
+  return json({ nonce, message });
+}
+
+async function pickDiscoveryTarget(
+  env: RuntimeEnv,
+  excludeMint: string | null,
+): Promise<{ mint: string; symbol: string; priceUsd: number } | null> {
+  const row = await env.DB.prepare(
+    "SELECT mint, symbol, price_usd FROM tokens WHERE status = 'MINING_ACTIVE' AND market_cap_usd >= ?1 AND mint != ?2 ORDER BY RANDOM() LIMIT 1",
+  )
+    .bind(DISCOVERY_DEFAULTS.minimumMarketCapUsd, excludeMint ?? "")
+    .first<{ mint: string; symbol: string; price_usd: number }>();
+  return row ? { mint: row.mint, symbol: row.symbol, priceUsd: row.price_usd } : null;
+}
+
+async function discoveryBudgetRemainingUsd(
+  env: RuntimeEnv,
+  wallet: string,
+  mint: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  const now = Math.floor(Date.now() / 1_000);
+  const [dailyWallet, weeklyWallet, dailyToken, dailyGlobal] = await env.DB.batch<{ total: number | null }>([
+    env.DB.prepare("SELECT COALESCE(SUM(value_usd), 0) AS total FROM discoveries WHERE wallet = ?1 AND created_at >= ?2")
+      .bind(wallet, now - 86_400),
+    env.DB.prepare("SELECT COALESCE(SUM(value_usd), 0) AS total FROM discoveries WHERE wallet = ?1 AND created_at >= ?2")
+      .bind(wallet, now - 604_800),
+    env.DB.prepare("SELECT COALESCE(SUM(value_usd), 0) AS total FROM discoveries WHERE mint = ?1 AND created_at >= ?2")
+      .bind(mint, now - 86_400),
+    env.DB.prepare("SELECT COALESCE(SUM(value_usd), 0) AS total FROM discoveries WHERE created_at >= ?1")
+      .bind(now - 86_400),
+  ]);
+  const dailyWalletUsed = dailyWallet.results[0]?.total ?? 0;
+  const weeklyWalletUsed = weeklyWallet.results[0]?.total ?? 0;
+  const dailyTokenUsed = dailyToken.results[0]?.total ?? 0;
+  const dailyGlobalUsed = dailyGlobal.results[0]?.total ?? 0;
+  if (dailyWalletUsed >= DISCOVERY_DEFAULTS.accountDailyCapUsd) return { ok: false, reason: "account_daily_cap" };
+  if (weeklyWalletUsed >= DISCOVERY_DEFAULTS.accountWeeklyCapUsd) return { ok: false, reason: "account_weekly_cap" };
+  if (dailyTokenUsed >= DISCOVERY_DEFAULTS.tokenDailyCapUsd) return { ok: false, reason: "token_daily_cap" };
+  if (dailyGlobalUsed >= DISCOVERY_DEFAULTS.globalDailyCapUsd) return { ok: false, reason: "global_daily_cap" };
+  return { ok: true };
+}
+
+/**
+ * Rolls a server-authoritative discovery for an already-eligible, budget-clear
+ * player. RNG uses crypto.getRandomValues — never frontend Math.random() —
+ * because this decides a real, if small, memecoin reward (see
+ * ARCHITECTURE.md "RNG security"). Returns null when no discovery target
+ * qualifies or the roll simply misses (most rolls are not a discovery at all;
+ * the rarity table's "common" tier is itself a small real reward, so a
+ * discovery record is only created for an actual hit — see note below).
+ */
+async function rollDiscovery(
+  env: RuntimeEnv,
+  wallet: string,
+  activeMint: string | null,
+  discoveryChance: number,
+): Promise<DiscoveryRecord | null> {
+  const draw = crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32;
+  if (draw >= discoveryChance) return null;
+
+  const target = await pickDiscoveryTarget(env, activeMint);
+  if (!target || target.priceUsd <= 0) return null;
+
+  const budget = await discoveryBudgetRemainingUsd(env, wallet, target.mint);
+  if (!budget.ok) {
+    await recordRiskEvent(env, wallet, "discovery_budget_blocked", budget.reason);
+    return null;
+  }
+
+  const rarityDraw = crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32;
+  const rarity = rollDiscoveryRarity(rarityDraw);
+  const valueUsd = Math.min(discoveryValueUsd(rarity), DISCOVERY_DEFAULTS.tokenDailyCapUsd);
+  const tokenAmount = discoveryTokenAmount(valueUsd, target.priceUsd);
+  if (tokenAmount <= 0) return null;
+
+  const id = crypto.randomUUID();
+  const createdAt = Math.floor(Date.now() / 1_000);
+  await env.DB.prepare(
+    "INSERT INTO discoveries (id, wallet, mint, symbol, rarity, token_amount, value_usd, status, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'ELIGIBLE', ?8)",
+  )
+    .bind(id, wallet, target.mint, target.symbol, rarity, tokenAmount, valueUsd, createdAt)
+    .run();
+
+  return {
+    id,
+    mint: target.mint,
+    symbol: target.symbol,
+    rarity,
+    tokenAmount,
+    valueUsd,
+    status: "ELIGIBLE",
+    createdAt,
+  };
+}
+
+async function activateMine(request: Request, env: RuntimeEnv): Promise<Response> {
+  if (!(await checkRateLimit(request, env, "mine-activate"))) return apiError("Too many requests", 429);
+  const body = await readJson<{ wallet?: string; nonce?: string; signature?: string; mint?: string }>(request);
+  if (!isBase58Address(body.wallet) || !body.nonce || !body.signature) {
+    return apiError("Incomplete activation proof");
+  }
+  if (!(await checkWalletRateLimit(env, body.wallet, "mine-activate", 6, 300))) {
+    return apiError("Too many activation attempts, slow down", 429);
+  }
+  const challengeKey = `activate:challenge:${body.nonce}`;
+  const challenge = await env.TOKEN_CACHE.get<ChallengeRecord>(challengeKey, "json");
+  if (!challenge || challenge.wallet !== body.wallet) return apiError("Challenge expired", 401);
+  let validSignature = false;
+  try {
+    validSignature = ed25519.verify(
+      bs58.decode(body.signature),
+      textEncoder.encode(challenge.message),
+      bs58.decode(body.wallet),
+    );
+  } catch {
+    validSignature = false;
+  }
+  if (!validSignature) return apiError("Invalid wallet signature", 401);
+  await env.TOKEN_CACHE.delete(challengeKey); // single-use: replay protection
+
+  const wallet = body.wallet;
+  const row = await getOrCreatePlayer(env, wallet);
+  const now = Math.floor(Date.now() / 1_000);
+
+  if (row.last_activation_at !== null && now - row.last_activation_at < GAMEPLAY_DEFAULTS.minimumReactivationSeconds) {
+    return apiError(
+      `Mine still active. You can reactivate in ${row.last_activation_at + GAMEPLAY_DEFAULTS.minimumReactivationSeconds - now}s.`,
+      409,
+    );
+  }
+  if (row.risk_state === "BLOCKED") return apiError("This account cannot activate mining", 403);
+
+  const accountAgeSeconds = Math.max(0, now - row.created_at);
+  const activeWindowEnd = row.activation_expires_at !== null ? Math.min(now, row.activation_expires_at) : now;
+  const collectFrom = row.ore_collected_at ?? row.last_activation_at ?? now;
+  const activeSeconds = Math.max(0, activeWindowEnd - collectFrom);
+
+  const streakResult = nextStreak(row.last_activation_at, now, row.streak, row.streak_freezes);
+  const levels = crewLevelsOf(row);
+  const capacity = oreCapacity(levels);
+  const maturity = maturityBps(accountAgeSeconds);
+  const activationBonus = Math.floor((GAMEPLAY_DEFAULTS.activationOre * maturity) / 10_000);
+  const oreFromMining = oreForActiveSeconds(activeSeconds, accountAgeSeconds);
+  const oreGained = oreFromMining + activationBonus;
+  const newOreBalance = Math.min(row.ore_balance + oreGained, capacity);
+  const activeMint = body.mint ?? row.active_mint;
+  const nextActiveDays = row.active_days + 1;
+
+  let discovery: DiscoveryRecord | null = null;
+  const hadPriorActiveWindow = row.last_activation_at !== null && activeSeconds >= GAMEPLAY_DEFAULTS.activationSeconds * 0.5;
+  if (
+    hadPriorActiveWindow &&
+    row.risk_state === "NORMAL" &&
+    discoveryEligible(accountAgeSeconds, nextActiveDays, crewTier(levels).tier)
+  ) {
+    discovery = await rollDiscovery(env, wallet, activeMint, 0.12);
+  }
+
+  await env.DB.prepare(
+    `UPDATE players SET
+       ore_balance = ?1,
+       streak = ?2,
+       streak_freezes = ?3,
+       active_days = ?4,
+       active_mint = ?5,
+       last_activation_at = ?6,
+       activation_expires_at = ?7,
+       ore_collected_at = ?6
+     WHERE wallet = ?8`,
+  )
+    .bind(
+      newOreBalance,
+      streakResult.streak,
+      streakResult.freezes,
+      nextActiveDays,
+      activeMint,
+      now,
+      now + GAMEPLAY_DEFAULTS.activationSeconds,
+      wallet,
+    )
+    .run();
+
+  const report: MiningReport = {
+    activeSeconds,
+    oreGained: newOreBalance - row.ore_balance,
+    streak: streakResult.streak,
+    streakFreezes: streakResult.freezes,
+    usedFreeze: streakResult.usedFreeze,
+    discovery,
+  };
+  const updated = await env.DB.prepare("SELECT * FROM players WHERE wallet = ?1").bind(wallet).first<PlayerRow>();
+  return json({ report, player: rowToProfile(updated ?? { ...row, ore_balance: newOreBalance }, now) });
+}
+
+async function crewUpgrade(request: Request, env: RuntimeEnv): Promise<Response> {
+  const wallet = await sessionWallet(request, env);
+  if (!wallet) return apiError("Wallet authentication required", 401);
+  if (!(await checkWalletRateLimit(env, wallet, "crew-upgrade", 20, 60))) {
+    return apiError("Too many upgrade requests, slow down", 429);
+  }
+  const { component } = await readJson<{ component?: string }>(request);
+  const validComponents: CrewComponent[] = ["miners", "drills", "carts", "foreman", "storage"];
+  if (!validComponents.includes(component as CrewComponent)) return apiError("Invalid crew component");
+
+  const row = await getOrCreatePlayer(env, wallet);
+  const column = `${component}_level` as const;
+  const currentLevel = row[column as keyof PlayerRow] as number;
+  if (currentLevel >= 100) return apiError("This crew component is already at its maximum level");
+  const cost = upgradeOreCost(component as CrewComponent, currentLevel);
+
+  const result = await env.DB.prepare(
+    `UPDATE players SET ore_balance = ore_balance - ?1, ${column} = ${column} + 1
+     WHERE wallet = ?2 AND ore_balance >= ?1 AND ${column} = ?3`,
+  )
+    .bind(cost, wallet, currentLevel)
+    .run();
+  if (!result.meta.changes) {
+    return apiError("Not enough ORE for this upgrade, or crew state changed — try again", 409);
+  }
+
+  const updated = await env.DB.prepare("SELECT * FROM players WHERE wallet = ?1").bind(wallet).first<PlayerRow>();
+  if (!updated) return apiError("Upgrade failed", 500);
+  return json({ player: rowToProfile(updated, Math.floor(Date.now() / 1_000)), spent: cost });
+}
+
+async function switchMine(request: Request, env: RuntimeEnv): Promise<Response> {
+  const wallet = await sessionWallet(request, env);
+  if (!wallet) return apiError("Wallet authentication required", 401);
+  const { mint } = await readJson<{ mint?: string }>(request);
+  if (!mint) return apiError("Missing mint");
+  const token = await env.DB.prepare("SELECT mint FROM tokens WHERE mint = ?1 AND status != 'FULLY_MINED'")
+    .bind(mint)
+    .first<{ mint: string }>();
+  if (!token) return apiError("Unknown or fully mined mine", 404);
+
+  const row = await getOrCreatePlayer(env, wallet);
+  const now = Math.floor(Date.now() / 1_000);
+  if (activationStateOf(row, now) !== "ACTIVE") {
+    return apiError("Activate your Mining Crew before switching mines", 409);
+  }
+  await env.DB.prepare("UPDATE players SET active_mint = ?1 WHERE wallet = ?2").bind(mint, wallet).run();
+  const updated = await env.DB.prepare("SELECT * FROM players WHERE wallet = ?1").bind(wallet).first<PlayerRow>();
+  if (!updated) return apiError("Switch failed", 500);
+  return json({ player: rowToProfile(updated, now) });
+}
+
+async function playerProfile(request: Request, env: RuntimeEnv, wallet: string): Promise<Response> {
+  const authenticated = await sessionWallet(request, env);
+  if (!authenticated || authenticated !== wallet) return apiError("Wallet authentication required", 401);
+  const row = await getOrCreatePlayer(env, wallet);
+  return json({ player: rowToProfile(row, Math.floor(Date.now() / 1_000)) });
+}
+
+async function listDiscoveries(request: Request, env: RuntimeEnv, wallet: string): Promise<Response> {
+  const authenticated = await sessionWallet(request, env);
+  if (!authenticated || authenticated !== wallet) return apiError("Wallet authentication required", 401);
+  const result = await env.DB.prepare(
+    "SELECT id, mint, symbol, rarity, token_amount, value_usd, status, created_at FROM discoveries WHERE wallet = ?1 ORDER BY created_at DESC LIMIT 50",
+  )
+    .bind(wallet)
+    .all<{
+      id: string;
+      mint: string;
+      symbol: string;
+      rarity: string;
+      token_amount: number;
+      value_usd: number;
+      status: "PENDING" | "ELIGIBLE";
+      created_at: number;
+    }>();
+  const discoveries: DiscoveryRecord[] = result.results.map((row) => ({
+    id: row.id,
+    mint: row.mint,
+    symbol: row.symbol,
+    rarity: row.rarity,
+    tokenAmount: row.token_amount,
+    valueUsd: row.value_usd,
+    status: row.status,
+    createdAt: row.created_at,
+  }));
+  return json({ discoveries });
+}
+
 async function serveMedia(pathname: string, env: RuntimeEnv): Promise<Response> {
   const key = decodeURIComponent(pathname.slice("/media/".length));
   if (!key || key.includes("..")) return apiError("Invalid media key");
@@ -402,6 +833,22 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
     }
     if (request.method === "POST" && pathname === "/api/media") return uploadMedia(request, env);
     if (request.method === "POST" && pathname === "/api/tokens") return createLaunch(request, env);
+    if (request.method === "POST" && pathname === "/api/mine/activate/challenge") {
+      return activateChallenge(request, env);
+    }
+    if (request.method === "POST" && pathname === "/api/mine/activate") {
+      return activateMine(request, env);
+    }
+    if (request.method === "POST" && pathname === "/api/crew/upgrade") {
+      return crewUpgrade(request, env);
+    }
+    if (request.method === "POST" && pathname === "/api/mine/switch") {
+      return switchMine(request, env);
+    }
+    const playerMatch = pathname.match(/^\/api\/player\/([^/]+)$/);
+    if (request.method === "GET" && playerMatch) return playerProfile(request, env, playerMatch[1]);
+    const discoveriesMatch = pathname.match(/^\/api\/player\/([^/]+)\/discoveries$/);
+    if (request.method === "GET" && discoveriesMatch) return listDiscoveries(request, env, discoveriesMatch[1]);
     if (request.method === "POST" && pathname === "/webhooks/helius") {
       return heliusWebhook(request, env);
     }

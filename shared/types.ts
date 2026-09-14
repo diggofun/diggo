@@ -59,3 +59,53 @@ export interface LaunchRequest {
   imageUrl?: string;
   turnstileToken: string;
 }
+
+export type ActivationState = "NEVER_ACTIVATED" | "ACTIVE" | "PAUSED";
+export type RiskState = "NORMAL" | "UNDER_REVIEW" | "HELD" | "BLOCKED";
+
+export interface PlayerProfile {
+  wallet: string;
+  createdAt: number;
+  crewLevels: {
+    miners: number;
+    drills: number;
+    carts: number;
+    foreman: number;
+    storage: number;
+  };
+  power: number;
+  oreBalance: number;
+  oreCapacity: number;
+  streak: number;
+  streakFreezes: number;
+  activationState: ActivationState;
+  lastActivationAt: number | null;
+  activationExpiresAt: number | null;
+  activeMint: string | null;
+  accountAgeSeconds: number;
+  maturityBps: number;
+  discoveryEligible: boolean;
+  riskState: RiskState;
+}
+
+export interface MiningReport {
+  activeSeconds: number;
+  oreGained: number;
+  streak: number;
+  streakFreezes: number;
+  usedFreeze: boolean;
+  discovery: DiscoveryRecord | null;
+}
+
+export type DiscoveryStatus = "PENDING" | "ELIGIBLE";
+
+export interface DiscoveryRecord {
+  id: string;
+  mint: string;
+  symbol: string;
+  rarity: string;
+  tokenAmount: number;
+  valueUsd: number;
+  status: DiscoveryStatus;
+  createdAt: number;
+}

@@ -23,7 +23,9 @@
     "POSTHOG_HOST": "https://us.i.posthog.com",
     "SUPABASE_URL": "https://mtkvvcybpasehmscueox.supabase.co",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAEzwvf6nnwXvXdMc",
-    "DIGGO_PROGRAM_ID": "Do5iBFkbb7Sp9V5gcM9GnoswK7owKGgVnvC4B1a3KwQJ",
+    "DIGGO_PROGRAM_ID": "48WgfSPnEPitiasXV5B3aLpeAWtUisSt6YSR6djDZebC",
+    "DIGGO_TREASURY": "3YwWHow5jFCtE3vQGadPiLi83eNRwDaEmCZebuEx71PQ",
+    "DIGGO_KEEPER": "G3QELLuGprfRBYxoh3P5v4ZkGFyNXGLjATsNYZx6xWu8",
     "VANITY_SUFFIX": "diggo"
   },
   "d1_databases": [
