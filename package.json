@@ -19,6 +19,7 @@
     "@solana/kit-plugin-wallet": "^0.20.0",
     "@solana/react": "^8.3.0",
     "bs58": "latest",
+    "lightweight-charts": "^4.2.3",
     "lucide-react": "latest",
     "posthog-js": "^1.431.2",
     "react": "latest",

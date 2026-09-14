@@ -9,6 +9,9 @@ export interface TokenSummary {
   creator: string;
   imageUrl: string | null;
   status: TokenStatus;
+  /** Real spot price from the on-chain bonding curve. The only trustworthy price field. */
+  priceSol: number;
+  /** priceSol converted at an illustrative, hardcoded devnet SOL/USD rate — see worker/chain.ts. Not a live price feed. */
   priceUsd: number;
   change24h: number;
   marketCapUsd: number;
@@ -19,6 +22,7 @@ export interface TokenSummary {
   nextBlockAt: number;
   nextEpochAt: number;
   createdAt: number;
+  decimals: number;
 }
 
 export interface MarketSnapshot {
@@ -32,6 +36,7 @@ export interface MarketSnapshot {
 export interface MarketTrade {
   signature: string;
   side: "buy" | "sell";
+  priceSol: number;
   priceUsd: number;
   amount: number;
   timestamp: number;
@@ -49,7 +54,9 @@ export type IndexingEvent =
       timestamp: number | null;
       payload: Record<string, unknown>;
     }
-  | { type: "epoch_sync"; mint: string; timestamp: number };
+  | { type: "epoch_sync"; mint: string; timestamp: number }
+  | { type: "sync_power"; wallet: string; mint: string }
+  | { type: "claim_discovery"; discoveryId: string };
 
 export interface LaunchRequest {
   name: string;
@@ -86,6 +93,22 @@ export interface PlayerProfile {
   maturityBps: number;
   discoveryEligible: boolean;
   riskState: RiskState;
+}
+
+export interface LeaderboardEntry {
+  rank: number;
+  wallet: string;
+  power: number;
+  streak: number;
+  activeDays: number;
+  oreBalance: number;
+  activeMint: string | null;
+}
+
+export interface Leaderboards {
+  miners: LeaderboardEntry[];
+  streaks: LeaderboardEntry[];
+  mines: TokenSummary[];
 }
 
 export interface MiningReport {
