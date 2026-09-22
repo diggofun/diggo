@@ -42,15 +42,32 @@ import {
   Zap,
 } from "lucide-react";
 
-import type { Leaderboards, MarketTrade, MiningReport, PlayerProfile, TokenSummary } from "../shared/types";
-import { GAMEPLAY_DEFAULTS, crewTier, upgradeOreCost, type CrewComponent } from "../shared/economics";
+import type {
+  DiscoveryOpportunity,
+  DiscoveryRecord,
+  MarketTrade,
+  MineInfo,
+  MiningReport,
+  PlayerProfile,
+  TokenSummary,
+} from "../shared/types";
+import { GAMEPLAY_DEFAULTS } from "../shared/economics";
 import {
   activateMine as activateMineRequest,
+  claimDiscovery as claimDiscoveryRequest,
+  claimReward as claimRewardRequest,
+  collectMiningReport,
+  getDiscoveries,
   getActivationChallenge,
   getBootstrap,
   getChallenge,
-  getLeaderboards,
+  getDiscoveryClaimChallenge,
+  getMineInfo,
   getPlayerProfile,
+  getPlayerRewards,
+  getRewardClaimChallenge,
+  rollDiscovery as rollDiscoveryRequest,
+  requestDiscoveryOpportunity,
   getWalletSession,
   getToken,
   recordTrade,
@@ -59,11 +76,28 @@ import {
   upgradeCrew,
   uploadTokenImage,
   verifyWallet,
+  type RewardClaimView,
   type DiggoConfig,
 } from "./api";
 import { track } from "./analytics";
+import { compact, countdown, money, shortAddress } from "./format";
+import { NEUTRAL_VERIFICATION_TEXT, runGated, VerificationRequiredError } from "./verification";
+import { ApiError } from "./api";
+import { CREW_COMPONENT_LABELS, CREW_COMPONENTS } from "./crewLabels";
+import { AdminScreen } from "./components/AdminScreen";
+import { CosmeticsScreen } from "./components/CosmeticsScreen";
+import { CrewScreen } from "./components/CrewScreen";
+import { DashboardPanel } from "./components/DashboardPanel";
+import { DiscoveriesPanel } from "./components/DiscoveriesPanel";
+import { EconomyPanels } from "./components/EconomyPanels";
+import { LeaderboardsScreen } from "./components/LeaderboardsScreen";
+import { MineInfoPanel } from "./components/MineInfoPanel";
+import { MiningReportModal } from "./components/MiningReportModal";
+import { NotificationsBell } from "./components/NotificationsBell";
+import { SwitchMineModal } from "./components/SwitchMineModal";
 import { TokenOrb } from "./components/TokenOrb";
 import { TurnstileBox } from "./components/TurnstileBox";
+import { useVerificationGate } from "./components/VerificationGate";
 import { solanaClient } from "./solana";
 import {
   address,
@@ -83,40 +117,19 @@ import {
 } from "./solanaProgram";
 import type { DecodedLaunchMarket, DecodedMine } from "../shared/program";
 
-const CREW_COMPONENT_LABELS: Record<CrewComponent, string> = {
-  miners: "Miners",
-  drills: "Drills",
-  carts: "Carts",
-  foreman: "Foreman",
-  storage: "Storage",
-};
-
 const TURNSTILE_SITE_KEY = "0x4AAAAAAEzwvf6nnwXvXdMc";
 
-function compact(value: number): string {
-  return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
-}
+type CrewComponentKey = (typeof CREW_COMPONENTS)[number];
 
-function money(value: number): string {
-  if (value <= 0) return "$0.00";
-  if (value < 0.000001) return `$${value.toExponential(2)}`;
-  if (value < 0.01) return `$${value.toFixed(8)}`;
-  return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
-}
-
-function shortAddress(value: string): string {
-  return `${value.slice(0, 4)}…${value.slice(-5)}`;
-}
-
-function countdown(target: number, now: number): string {
-  const delta = Math.max(0, target * 1000 - now);
-  const seconds = Math.floor(delta / 1_000);
-  const days = Math.floor(seconds / 86_400);
-  const hours = Math.floor((seconds % 86_400) / 3_600);
-  const minutes = Math.floor((seconds % 3_600) / 60);
-  const secs = seconds % 60;
-  if (days) return `${days}d ${hours}h ${minutes}m`;
-  return [hours, minutes, secs].map((part) => String(part).padStart(2, "0")).join(":");
+/**
+ * The one place a failure becomes user copy. A verification prompt or a second
+ * VERIFICATION_REQUIRED answer collapses to the single neutral sentence the spec allows; anything
+ * else is the Worker's own message.
+ */
+function messageOf(error: unknown): string {
+  if (error instanceof VerificationRequiredError) return NEUTRAL_VERIFICATION_TEXT;
+  if (error instanceof ApiError && error.verificationRequired) return NEUTRAL_VERIFICATION_TEXT;
+  return error instanceof Error ? error.message : "Something went wrong. Please try again.";
 }
 
 export interface ConnectedDiggoWallet {
@@ -444,261 +457,9 @@ function CreateModal({
   );
 }
 
-function CrewPanel({
-  player,
-  onClose,
-  onUpdate,
-}: {
-  player: PlayerProfile;
-  onClose(): void;
-  onUpdate(player: PlayerProfile): void;
-}) {
-  const [pending, setPending] = useState<CrewComponent | null>(null);
-  const [error, setError] = useState("");
-  const tier = crewTier(player.crewLevels);
-
-  async function upgrade(component: CrewComponent) {
-    setPending(component);
-    setError("");
-    try {
-      const result = await upgradeCrew(component);
-      onUpdate(result.player);
-      track("crew_upgraded", { component });
-    } catch (upgradeError) {
-      setError(upgradeError instanceof Error ? upgradeError.message : "Upgrade failed");
-    } finally {
-      setPending(null);
-    }
-  }
-
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="crew-modal" role="dialog" aria-modal="true" aria-labelledby="crew-title" onMouseDown={(event) => event.stopPropagation()}>
-        <button className="modal-close" onClick={onClose} aria-label="Close"><X size={20} /></button>
-        <div className="eyebrow"><HardHat size={14} /> {tier.name}</div>
-        <h2 id="crew-title">Manage your<br />Mining Crew.</h2>
-        <div className="crew-stats">
-          <div><span>MINING POWER</span><strong>{player.power.toLocaleString()}</strong></div>
-          <div><span>ORE</span><strong>{Math.floor(player.oreBalance).toLocaleString()} <small>/ {player.oreCapacity.toLocaleString()}</small></strong></div>
-          <div><span>MATURITY</span><strong>{(player.maturityBps / 100).toFixed(0)}%</strong></div>
-        </div>
-        <div className="crew-list">
-          {(Object.keys(CREW_COMPONENT_LABELS) as CrewComponent[]).map((component) => {
-            const level = player.crewLevels[component];
-            const cost = level < 100 ? upgradeOreCost(component, level) : null;
-            const affordable = cost !== null && player.oreBalance >= cost;
-            return (
-              <div className="crew-row" key={component}>
-                <div className="crew-row-label"><Hammer size={15} /> {CREW_COMPONENT_LABELS[component]}<span>LV. {level}</span></div>
-                <button
-                  disabled={!cost || !affordable || pending === component}
-                  onClick={() => void upgrade(component)}
-                >
-                  {pending === component ? "Upgrading…" : cost ? <>Upgrade <Gem size={13} /> {cost.toLocaleString()}</> : "Max level"}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-        {error && <p className="form-message">{error}</p>}
-        <p className="crew-note">Crew upgrades only ever cost ORE — mined by keeping your crew active. ORE cannot be bought, sold, or transferred.</p>
-      </section>
-    </div>
-  );
-}
-
-function MiningReportModal({
-  report,
-  activeSymbol,
-  onClose,
-  onManageCrew,
-}: {
-  report: MiningReport;
-  activeSymbol: string | null;
-  onClose(): void;
-  onManageCrew(): void;
-}) {
-  const hours = Math.floor(report.activeSeconds / 3_600);
-  const minutes = Math.floor((report.activeSeconds % 3_600) / 60);
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="report-modal" role="dialog" aria-modal="true" aria-labelledby="report-title" onMouseDown={(event) => event.stopPropagation()}>
-        <button className="modal-close" onClick={onClose} aria-label="Close"><X size={20} /></button>
-        <div className="eyebrow"><Radio size={14} /> Welcome back</div>
-        <h2 id="report-title">Your crew worked<br />{hours}h {minutes}m.</h2>
-        <div className="report-grid">
-          <div><span>ORE MINED</span><strong>+{report.oreGained.toLocaleString()}</strong></div>
-          <div><span>STREAK</span><strong><Flame size={16} /> {report.streak} {report.streak === 1 ? "day" : "days"}</strong></div>
-        </div>
-        {report.usedFreeze && <p className="form-message">A Streak Freeze protected your streak while you were away.</p>}
-        {report.discovery ? (
-          <div className="discovery-banner">
-            <span className={`rarity-tag rarity-${report.discovery.rarity}`}>{report.discovery.rarity.toUpperCase()} DISCOVERY</span>
-            <strong>+{report.discovery.tokenAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} {report.discovery.symbol}</strong>
-            <small>Your crew stumbled on this {activeSymbol ? `while mining $${activeSymbol}` : "coin"}.</small>
-          </div>
-        ) : (
-          <p className="report-nodiscovery">No discovery this time — keep your crew active and eligible for a shot at one.</p>
-        )}
-        <div className="report-actions">
-          <button className="outline-button" onClick={onManageCrew}>Manage crew <Hammer size={15} /></button>
-          <button className="primary-button" onClick={onClose}>Collect <Check size={16} /></button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
 function formatTokenAmount(raw: bigint, decimals: number): string {
   const whole = Number(raw) / 10 ** decimals;
   return whole.toLocaleString(undefined, { maximumFractionDigits: whole < 1 ? 6 : 2 });
-}
-
-function DashboardOverview({ tokens, player }: { tokens: TokenSummary[]; player: PlayerProfile | null }) {
-  const totalLiquidity = tokens.reduce((sum, token) => sum + token.priceSol * Math.max(0, token.reserveTotal - token.reserveRemaining), 0);
-  const totalPower = tokens.reduce((sum, token) => sum + token.networkPower, 0);
-  const activeMines = tokens.filter((token) => token.status === "MINING_ACTIVE").length;
-  return (
-    <section className="dashboard-overview page-shell" id="dashboard">
-      <div className="dashboard-title">
-        <div><span className="mono-label">DIGGO COMMAND CENTER</span><h2>Market overview</h2></div>
-        <span className="devnet-chip"><i /> SOLANA DEVNET</span>
-      </div>
-      <div className="dashboard-kpis">
-        <article><span>Coins launched</span><strong>{tokens.length}</strong><small>verified on-chain mints</small></article>
-        <article><span>Active mines</span><strong>{activeMines}</strong><small>graduated bonding curves</small></article>
-        <article><span>Curve liquidity</span><strong>{totalLiquidity.toFixed(3)} SOL</strong><small>estimated from live reserves</small></article>
-        <article><span>Network power</span><strong>{compact(totalPower)}</strong><small>{player ? `${compact(player.power)} belongs to your crew` : "connect to see your share"}</small></article>
-      </div>
-    </section>
-  );
-}
-
-function MiningDashboard({
-  token,
-  player,
-  now,
-  isMiningActive,
-  estimatedReward,
-  onManageCrew,
-  onClaim,
-  canClaim,
-}: {
-  token: TokenSummary;
-  player: PlayerProfile | null;
-  now: number;
-  isMiningActive: boolean;
-  estimatedReward: number;
-  onManageCrew(): void;
-  onClaim(): void;
-  canClaim: boolean;
-}) {
-  const orePercent = player ? Math.min(100, (player.oreBalance / Math.max(1, player.oreCapacity)) * 100) : 0;
-  const powerShare = player && token.networkPower > 0 ? (player.power / token.networkPower) * 100 : 0;
-  const tier = player ? crewTier(player.crewLevels) : null;
-  const projectedRewardPerBlock = player ? estimatedReward : token.rewardPerBlock;
-  const rewardProjection = Array.from({ length: 24 }, (_, index) => projectedRewardPerBlock * (index + 1));
-  const projectionMax = Math.max(1, rewardProjection.at(-1) ?? 1);
-  const projectionPoints = rewardProjection.map((value, index) => {
-    const x = 4 + (index / Math.max(1, rewardProjection.length - 1)) * 292;
-    const y = 94 - (value / projectionMax) * 78;
-    return `${x},${y}`;
-  }).join(" ");
-  const projectionArea = `4,94 ${projectionPoints} 296,94`;
-  return (
-    <section className="mining-dashboard page-shell">
-      <div className="mining-dashboard-heading">
-        <div><span className="eyebrow"><Pickaxe size={14} /> Mining dashboard</span><h2>YOUR MINING<br /><span>DESK.</span></h2></div>
-        <div className={`mining-status ${isMiningActive ? "active" : ""}`}><i /> {isMiningActive ? "Mining live" : player ? "Crew paused" : "Wallet not connected"}</div>
-      </div>
-
-      <div className="mining-kpis">
-        <article><span>ACTIVE MINE</span><strong>${token.symbol}</strong><small>{token.name}</small></article>
-        <article><span>YOUR POWER</span><strong>{player ? compact(player.power) : "—"}</strong><small>{player ? `${powerShare.toFixed(3)}% of network` : "connect a wallet to see it"}</small></article>
-        <article><span>NEXT BLOCK SHARE</span><strong>{player ? estimatedReward.toFixed(2) : "—"}</strong><small>${token.symbol} estimated</small></article>
-        <article><span>NEXT BLOCK</span><strong>{token.networkPower > 0 ? countdown(token.nextBlockAt, now) : "Waiting"}</strong><small>{compact(token.rewardPerBlock)} ${token.symbol} total reward</small></article>
-      </div>
-
-      {player ? (
-        <div className="mining-dashboard-grid">
-          <div className="ore-storage-panel">
-            <div><span>ORE STORAGE</span><strong>{Math.floor(player.oreBalance).toLocaleString()} <small>/ {player.oreCapacity.toLocaleString()}</small></strong></div>
-            <div className="ore-meter" aria-label={`${orePercent.toFixed(0)}% ORE storage full`}><i style={{ width: `${orePercent}%` }} /></div>
-            <small>{orePercent.toFixed(0)}% capacity · ORE upgrades your crew only</small>
-          </div>
-          <div className="crew-overview-panel">
-            <div className="crew-overview-head"><div><span>YOUR CREW</span><strong>{tier?.name}</strong></div><button className="outline-button" onClick={onManageCrew}>Manage crew <Hammer size={14} /></button></div>
-            <div className="crew-levels">
-              {(Object.keys(CREW_COMPONENT_LABELS) as CrewComponent[]).map((component) => <span key={component}><i>{CREW_COMPONENT_LABELS[component].slice(0, 1)}</i>{CREW_COMPONENT_LABELS[component]} <b>LV. {player.crewLevels[component]}</b></span>)}
-            </div>
-          </div>
-          <div className="mining-session-panel">
-            <span>SESSION</span>
-            <strong>{isMiningActive ? "Active" : "Inactive"}</strong>
-            <small>{isMiningActive ? `resets in ${countdown(Math.floor(player.activationExpiresAt ?? 0), now)}` : "activate your crew to earn block rewards"}</small>
-            <div className="mining-actions">
-              <button className="primary-button" onClick={onManageCrew}>Upgrade gear <Hammer size={15} /></button>
-              {canClaim && <button className="claim-rewards-button" onClick={onClaim}><Coins size={13} /> Claim on-chain</button>}
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="mining-connect-panel"><Pickaxe size={26} /><div><strong>Connect your wallet to unlock your mining dashboard.</strong><p>Your crew level, ORE storage, reward share and claimable balance will appear here.</p></div></div>
-      )}
-
-        <div className="mining-charts">
-          <article className="reward-projection-chart">
-            <div className="mining-chart-heading"><div><span>{player ? "YOUR REWARD PROJECTION" : "MINE REWARD SCHEDULE"}</span><strong>{rewardProjection.at(-1)?.toFixed(2)} ${token.symbol}</strong></div><small>NEXT 24 BLOCKS</small></div>
-            <svg viewBox="0 0 300 100" role="img" aria-label={`Estimated cumulative ${token.symbol} reward over the next 24 blocks`}>
-              <path className="projection-grid" d="M4 18H296M4 56H296M4 94H296" />
-              <polygon className="projection-area" points={projectionArea} />
-              <polyline className="projection-line" points={projectionPoints} />
-            </svg>
-            <p>{player ? "Estimate based on your current power share. It changes if network power changes." : "Total mine emissions at the current per-block reward."}</p>
-          </article>
-          <article className="power-share-chart">
-            <div className="mining-chart-heading"><div><span>{player ? "NETWORK POWER SHARE" : "NETWORK POWER"}</span><strong>{player ? `${powerShare.toFixed(3)}%` : compact(token.networkPower)}</strong></div><small>LIVE SNAPSHOT</small></div>
-            <div className="power-ring-wrap">
-              <svg viewBox="0 0 120 120" role="img" aria-label={player ? `${powerShare.toFixed(3)} percent of the mining network power` : "Network mining power"}>
-                <circle className="power-ring-track" cx="60" cy="60" r="47" />
-                <circle className="power-ring-value" cx="60" cy="60" r="47" pathLength="100" strokeDasharray={`${player ? Math.max(0.8, Math.min(100, powerShare)) : 100} 100`} />
-              </svg>
-              <div><strong>{compact(player?.power ?? token.networkPower)}</strong><span>{player ? "YOUR POWER" : "NETWORK POWER"}</span></div>
-            </div>
-            <p>{player ? `${compact(token.networkPower)} total network power on $${token.symbol}.` : "Connect a wallet to see your exact power share."}</p>
-          </article>
-        </div>
-    </section>
-  );
-}
-
-function LeaderboardPanel({ tokens }: { tokens: TokenSummary[] }) {
-  const [data, setData] = useState<Leaderboards>({ miners: [], streaks: [], mines: tokens });
-  const [tab, setTab] = useState<"miners" | "streaks" | "mines">("miners");
-  useEffect(() => {
-    getLeaderboards().then(setData).catch(() => setData((current) => ({ ...current, mines: tokens })));
-  }, [tokens]);
-  return (
-    <section className="leaderboards page-shell" id="leaderboards">
-      <div className="section-heading">
-        <div><div className="eyebrow"><Trophy size={14} /> Leaderboards</div><h2>TOP OF<br />THE SHAFT.</h2></div>
-        <div className="filter-tabs">
-          <button className={tab === "miners" ? "active" : ""} onClick={() => setTab("miners")}>Miners</button>
-          <button className={tab === "streaks" ? "active" : ""} onClick={() => setTab("streaks")}>Streaks</button>
-          <button className={tab === "mines" ? "active" : ""} onClick={() => setTab("mines")}>Mines</button>
-        </div>
-      </div>
-      <div className="leaderboard-table">
-        <div className="leaderboard-row leaderboard-head"><span>#</span><span>{tab === "mines" ? "Mine" : "Wallet"}</span><span>{tab === "miners" ? "Power" : tab === "streaks" ? "Streak" : "Network power"}</span><span>{tab === "mines" ? "Status" : "Active days"}</span></div>
-        {tab === "mines" ? data.mines.map((mine, index) => (
-          <div className="leaderboard-row" key={mine.mint}><b>{index + 1}</b><span className="leaderboard-name"><TokenOrb symbol={mine.symbol} imageUrl={mine.imageUrl} /> ${mine.symbol}</span><strong>{compact(mine.networkPower)}</strong><em>{mine.status.replace("_", " ")}</em></div>
-        )) : data[tab].map((entry) => (
-          <div className="leaderboard-row" key={`${tab}-${entry.wallet}`}><b>{entry.rank}</b><span>{shortAddress(entry.wallet)}</span><strong>{tab === "miners" ? compact(entry.power) : `${entry.streak} days`}</strong><em>{entry.activeDays} days</em></div>
-        ))}
-        {(tab === "mines" ? data.mines : data[tab]).length === 0 && <div className="leaderboard-empty">No verified activity yet. The first on-chain miner takes the top spot.</div>}
-      </div>
-    </section>
-  );
 }
 
 function DiggoSwapPanel({
@@ -956,6 +717,7 @@ export default function App() {
   const [player, setPlayer] = useState<PlayerProfile | null>(null);
   const [miningReport, setMiningReport] = useState<MiningReport | null>(null);
   const [crewOpen, setCrewOpen] = useState(false);
+  const [switchOpen, setSwitchOpen] = useState(false);
   const [activating, setActivating] = useState(false);
   const [activateError, setActivateError] = useState("");
   const [launchOpen, setLaunchOpen] = useState(false);
@@ -969,6 +731,51 @@ export default function App() {
     vanitySuffix: "diggo",
   });
   const connected = useDiggoWallet();
+  const [mineInfo, setMineInfo] = useState<MineInfo | null>(null);
+  const [mineInfoLoading, setMineInfoLoading] = useState(false);
+  const [mineInfoError, setMineInfoError] = useState("");
+  const [switching, setSwitching] = useState(false);
+  const [collecting, setCollecting] = useState(false);
+  const [reportCollected, setReportCollected] = useState(false);
+  const [reportError, setReportError] = useState("");
+  const [crewPending, setCrewPending] = useState<string | null>(null);
+  const [crewError, setCrewError] = useState("");
+  const [crewNotice, setCrewNotice] = useState("");
+  const [claims, setClaims] = useState<RewardClaimView[]>([]);
+  const [claimsLoading, setClaimsLoading] = useState(false);
+  const [claimingId, setClaimingId] = useState<string | null>(null);
+  const [claimError, setClaimError] = useState("");
+  const [discoveries, setDiscoveries] = useState<DiscoveryRecord[]>([]);
+  const [opportunity, setOpportunity] = useState<DiscoveryOpportunity | null>(null);
+  const [discoveriesLoading, setDiscoveriesLoading] = useState(false);
+  const [rolling, setRolling] = useState(false);
+  const [claimingDiscoveryId, setClaimingDiscoveryId] = useState<string | null>(null);
+  const [discoveryError, setDiscoveryError] = useState("");
+  const [discoveryNotice, setDiscoveryNotice] = useState("");
+  const verification = useVerificationGate(config.turnstileSiteKey || TURNSTILE_SITE_KEY);
+
+  /**
+   * Every gated call goes through here. The Worker answers 403 VERIFICATION_REQUIRED for an
+   * account it wants to slow down; runGated clears that friction once and retries, and the UI only
+   * ever shows the neutral sentence (spec 52, 62).
+   */
+  const gated = useCallback(
+    async <T,>(action: string, resource: string | undefined, run: () => Promise<T>): Promise<T> => {
+      if (!connected) throw new Error("Connect your wallet first");
+      return runGated(
+        {
+          wallet: connected.address,
+          action,
+          resource,
+          signMessage: (message) => connected.signMessage(message),
+          requestTurnstileToken: verification.requestTurnstileToken,
+        },
+        run,
+      );
+    },
+    [connected, verification.requestTurnstileToken],
+  );
+
   const page = useMemo(() => {
     const routes: Record<string, string> = {
       "/": "home",
@@ -978,6 +785,10 @@ export default function App() {
       "/leaderboards": "leaderboards",
       "/mines": "mines",
       "/create": "create",
+      "/crew": "crew",
+      "/discoveries": "discoveries",
+      "/cosmetics": "cosmetics",
+      "/admin": "admin",
     };
     return routes[window.location.pathname] ?? "home";
   }, []);
@@ -1020,6 +831,205 @@ export default function App() {
     : 0;
   const sortedTokens = useMemo(() => [...tokens].sort((a, b) => b.change24h - a.change24h), [tokens]);
   const isMiningActive = player?.activationState === "ACTIVE";
+  const signedIn = Boolean(session && connected && session === connected.address);
+
+  const loadMineInfo = useCallback(async (mint: string): Promise<void> => {
+    setMineInfoLoading(true);
+    try {
+      setMineInfo(await getMineInfo(mint));
+      setMineInfoError("");
+    } catch {
+      setMineInfoError("Mine information is unavailable right now.");
+    } finally {
+      setMineInfoLoading(false);
+    }
+  }, []);
+
+  const refreshClaims = useCallback(async (): Promise<void> => {
+    if (!connected || !signedIn) {
+      setClaims([]);
+      return;
+    }
+    setClaimsLoading(true);
+    try {
+      setClaims(await getPlayerRewards(connected.address));
+      setClaimError("");
+    } catch {
+      setClaimError("Could not load your reward ledger.");
+    } finally {
+      setClaimsLoading(false);
+    }
+  }, [connected, signedIn]);
+
+  const refreshDiscoveries = useCallback(async (): Promise<void> => {
+    if (!connected || !signedIn) {
+      setDiscoveries([]);
+      setOpportunity(null);
+      return;
+    }
+    setDiscoveriesLoading(true);
+    try {
+      const result = await getDiscoveries(connected.address);
+      setDiscoveries(result.discoveries);
+      setOpportunity(result.opportunity);
+      setDiscoveryError("");
+    } catch {
+      setDiscoveryError("Could not load your discoveries.");
+    } finally {
+      setDiscoveriesLoading(false);
+    }
+  }, [connected, signedIn]);
+
+  useEffect(() => {
+    // The dashboard's next-block countdown belongs to the mine the crew is actually working, which
+    // is not necessarily the one selected in the explore board.
+    const mint = player?.activeMint ?? featured?.mint;
+    if (mint) void loadMineInfo(mint);
+  }, [player?.activeMint, featured, loadMineInfo, session]);
+
+  useEffect(() => {
+    void refreshClaims();
+  }, [refreshClaims]);
+
+  useEffect(() => {
+    void refreshDiscoveries();
+  }, [refreshDiscoveries]);
+
+  async function handleCollectReport(): Promise<void> {
+    if (!signedIn) return;
+    setCollecting(true);
+    setReportError("");
+    try {
+      const result = await collectMiningReport();
+      setPlayer(result.player);
+      setMiningReport(result.report);
+      setReportCollected(true);
+      track("mining_report_collected", { idempotent: result.idempotent, network: "solana-devnet" });
+      await refreshClaims();
+    } catch (error) {
+      setReportError(messageOf(error));
+    } finally {
+      setCollecting(false);
+    }
+  }
+
+  async function handleUpgradeCrew(component: CrewComponentKey): Promise<void> {
+    if (!connected) return;
+    setCrewPending(component);
+    setCrewError("");
+    setCrewNotice("");
+    try {
+      await ensureSession();
+      const result = await gated("crew_upgrade", component, () => upgradeCrew(component));
+      setPlayer(result.player);
+      const mint = result.player.activeMint ?? featured?.mint;
+      if (mint) void loadMineInfo(mint);
+      setCrewNotice(
+        CREW_COMPONENT_LABELS[component] +
+          " upgraded for " +
+          result.spent.toLocaleString() +
+          " ORE. Mining Power is now " +
+          result.power.toLocaleString() +
+          ".",
+      );
+      track("crew_upgraded", { component });
+    } catch (error) {
+      setCrewError(messageOf(error));
+    } finally {
+      setCrewPending(null);
+    }
+  }
+
+  async function handleClaimReward(claim: RewardClaimView): Promise<void> {
+    if (!connected) return;
+    setClaimingId(claim.id);
+    setClaimError("");
+    try {
+      await ensureSession();
+      const challenge = await getRewardClaimChallenge(claim.id);
+      const signature = bs58.encode(await connected.signMessage(new TextEncoder().encode(challenge.message)));
+      await gated("claim_reward", claim.id, () => claimRewardRequest(claim.id, challenge.nonce, signature));
+      track("reward_claimed", { mint: claim.mint, network: "solana-devnet" });
+      await refreshClaims();
+    } catch (error) {
+      setClaimError(messageOf(error));
+    } finally {
+      setClaimingId(null);
+    }
+  }
+
+  async function handleRequestOpportunity(): Promise<void> {
+    if (!connected) return;
+    setRolling(true);
+    setDiscoveryError("");
+    setDiscoveryNotice("");
+    try {
+      const result = await gated("discovery_roll", undefined, () => requestDiscoveryOpportunity());
+      setOpportunity(result.opportunity);
+      setDiscoveryNotice(
+        result.opportunity
+          ? "Your crew has an opportunity for this window."
+          : (result.publicMessage ?? "No discovery opportunity is available for this account yet."),
+      );
+    } catch (error) {
+      setDiscoveryError(messageOf(error));
+    } finally {
+      setRolling(false);
+    }
+  }
+
+  async function handleRollDiscovery(): Promise<void> {
+    if (!connected) return;
+    setRolling(true);
+    setDiscoveryError("");
+    setDiscoveryNotice("");
+    try {
+      const result = await gated("discovery_roll", undefined, () =>
+        rollDiscoveryRequest(player?.activeMint ?? undefined),
+      );
+      setDiscoveryNotice(
+        result.discovery
+          ? "Your crew turned up " +
+              result.discovery.visualEvent +
+              " (" +
+              result.discovery.rarity +
+              "). Claim it before it expires."
+          : "Nothing this window. This opportunity is spent until the next one opens.",
+      );
+      await refreshDiscoveries();
+      await refreshClaims();
+    } catch (error) {
+      setDiscoveryError(messageOf(error));
+    } finally {
+      setRolling(false);
+    }
+  }
+
+  async function handleClaimDiscovery(discovery: DiscoveryRecord): Promise<void> {
+    if (!connected) return;
+    setClaimingDiscoveryId(discovery.id);
+    setDiscoveryError("");
+    setDiscoveryNotice("");
+    try {
+      await ensureSession();
+      const challenge = await getDiscoveryClaimChallenge(discovery.id);
+      const signature = bs58.encode(await connected.signMessage(new TextEncoder().encode(challenge.message)));
+      const result = await gated("claim_discovery", discovery.id, () =>
+        claimDiscoveryRequest(discovery.id, challenge.nonce, signature),
+      );
+      setDiscoveryNotice(
+        result.status === "CLAIMED"
+          ? "This discovery was already paid out."
+          : "Claim accepted. The payout is queued and settles from the mine's reserve.",
+      );
+      await refreshDiscoveries();
+      await refreshClaims();
+    } catch (error) {
+      setDiscoveryError(messageOf(error));
+    } finally {
+      setClaimingDiscoveryId(null);
+    }
+  }
 
   function copyMint() {
     if (!featured) return;
@@ -1039,42 +1049,56 @@ export default function App() {
   }
 
   async function handleActivate() {
-    if (!connected || !featured) return;
+    if (!connected) return;
     setActivating(true);
     setActivateError("");
     try {
       await ensureSession();
       const challenge = await getActivationChallenge(connected.address);
-      const signature = await connected.signMessage(new TextEncoder().encode(challenge.message));
-      const result = await activateMineRequest(connected.address, challenge.nonce, bs58.encode(signature), featured.mint);
+      const signature = bs58.encode(await connected.signMessage(new TextEncoder().encode(challenge.message)));
+      const mint = featured?.mint;
+      const result = await gated("activate", mint, () =>
+        activateMineRequest(connected.address, challenge.nonce, signature, mint),
+      );
       setPlayer(result.player);
+      if (result.mine) setMineInfo(result.mine);
+      setReportCollected(false);
+      setReportError("");
       setMiningReport(result.report);
+      await refreshClaims();
       track("mine_activated", { streak: result.report.streak, network: "solana-devnet" });
     } catch (error) {
-      setActivateError(error instanceof Error ? error.message : "Activation failed");
+      setActivateError(messageOf(error));
     } finally {
       setActivating(false);
     }
   }
 
   async function handleSwitchMine(mint: string) {
-    if (!session) {
+    if (!connected) {
       setActivateError("Sign in with your wallet to switch mines.");
       return;
     }
+    setSwitching(true);
+    setActivateError("");
     try {
-      const updated = await switchMineRequest(mint);
-      setPlayer(updated);
+      await ensureSession();
+      const result = await gated("switch_mine", mint, () => switchMineRequest(mint));
+      setPlayer(result.player);
+      if (result.mine) setMineInfo(result.mine);
+      setSwitchOpen(false);
       track("mine_switched", { network: "solana-devnet" });
       // Best-effort on-chain sync: assigns the player's current on-chain Mining Power to this
       // mine so real block-reward accounting matches the game's "active mine" state. A failure
       // here (e.g. the player's on-chain Player account doesn't exist yet) doesn't block the
       // off-chain switch above, which is what the ORE/streak/discovery loop actually runs on.
-      if (config.programId && connected) {
+      if (config.programId) {
         assignPowerOnChain(address(config.programId), connected.wallet, address(mint)).catch(() => {});
       }
     } catch (error) {
-      setActivateError(error instanceof Error ? error.message : "Switch failed");
+      setActivateError(messageOf(error));
+    } finally {
+      setSwitching(false);
     }
   }
 
@@ -1101,6 +1125,22 @@ export default function App() {
     }
   }
 
+  const activeMineToken = player?.activeMint
+    ? (tokens.find((token) => token.mint === player.activeMint) ?? featured ?? null)
+    : (featured ?? null);
+
+  /**
+   * Navigation into a mine page or the trade panel for one mint. Both are plain URL loads, which
+   * is what the existing router (pathname + ?mint= selection at bootstrap) already understands.
+   */
+  function openTokenPage(mint: string): void {
+    window.location.assign("/mines?mint=" + encodeURIComponent(mint));
+  }
+
+  function openTradePage(mint: string): void {
+    window.location.assign("/trade?mint=" + encodeURIComponent(mint));
+  }
+
   if (loadingTokens) return <div className="loading-screen"><Pickaxe /> DIGGING UP THE DATA…</div>;
 
   return (
@@ -1110,13 +1150,17 @@ export default function App() {
         <nav aria-label="Main navigation">
           <a className={page === "home" ? "active" : ""} href="/"><Home size={13} /> Home</a>
           <a className={page === "mine" ? "active" : ""} href="/mine"><Pickaxe size={13} /> Mine</a>
+          <a className={page === "crew" ? "active" : ""} href="/crew"><Hammer size={13} /> Crew</a>
+          <a className={page === "discoveries" ? "active" : ""} href="/discoveries"><Gem size={13} /> Discoveries</a>
           <a className={page === "explore" ? "active" : ""} href="/explore"><Search size={13} /> Explore</a>
-          <a className={page === "trade" ? "active" : ""} href="/trade"><TrendingUp size={13} /> Trade $DIGGO</a>
           <a className={page === "leaderboards" ? "active" : ""} href="/leaderboards"><Trophy size={13} /> Leaderboards</a>
           <a className={page === "mines" ? "active" : ""} href="/mines"><LayoutDashboard size={13} /> Mines</a>
+          <a className={page === "cosmetics" ? "active" : ""} href="/cosmetics"><Sparkles size={13} /> Cosmetics</a>
+          <a className={page === "trade" ? "active" : ""} href="/trade"><TrendingUp size={13} /> Trade</a>
         </nav>
         <div className="header-actions">
           <a className="launch-button" href="/create"><Plus size={16} /> Create a new coin</a>
+          <NotificationsBell signedIn={signedIn} />
           <WalletControl session={session} onAuthenticated={setSession} />
         </div>
       </header>
@@ -1227,22 +1271,78 @@ export default function App() {
         )}
       </section>
 
-      {page === "mine" && featured && (
-        <MiningDashboard
-          token={featured}
+      {page === "mine" && (
+        <DashboardPanel
           player={player}
+          mine={activeMineToken}
+          mineInfo={mineInfo}
           now={now}
-          isMiningActive={isMiningActive}
-          estimatedReward={estimatedReward}
+          connected={Boolean(connected)}
+          activating={activating}
+          collecting={collecting}
+          error={activateError}
+          onActivate={() => void handleActivate()}
           onManageCrew={() => setCrewOpen(true)}
-          onClaim={() => void handleClaimRewards()}
-          canClaim={Boolean(connected)}
+          onSwitchMine={() => setSwitchOpen(true)}
+          onCollect={() => void handleCollectReport()}
         />
       )}
 
-      <DashboardOverview tokens={tokens} player={player} />
+      {page === "crew" && player && (
+        <CrewScreen
+          player={player}
+          pending={crewPending}
+          error={crewError}
+          notice={crewNotice}
+          onUpgrade={(component) => void handleUpgradeCrew(component)}
+        />
+      )}
+      {page === "crew" && !player && (
+        <section className="crew-screen page-shell">
+          <p className="board-empty">
+            {connected ? "Loading your crew…" : "Connect your wallet to manage your Mining Crew."}
+          </p>
+        </section>
+      )}
 
-      {tokens.length > 0 && (
+      {(page === "crew" || page === "mine") && (
+        <EconomyPanels
+          player={player}
+          tokens={tokens}
+          claims={claims}
+          loading={claimsLoading}
+          signedIn={signedIn}
+          claimingId={claimingId}
+          claimError={claimError}
+          onClaim={(claim) => void handleClaimReward(claim)}
+          onOpenToken={openTokenPage}
+        />
+      )}
+
+      {page === "discoveries" && (
+        <DiscoveriesPanel
+          signedIn={signedIn}
+          discoveries={discoveries}
+          opportunity={opportunity}
+          tokens={tokens}
+          loading={discoveriesLoading}
+          rolling={rolling}
+          claimingId={claimingDiscoveryId}
+          error={discoveryError}
+          notice={discoveryNotice}
+          onRequestOpportunity={() => void handleRequestOpportunity()}
+          onRoll={() => void handleRollDiscovery()}
+          onClaim={(discovery) => void handleClaimDiscovery(discovery)}
+          onOpenToken={openTokenPage}
+          onTrade={openTradePage}
+          onSwitchCrew={(mint) => void handleSwitchMine(mint)}
+        />
+      )}
+
+      {page === "cosmetics" && <CosmeticsScreen signedIn={signedIn} />}
+      {page === "admin" && <AdminScreen signedIn={signedIn} />}
+
+      {(page === "home" || page === "explore" || page === "mines" || page === "mine") && tokens.length > 0 && (
         <div className="ticker-wrap">
           <div className="ticker">
             {[...tokens, ...tokens].map((token, index) => (
@@ -1252,6 +1352,7 @@ export default function App() {
         </div>
       )}
 
+      {(page === "home" || page === "explore") && (
       <section className="discover page-shell" id="explore">
         <div className="section-heading">
           <div><div className="eyebrow"><TrendingUp size={14} /> Discovery board</div><h2>FIND YOUR<br />NEXT MINE.</h2></div>
@@ -1273,10 +1374,26 @@ export default function App() {
           </div>
         )}
       </section>
+      )}
 
-      <LeaderboardPanel tokens={tokens} />
+      {(page === "home" || page === "leaderboards") && (
+        <LeaderboardsScreen tokens={tokens} onSelectMine={openTokenPage} />
+      )}
 
       {featured && (
+        <MineInfoPanel
+          mine={mineInfo}
+          mineName={featured.name}
+          now={now}
+          loading={mineInfoLoading}
+          error={mineInfoError}
+          canSwitch={Boolean(signedIn && isMiningActive && player?.activeMint !== featured.mint)}
+          switching={switching}
+          onSwitchHere={() => void handleSwitchMine(featured.mint)}
+        />
+      )}
+
+      {(page === "home" || page === "mines") && featured && (
       <section className="selected-mine page-shell" id="mines">
         <div className="selected-heading">
           <div><span className="mono-label">SELECTED MINE // ${featured.symbol}</span><h2>{featured.name}</h2></div>
@@ -1301,7 +1418,7 @@ export default function App() {
       </section>
       )}
 
-      {featured && config.programId && (
+      {(page === "home" || page === "mines" || page === "trade") && featured && config.programId && (
         <DiggoSwapPanel
           token={featured}
           programAddress={config.programId}
@@ -1341,14 +1458,38 @@ export default function App() {
       {miningReport && (
         <MiningReportModal
           report={miningReport}
-          activeSymbol={featured.symbol}
+          mineSymbol={activeMineToken?.symbol ?? null}
+          collecting={collecting}
+          collected={reportCollected}
+          error={reportError}
+          onCollect={() => void handleCollectReport()}
           onClose={() => setMiningReport(null)}
           onManageCrew={() => { setMiningReport(null); setCrewOpen(true); }}
+          onSwitchMine={() => { setMiningReport(null); setSwitchOpen(true); }}
         />
       )}
-      {crewOpen && player && session && (
-        <CrewPanel player={player} onClose={() => setCrewOpen(false)} onUpdate={setPlayer} />
+      {switchOpen && (
+        <SwitchMineModal
+          tokens={tokens}
+          activeMint={player?.activeMint ?? null}
+          switching={switching}
+          error={activateError}
+          onSwitch={(mint) => void handleSwitchMine(mint)}
+          onClose={() => setSwitchOpen(false)}
+        />
       )}
+      {crewOpen && player && (
+        <CrewScreen
+          variant="modal"
+          player={player}
+          pending={crewPending}
+          error={crewError}
+          notice={crewNotice}
+          onUpgrade={(component) => void handleUpgradeCrew(component)}
+          onClose={() => setCrewOpen(false)}
+        />
+      )}
+      {verification.verificationModal}
     </main>
   );
 }
