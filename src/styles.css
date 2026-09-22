@@ -189,20 +189,8 @@ a { color: inherit; text-decoration: none; }
 .selected-heading-actions { display: flex; align-items: center; gap: 10px; }
 .switch-mine-button { margin: 0; padding: 10px 12px; font-size: 10px; }
 
-/* Each primary destination has its own URL and its own visible workspace. */
-.page-home .hero { grid-template-columns: 1fr; min-height: 520px; }
-.page-home .hero-copy { max-width: 780px; }
-.page-home .mine-console { display: none; }
-.page-home .discover, .page-home .leaderboards, .page-home .selected-mine, .page-home .swap-terminal { display: none; }
 
-.page-mine .hero-copy, .page-mine .dashboard-overview, .page-mine .ticker-wrap, .page-mine .discover, .page-mine .leaderboards, .page-mine .selected-mine, .page-mine .swap-terminal, .page-mine .how-section, .page-mine .protocol, .page-mine .final-cta { display: none; }
-.page-mine .hero { grid-template-columns: minmax(0, 760px); justify-content: center; min-height: 620px; padding-block: 70px; }
 
-.page-explore .hero, .page-explore .dashboard-overview, .page-explore .ticker-wrap, .page-explore .leaderboards, .page-explore .selected-mine, .page-explore .swap-terminal, .page-explore .how-section, .page-explore .protocol, .page-explore .final-cta { display: none; }
-.page-leaderboards .hero, .page-leaderboards .dashboard-overview, .page-leaderboards .ticker-wrap, .page-leaderboards .discover, .page-leaderboards .selected-mine, .page-leaderboards .swap-terminal, .page-leaderboards .how-section, .page-leaderboards .protocol, .page-leaderboards .final-cta { display: none; }
-.page-mines .hero, .page-mines .dashboard-overview, .page-mines .ticker-wrap, .page-mines .discover, .page-mines .leaderboards, .page-mines .swap-terminal, .page-mines .how-section, .page-mines .protocol, .page-mines .final-cta { display: none; }
-.page-trade .hero, .page-trade .dashboard-overview, .page-trade .ticker-wrap, .page-trade .discover, .page-trade .leaderboards, .page-trade .selected-mine, .page-trade .how-section, .page-trade .protocol, .page-trade .final-cta { display: none; }
-.page-create .hero, .page-create .dashboard-overview, .page-create .ticker-wrap, .page-create .discover, .page-create .leaderboards, .page-create .selected-mine, .page-create .swap-terminal, .page-create .how-section, .page-create .protocol, .page-create .final-cta { display: none; }
 
 .create-coin-page { min-height: calc(100vh - 226px); display: grid; grid-template-columns: 1.1fr .9fr; gap: 72px; align-items: center; padding-block: 80px; }
 .create-coin-page h1 { margin: 18px 0 22px; font: 950 clamp(54px, 6.5vw, 94px)/.84 Arial Black, Impact, sans-serif; letter-spacing: -.075em; }
@@ -618,14 +606,7 @@ a { color: inherit; text-decoration: none; }
 .switch-list .primary-button, .switch-list .outline-button { margin: 0; min-height: 40px; padding: 0 13px; font-size: 10px; white-space: nowrap; }
 .switch-empty { color: var(--muted); font: 700 11px monospace; justify-content: center; }
 
-/* Route rules for the new workspaces */
-.page-home .mine-console { display: block; }
 .page-home .hero { grid-template-columns: 1.04fr .96fr; min-height: 620px; }
-.page-mine .mine-console { display: none; }
-.page-crew .hero, .page-crew .ticker-wrap, .page-crew .discover, .page-crew .leaderboards, .page-crew .selected-mine, .page-crew .swap-terminal, .page-crew .how-section, .page-crew .protocol, .page-crew .final-cta, .page-crew .dashboard-panel { display: none; }
-.page-discoveries .hero, .page-discoveries .ticker-wrap, .page-discoveries .discover, .page-discoveries .leaderboards, .page-discoveries .selected-mine, .page-discoveries .swap-terminal, .page-discoveries .how-section, .page-discoveries .protocol, .page-discoveries .final-cta, .page-discoveries .dashboard-panel, .page-discoveries .economy-split, .page-discoveries .mine-info { display: none; }
-.page-cosmetics .hero, .page-cosmetics .ticker-wrap, .page-cosmetics .discover, .page-cosmetics .leaderboards, .page-cosmetics .selected-mine, .page-cosmetics .swap-terminal, .page-cosmetics .how-section, .page-cosmetics .protocol, .page-cosmetics .final-cta, .page-cosmetics .dashboard-panel, .page-cosmetics .economy-split, .page-cosmetics .mine-info { display: none; }
-.page-admin .hero, .page-admin .ticker-wrap, .page-admin .discover, .page-admin .leaderboards, .page-admin .selected-mine, .page-admin .swap-terminal, .page-admin .how-section, .page-admin .protocol, .page-admin .final-cta, .page-admin .dashboard-panel, .page-admin .economy-split, .page-admin .mine-info { display: none; }
 
 .token-balances { display: grid; gap: 9px; margin-top: 4px; }
 .token-balances ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 7px; }
