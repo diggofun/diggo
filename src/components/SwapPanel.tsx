@@ -5,12 +5,13 @@
  */
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
-import { Check, Radio, TrendingUp, Zap } from "lucide-react";
+import { Check, Radio, TrendingUp, Wallet, Zap } from "lucide-react";
 import type { MarketTrade, TokenSummary } from "../../shared/types";
 import type { DecodedLaunchMarket, DecodedMine } from "../../shared/program";
 import { recordTrade } from "../api";
 import { track } from "../analytics";
 import { compact } from "../format";
+import { requestWalletMenu } from "../wallet";
 import {
   address,
   bondingCurveSpotPriceLamports,
@@ -262,11 +263,17 @@ export function SwapPanel({
               <span>{tokenBalance !== null ? formatTokenAmount(tokenBalance, decimals) : "…"} ${token.symbol}</span>
             </div>
           )}
-          {error && <p className="form-message">{error}</p>}
+          {error && <p className="form-message" role="alert">{error}</p>}
           {lastSignature && <a className="tx-success" href={`https://explorer.solana.com/tx/${lastSignature}?cluster=devnet`} target="_blank" rel="noreferrer"><Check size={13} /> Confirmed on devnet · View transaction</a>}
-          <button className="primary-button swap-submit" disabled={busy || !signer}>
-            {busy ? "Confirming…" : signer ? (side === "buy" ? "Buy on-chain" : "Sell on-chain") : "Connect wallet"} <Zap size={16} />
-          </button>
+          {signer ? (
+            <button className="primary-button swap-submit" disabled={busy}>
+              {busy ? "Confirming…" : side === "buy" ? "Buy on-chain" : "Sell on-chain"} <Zap size={16} />
+            </button>
+          ) : (
+            <button type="button" className="primary-button swap-submit" onClick={requestWalletMenu}>
+              Connect wallet <Wallet size={16} />
+            </button>
+          )}
           <p className="swap-note">
             Real SOL moves through the mine's own bonding curve — this is the same liquidity a
             graduation threshold is measured against. Nothing here is simulated.
