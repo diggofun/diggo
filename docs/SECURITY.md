@@ -31,8 +31,8 @@ The web UI displays these claims, but they must be enforced by audited Solana pr
 3. creator and platform cannot withdraw either reserve or protocol-controlled LP;
 4. changing mines settles the old cumulative reward index first;
 5. active power cannot be assigned twice;
-6. real tokens or SOL can never mint or otherwise create Mining Power — power only ever enters through the keeper-gated `sync_crew_power` instruction, itself bounded by `MAX_KEEPER_POWER`;
-7. a compromised keeper key can only move Crew Power and Discovery Reserve payouts, never the launch market, the treasury, or a player's claimable mining rewards;
+6. real tokens or SOL can never mint or otherwise create Mining Power — power only ever enters through the keeper-gated `sync_crew_power` instruction, itself bounded by the guardian-configured `ProtocolConfig.max_crew_power` (hard-capped on-chain by `MAX_CREW_POWER_HARD_CAP`) and by the per-call `max_power_increase_bps` bound;
+7. a compromised keeper key can only move Crew Power and Discovery Reserve payouts, never the launch market, the treasury, or a player's claimable mining rewards — the Mining Reserve leaves only through the user-signed `claim_rewards` instruction, which no keeper key can sign for;
 8. Discovery Reserve payouts (`claim_discovery`) can only reduce `remaining_discovery_reserve`, never exceed it, and only the keeper can trigger one;
 9. unsafe or thin price sources cannot value a Discovery (enforced today by a minimum market-cap filter on the discovery target — see `docs/ARCHITECTURE.md` §6);
 10. fee routes match immutable or tightly governed configuration.
