@@ -9,6 +9,7 @@ import { Pickaxe, Repeat2, X } from "lucide-react";
 import type { TokenSummary } from "../../shared/types";
 import { compact } from "../format";
 import { TokenOrb } from "./TokenOrb";
+import { useDialog } from "./useDialog";
 
 export interface SwitchMineModalProps {
   tokens: TokenSummary[];
@@ -39,10 +40,12 @@ export function SwitchMineModal({
   onClose,
 }: SwitchMineModalProps) {
   const available = tokens.filter((token) => token.status !== "FULLY_MINED");
+  const dialogRef = useDialog<HTMLElement>(onClose);
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section
+        ref={dialogRef}
         className="switch-modal"
         role="dialog"
         aria-modal="true"

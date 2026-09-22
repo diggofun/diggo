@@ -11,6 +11,8 @@
 import { Compass, ExternalLink, Gem, Pickaxe, Repeat2, Sparkles, TrendingUp } from "lucide-react";
 import type { DiscoveryOpportunity, DiscoveryRecord, TokenSummary } from "../../shared/types";
 import { tokenAmount } from "../format";
+import { requestWalletMenu } from "../wallet";
+import { EmptyState } from "./StatusViews";
 
 export interface DiscoveriesPanelProps {
   signedIn: boolean;
@@ -54,11 +56,11 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
           <div className="eyebrow">
             <Gem size={14} /> Discoveries
           </div>
-          <h2>
+          <h1>
             WHAT THE CREW
             <br />
             TURNED UP.
-          </h2>
+          </h1>
         </div>
         <div className="discovery-roll">
           <button
@@ -73,16 +75,31 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
         </div>
       </div>
 
-      {notice && <p className="form-message discovery-notice">{notice}</p>}
-      {error && <p className="form-message">{error}</p>}
+      {notice && <p className="form-message discovery-notice" role="status">{notice}</p>}
+      {error && <p className="form-message" role="alert">{error}</p>}
 
-      {!signedIn && <p className="board-empty">Sign in to see your discovery history.</p>}
-      {signedIn && loading && <p className="board-empty">Loading your discoveries…</p>}
+      {!signedIn && (
+        <EmptyState
+          icon={<Gem size={26} />}
+          title="Hidden finds are waiting underground."
+          action={<button className="btn btn-primary" onClick={requestWalletMenu}>Connect wallet</button>}
+        >
+          An active crew gets one discovery opportunity per window. Sign in to see what yours has
+          turned up and claim it before it expires.
+        </EmptyState>
+      )}
+      {signedIn && loading && (
+        <div className="discovery-grid" aria-busy="true">
+          <span className="skeleton skeleton-card" />
+          <span className="skeleton skeleton-card" />
+          <span className="skeleton skeleton-card" />
+        </div>
+      )}
       {signedIn && !loading && discoveries.length === 0 && (
-        <p className="board-empty">
-          No discoveries yet. An active, eligible crew has a chance each window, and the mine's own
+        <EmptyState icon={<Compass size={26} />} title="No discoveries yet">
+          An active, eligible crew has a chance each window, and the mine's own
           liquidity, volume and reserve decide how good that chance can be.
-        </p>
+        </EmptyState>
       )}
 
       {claimable.length > 0 && (

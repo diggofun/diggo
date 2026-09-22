@@ -13,6 +13,8 @@ export interface MineSceneProps {
   active?: boolean;
   /** Compact renders the same layers in the small dashboard card. */
   compact?: boolean;
+  /** Optional caption (the crew tier name) pinned to the top-left of the scene. */
+  label?: string;
 }
 
 interface Miner {
@@ -20,7 +22,7 @@ interface Miner {
   y: number;
 }
 
-export function MineScene({ tier, active = false, compact = false }: MineSceneProps) {
+export function MineScene({ tier, active = false, compact = false, label }: MineSceneProps) {
   const level = Math.max(1, Math.min(6, Math.round(tier) || 1));
   const galleries = level;
   const miners: Miner[] = Array.from({ length: Math.min(3 + level, 9) }, (_, index) => ({
@@ -32,10 +34,14 @@ export function MineScene({ tier, active = false, compact = false }: MineScenePr
   const buildings = level >= 3 ? Math.min(level - 2, 4) : 0;
   const deepShafts = level >= 4 ? level - 3 : 0;
   const elevatorHeight = 20 + level * 6;
+  // Ore veins in the rock: fixed positions, more of them visible as the mine goes deeper.
+  const veins = [
+    [64, 88], [214, 76], [100, 128], [246, 140], [40, 170], [180, 182], [284, 112], [118, 190],
+  ].slice(0, 3 + level);
 
   return (
     <div
-      className={`mine-diorama${compact ? " mine-diorama-compact" : ""}${active ? " is-working" : ""}`}
+      className={`mine-diorama${compact ? " mine-diorama-compact" : ""}${active ? " is-working" : " is-idle"}`}
       data-tier={level}
       aria-hidden="true"
     >
@@ -52,8 +58,14 @@ export function MineScene({ tier, active = false, compact = false }: MineScenePr
         </defs>
 
         <rect className="diorama-sky" x="0" y="0" width="320" height="42" fill="url(#diggo-sky)" />
+        <circle className="diorama-sun" cx={active ? 236 : 62} cy={14} r={7} />
+        <path className="diorama-hills" d="M0 40 L30 30 L58 38 L92 26 L128 38 L170 29 L210 38 L250 31 L280 39 L320 33 L320 42 L0 42 Z" />
         <rect className="diorama-earth" x="0" y="42" width="320" height="158" fill="url(#diggo-earth)" />
         <rect className="diorama-surface" x="0" y="40" width="320" height="4" />
+
+        {veins.map(([x, y], index) => (
+          <path className="diorama-vein" key={`vein-${index}`} d={`M${x} ${y - 4} l4 4 l-4 4 l-4 -4 z`} style={{ animationDelay: `${index * 0.4}s` }} />
+        ))}
 
         {/* Surface buildings appear once the operation is big enough to need them. */}
         {Array.from({ length: buildings }, (_, index) => (
@@ -92,6 +104,8 @@ export function MineScene({ tier, active = false, compact = false }: MineScenePr
               <rect x={158} y={y} width={112} height={13} />
               <rect className="diorama-gallery-rail" x={20} y={y + 11} width={112} height={2} />
               <rect className="diorama-gallery-rail" x={158} y={y + 11} width={112} height={2} />
+              <circle className="diorama-lamp" cx={30} cy={y + 3} r={1.6} style={{ animationDelay: `${index * 0.3}s` }} />
+              <circle className="diorama-lamp" cx={262} cy={y + 3} r={1.6} style={{ animationDelay: `${index * 0.3 + 0.15}s` }} />
             </g>
           );
         })}
@@ -122,6 +136,8 @@ export function MineScene({ tier, active = false, compact = false }: MineScenePr
           <g className="diorama-drill" key={`drill-${index}`}>
             <rect x={196 + index * 20} y={58 + ((index + 1) % galleries) * 22 + 2} width={13} height={5} />
             <path d={`M${209 + index * 20} ${58 + ((index + 1) % galleries) * 22 + 2} l7 2.5 l-7 2.5 z`} />
+            <circle className="diorama-dust" cx={218 + index * 20} cy={58 + ((index + 1) % galleries) * 22 + 4} r={1.4} />
+            <circle className="diorama-dust diorama-dust-late" cx={219 + index * 20} cy={58 + ((index + 1) % galleries) * 22 + 3} r={1} />
           </g>
         ))}
 
@@ -134,7 +150,8 @@ export function MineScene({ tier, active = false, compact = false }: MineScenePr
           </g>
         ))}
       </svg>
-      {active && <span className="diorama-shift">SHIFT ACTIVE</span>}
+      {label && <span className="diorama-label">T{level} · {label}</span>}
+      {active ? <span className="diorama-shift">SHIFT ACTIVE</span> : <span className="diorama-shift diorama-shift-idle">PAUSED</span>}
     </div>
   );
 }

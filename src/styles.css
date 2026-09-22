@@ -806,3 +806,187 @@ body.has-modal { overflow: hidden; }
   .tab-bar a[aria-current="page"] { color: var(--ink); background: var(--acid); }
   .tab-bar a:active { transform: scale(.96); }
 }
+
+
+/* ================================================================================================
+   Game moments (spec 71-75, 79): dashboard status band, activation stamp, the living mine,
+   crew level-ups, the collect burst and the discovery reveal. Every animation is decorative and
+   switched off by prefers-reduced-motion at the end of this block.
+   ================================================================================================ */
+
+/* Page-level headings keep the display face whether they are h1 or h2 */
+.dashboard-head h1 { margin: 13px 0 0; font: 950 clamp(40px, 5vw, 62px)/.84 var(--font-display); letter-spacing: -.07em; }
+.dashboard-head h1 span { color: var(--orange); }
+.section-heading h1 { margin: 14px 0 0; font: 950 clamp(45px, 5vw, 67px)/.84 var(--font-display); letter-spacing: -.075em; }
+.selected-heading .selected-title { margin: 7px 0 0; font: 900 clamp(28px, 4vw, 40px)/1 var(--font-display); text-transform: uppercase; letter-spacing: -.03em; }
+.selected-heading-actions { flex-wrap: wrap; }
+
+/* Status band: state, countdown, one call to action */
+.dash-status { position: relative; overflow: hidden; margin-top: var(--space-5); display: grid; grid-template-columns: 1.1fr 1fr auto; align-items: center; gap: var(--space-5); padding: var(--space-5); border: 1px solid var(--ink); border-radius: var(--radius-md) var(--radius-md) 0 0; background: var(--paper-2); }
+.dash-status.is-active { background: linear-gradient(100deg, #eef9d4 0%, var(--paper-2) 60%); }
+.dash-status.is-paused { background: linear-gradient(100deg, #ffe7de 0%, var(--paper-2) 60%); }
+.dash-status-state { display: grid; gap: 6px; justify-items: start; }
+.dash-status-state strong { font: 900 clamp(22px, 2.6vw, 30px)/1 var(--font-display); letter-spacing: -.03em; text-transform: uppercase; }
+.dash-status-state small { color: var(--muted); font-size: var(--text-sm); }
+.dash-status .badge-active i { animation: pulse-dot 1.6s ease-in-out infinite; }
+@keyframes pulse-dot { 50% { box-shadow: 0 0 0 5px rgba(47,158,91,.18); } }
+.dash-status-timer { display: grid; gap: 6px; }
+.dash-status-timer > span, .dash-status-timer > small { display: flex; align-items: center; gap: 6px; color: var(--muted); font: 800 var(--text-xs)/1 var(--font-mono); letter-spacing: .1em; text-transform: uppercase; }
+.dash-countdown { font: 900 clamp(30px, 3.6vw, 44px)/1 var(--font-mono); letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.dash-countdown.expired { color: var(--danger); }
+.dash-countdown.muted-value { font-size: 20px; color: var(--muted); }
+.shift-bar { height: 8px; border: 1px solid var(--ink); border-radius: var(--radius-pill); background: white; overflow: hidden; }
+.shift-bar i { display: block; height: 100%; background: repeating-linear-gradient(135deg, var(--success) 0 8px, #3fb56c 8px 16px); animation: shift-stripes 1.4s linear infinite; transition: width var(--dur-slow) var(--ease-out); }
+@keyframes shift-stripes { to { background-position: 22.6px 0; } }
+.dash-cta { min-width: 220px; }
+.dash-cta-activate { animation: cta-breathe 2.4s ease-in-out infinite; }
+@keyframes cta-breathe { 50% { box-shadow: 4px 4px 0 var(--ink), 0 0 0 8px rgba(215,255,63,.35); } }
+.dash-status + .form-message, .dash-status ~ .dash-active, .dash-status ~ .dash-paused { border-top: 0; }
+.dash-active, .dash-paused { border-radius: 0 0 var(--radius-md) var(--radius-md); overflow: hidden; }
+.dash-actions-inline { margin-top: var(--space-4); }
+.dash-actions-inline .btn-ghost { color: white; border-color: rgba(255,255,255,.4); }
+.dash-actions-inline .btn-ghost:hover { background: rgba(255,255,255,.08); }
+.paused-copy h3 { font-size: clamp(26px, 3.4vw, 38px); }
+.ore-meter { height: 6px; margin: 2px 0 4px; border-radius: var(--radius-pill); background: var(--paper-3); overflow: hidden; }
+.ore-meter i { display: block; height: 100%; background: var(--ink); transition: width var(--dur-slow) var(--ease-out); }
+.dash-loading { margin-top: var(--space-5); display: grid; gap: var(--space-3); }
+.dash-loading .skeleton:first-child { height: 120px; }
+.dash-loading .skeleton:last-child { height: 280px; }
+
+/* Activation moment */
+.shift-stamp { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; background: radial-gradient(circle at center, rgba(215,255,63,.55), transparent 65%); animation: stamp-fade 2.6s var(--ease-out) forwards; }
+.shift-stamp span { padding: 10px 18px; border: 3px solid var(--ink); background: var(--acid); color: var(--ink); font: 950 clamp(22px, 3vw, 34px)/1 var(--font-display); letter-spacing: -.02em; transform: rotate(-4deg); box-shadow: var(--shadow-hard); animation: stamp-in 600ms var(--ease-spring) both; }
+@keyframes stamp-in { from { transform: rotate(-4deg) scale(2.2); opacity: 0; } }
+@keyframes stamp-fade { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
+.is-celebrating .dash-mine .mine-diorama { animation: scene-flash 1.2s var(--ease-out); }
+@keyframes scene-flash { 0% { filter: brightness(2.2) saturate(1.6); } 100% { filter: none; } }
+
+/* Guest dashboard */
+.dash-guest { margin-top: var(--space-5); display: grid; grid-template-columns: .9fr 1.1fr; border: 1px solid var(--ink); border-radius: var(--radius-md); overflow: hidden; background: var(--ink); color: white; }
+.dash-guest-copy { padding: var(--space-6); display: grid; gap: var(--space-4); align-content: center; justify-items: start; }
+.dash-guest-copy .badge-idle { color: var(--muted-on-dark); }
+.dash-guest-copy h2 { margin: 0; font: 950 clamp(34px, 4vw, 52px)/.9 var(--font-display); letter-spacing: -.05em; color: var(--acid); text-transform: uppercase; }
+.dash-guest-copy p { margin: 0; color: var(--muted-on-dark); line-height: 1.6; max-width: 420px; }
+.dash-guest-visual { padding: var(--space-5); background: #16170f; display: grid; gap: var(--space-4); border-left: 1px solid var(--line-on-dark); }
+.tier-ladder { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; counter-reset: tier; }
+.tier-ladder li { display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--line-on-dark); border-radius: var(--radius-sm); color: var(--muted-on-dark); font: 700 11px/1.2 Inter, sans-serif; }
+.tier-ladder li:first-child { border-color: var(--acid); color: white; }
+.tier-ladder b { flex: none; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: var(--ink-3); color: var(--acid); font: 900 11px var(--font-mono); }
+.tier-ladder li:first-child b { background: var(--acid); color: var(--ink); }
+
+/* The living mine */
+.mine-diorama { border-radius: var(--radius-sm); }
+.mine-diorama.is-idle svg { filter: saturate(.35) brightness(.78); transition: filter var(--dur-slow); }
+.diorama-sun { fill: #ffd76a; opacity: .9; }
+.is-idle .diorama-sun { fill: #cfd3e6; opacity: .6; }
+.diorama-hills { fill: #2c2e25; }
+.diorama-vein { fill: rgba(215,255,63,.55); }
+.is-working .diorama-vein { animation: vein-glint 3.2s ease-in-out infinite; }
+@keyframes vein-glint { 0%, 80%, 100% { fill: rgba(215,255,63,.4); } 88% { fill: #f4ffb8; } }
+.diorama-lamp { fill: #5a5c50; }
+.is-working .diorama-lamp { fill: #ffd76a; filter: drop-shadow(0 0 2px #ffd76a); animation: lamp-flicker 2.8s steps(2) infinite; }
+@keyframes lamp-flicker { 50% { opacity: .75; } }
+.diorama-dust { fill: #d7d9cc; opacity: 0; }
+.is-working .diorama-dust { animation: dust 1.1s ease-out infinite; }
+.is-working .diorama-dust-late { animation-delay: .5s; }
+@keyframes dust { 0% { opacity: .9; transform: translate(0, 0); } 100% { opacity: 0; transform: translate(6px, -7px); } }
+.diorama-label { position: absolute; left: 10px; bottom: 10px; padding: 4px 7px; background: rgba(23,24,19,.82); color: var(--acid); border: 1px solid rgba(215,255,63,.4); font: 900 9px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; }
+.diorama-shift-idle { background: var(--ink-3); color: #cfd1c4; }
+.crew-head .mine-diorama { animation: scene-grow 700ms var(--ease-spring); }
+@keyframes scene-grow { from { transform: scale(.96); opacity: .4; } }
+
+/* Crew board */
+.tier-progress { margin-top: var(--space-4); display: grid; gap: 6px; max-width: 420px; }
+.tier-progress-bar { height: 10px; border: 1px solid var(--ink); border-radius: var(--radius-pill); background: white; overflow: hidden; }
+.tier-progress-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--acid), #b6ef1c); transition: width var(--dur-slow) var(--ease-out); }
+.tier-progress small { display: flex; align-items: center; gap: 4px; color: var(--muted); font: 700 var(--text-xs)/1.3 var(--font-mono); }
+.crew-card { border-radius: var(--radius-md); transition: transform var(--dur-med) var(--ease-out), box-shadow var(--dur-med) var(--ease-out); }
+.crew-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-hard); }
+.crew-card-level { color: var(--orange-ink); animation: level-pop 520ms var(--ease-spring); }
+@keyframes level-pop { 0% { transform: scale(1.9); color: var(--success); } 100% { transform: scale(1); } }
+.crew-upgrade-button { min-height: 44px; border-radius: var(--radius-sm); }
+.crew-notice { animation: notice-in var(--dur-med) var(--ease-out); }
+@keyframes notice-in { from { opacity: 0; transform: translateY(-4px); } }
+
+/* Collect moment */
+.report-modal { border-radius: var(--radius-md); animation: modal-in 360ms var(--ease-spring); }
+.launch-modal, .crew-modal, .switch-modal, .verify-modal { border-radius: var(--radius-md); animation: modal-in 320ms var(--ease-out); }
+@keyframes modal-in { from { opacity: 0; transform: translateY(14px) scale(.98); } }
+.modal-backdrop { animation: backdrop-in var(--dur-med) ease-out; }
+@keyframes backdrop-in { from { opacity: 0; } }
+.report-grid .report-ore { background: var(--acid); border-color: var(--ink) !important; }
+.report-ore strong { font-size: 26px !important; font-variant-numeric: tabular-nums; }
+.report-ore small { display: block; margin-top: 4px; font: 700 9px var(--font-mono); color: #3c3e33; }
+.report-actions { position: relative; }
+.collect-burst { position: absolute; right: 60px; top: 50%; width: 0; height: 0; pointer-events: none; }
+.collect-burst i { position: absolute; width: 12px; height: 12px; border: 2px solid var(--ink); border-radius: 50%; background: var(--acid); animation: coin-burst 900ms var(--ease-out) forwards; }
+.collect-burst i:nth-child(1) { --tx: -70px; --ty: -60px; }
+.collect-burst i:nth-child(2) { --tx: -20px; --ty: -84px; }
+.collect-burst i:nth-child(3) { --tx: 36px; --ty: -70px; }
+.collect-burst i:nth-child(4) { --tx: 74px; --ty: -30px; background: var(--orange); }
+.collect-burst i:nth-child(5) { --tx: -86px; --ty: -18px; background: var(--orange); }
+.collect-burst i:nth-child(6) { --tx: 10px; --ty: -110px; }
+.collect-burst i:nth-child(7) { --tx: 58px; --ty: -96px; background: white; }
+.collect-burst i:nth-child(8) { --tx: -48px; --ty: -104px; background: white; }
+@keyframes coin-burst { 0% { transform: translate(0, 0) scale(.4); opacity: 1; } 70% { opacity: 1; } 100% { transform: translate(var(--tx), var(--ty)) scale(1) rotate(200deg); opacity: 0; } }
+.is-collected .report-ore { animation: ore-bank 600ms var(--ease-spring); }
+@keyframes ore-bank { 40% { transform: scale(1.05); } }
+
+/* Discovery reveal */
+.discovery-event { border-radius: var(--radius-md); animation: reveal-in 700ms var(--ease-spring) 250ms both; }
+.discovery-event::after { content: ""; position: absolute; inset: 0; z-index: 1; background: linear-gradient(110deg, transparent 30%, rgba(255,255,255,.75) 50%, transparent 70%); transform: translateX(-120%); animation: shine 1.2s var(--ease-out) 800ms forwards; pointer-events: none; }
+@keyframes reveal-in { from { opacity: 0; transform: rotateX(70deg) scale(.9); } }
+@keyframes shine { to { transform: translateX(120%); } }
+.discovery-event.rarity-rare { border-color: var(--rarity-rare); box-shadow: 0 0 0 3px rgba(88,166,255,.22); }
+.discovery-event.rarity-epic { border-color: var(--rarity-epic); box-shadow: 0 0 0 3px rgba(160,123,255,.25); }
+.discovery-event.rarity-legendary, .discovery-event.rarity-mythic { border-color: var(--rarity-legendary); box-shadow: 0 0 0 4px rgba(255,182,39,.3), 0 10px 40px rgba(255,182,39,.25); }
+.discovery-card { border-radius: var(--radius-md); border-top-width: 4px; animation: card-in 420ms var(--ease-out) both; }
+.discovery-card:nth-child(2) { animation-delay: 60ms; }
+.discovery-card:nth-child(3) { animation-delay: 120ms; }
+@keyframes card-in { from { opacity: 0; transform: translateY(8px); } }
+.discovery-card.rarity-common { border-top-color: var(--rarity-common); }
+.discovery-card.rarity-uncommon { border-top-color: var(--rarity-uncommon); }
+.discovery-card.rarity-rare { border-top-color: var(--rarity-rare); }
+.discovery-card.rarity-epic { border-top-color: var(--rarity-epic); }
+.discovery-card.rarity-legendary, .discovery-card.rarity-mythic { border-top-color: var(--rarity-legendary); background: linear-gradient(180deg, #fff6df, var(--paper-2) 40%); }
+.discovery-grid .skeleton-card { height: 170px; }
+
+/* Market polish */
+.token-card { display: block; color: inherit; }
+.token-card .card-cta { display: inline-flex; align-items: center; gap: 4px; padding: 7px 10px; border: 1px solid var(--ink); border-radius: var(--radius-sm); font: 900 10px/1 Inter, sans-serif; text-transform: uppercase; letter-spacing: .06em; transition: background-color var(--dur-fast); }
+.token-card:hover .card-cta { background: var(--acid); }
+.board-more { margin: var(--space-6) auto 0; display: flex; width: fit-content; }
+.filter-tabs button[aria-pressed="true"] { background: var(--ink); color: white; }
+
+@media (max-width: 1000px) {
+  .dash-status { grid-template-columns: 1fr 1fr; }
+  .dash-cta { grid-column: 1 / -1; width: 100%; }
+  .dash-guest { grid-template-columns: 1fr; }
+  .dash-guest-visual { border-left: 0; border-top: 1px solid var(--line-on-dark); }
+}
+@media (max-width: 680px) {
+  .dash-status { grid-template-columns: 1fr; gap: var(--space-4); padding: var(--space-4); }
+  .dash-guest-copy { padding: var(--space-5); }
+  .tier-ladder { grid-template-columns: 1fr 1fr; }
+  .dash-actions .btn { width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shift-stamp { animation: none; opacity: 0; }
+  .dash-cta-activate, .shift-bar i, .loading-pick, .skeleton, .ticker { animation: none !important; }
+  .collect-burst { display: none; }
+  .discovery-event::after { display: none; }
+}
+
+
+/* Dev-only UI gallery (/__ui) */
+.ui-gallery-intro { padding-top: var(--space-5); display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.ui-gallery-intro p { margin: 0; color: var(--muted); font-size: var(--text-sm); }
+.ui-gallery-tiers { padding-block: var(--space-6); }
+.ui-gallery-tiers h2 { font: 900 24px var(--font-display); text-transform: uppercase; }
+.ui-gallery-tiers > div { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--space-4); }
+
+
+.mine-info-head { flex-wrap: wrap; }
+.mine-info-loading { display: grid; gap: var(--space-3); padding-block: var(--space-5); }
+.mine-info-loading .skeleton { height: 120px; }

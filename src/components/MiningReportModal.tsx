@@ -10,6 +10,8 @@
 import { Coins, Compass, Hammer, Repeat2, Sparkles, X } from "lucide-react";
 import type { DiscoveryVisualEvent, MiningReport } from "../../shared/types";
 import { duration, oreAmount, tokenAmount } from "../format";
+import { CountUp } from "./CountUp";
+import { useDialog } from "./useDialog";
 
 export interface MiningReportModalProps {
   report: MiningReport;
@@ -47,11 +49,13 @@ export function MiningReportModal({
   const byRarity = report.discoveries ? Object.entries(report.discoveries.byRarity) : [];
   const rewards = report.blockRewards ?? [];
   const mineLabel = mineSymbol ? dollar(mineSymbol) : "the mine";
+  const dialogRef = useDialog<HTMLElement>(onClose);
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section
-        className="report-modal"
+        ref={dialogRef}
+        className={"report-modal" + (collected ? " is-collected" : "")}
         role="dialog"
         aria-modal="true"
         aria-labelledby="report-title"
@@ -71,9 +75,12 @@ export function MiningReportModal({
         {mineSymbol && <p className="report-mine">Mine: {mineLabel}</p>}
 
         <div className="report-grid">
-          <div>
+          <div className="report-ore">
             <span>ORE MINED</span>
-            <strong>+{oreAmount(report.oreGained)}</strong>
+            <strong>
+              +<CountUp value={report.oreGained} format={oreAmount} />
+            </strong>
+            <small>game progression · spend it on crew upgrades</small>
           </div>
           <div>
             <span>STREAK</span>
@@ -172,13 +179,18 @@ export function MiningReportModal({
         {error && <p className="form-message">{error}</p>}
 
         <div className="report-actions">
+          {collected && (
+            <div className="collect-burst" aria-hidden="true">
+              <i /><i /><i /><i /><i /><i /><i /><i />
+            </div>
+          )}
           <button className="outline-button" onClick={onManageCrew}>
             Manage crew <Hammer size={15} />
           </button>
           <button className="outline-button" onClick={onSwitchMine}>
             Switch mine <Repeat2 size={15} />
           </button>
-          <button className="primary-button" disabled={collecting || collected} onClick={onCollect}>
+          <button className="primary-button" disabled={collecting || collected} onClick={onCollect} data-autofocus>
             {collected ? (
               <>
                 <Compass size={16} /> Collected

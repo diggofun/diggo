@@ -42,7 +42,7 @@ export function MineInfoPanel({
   if (!mine) {
     return (
       <section className="mine-info page-shell" id="mine-info">
-        {loading ? "Loading mine information…" : error ? <span className="form-message">{error}</span> : null}
+        {loading ? <div className="mine-info-loading" aria-busy="true"><span className="skeleton" /><span className="sr-only">Loading mine information…</span></div> : error ? <span className="form-message" role="alert">{error}</span> : null}
       </section>
     );
   }

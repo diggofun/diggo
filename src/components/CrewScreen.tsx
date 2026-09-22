@@ -8,7 +8,8 @@
  * There is no money, no token payment and no purchase button anywhere on this screen: the only
  * currency in the game's progression loop is ORE, and ORE can never be bought (spec 9, 34).
  */
-import { Gem, Hammer, Hourglass, Lock, X } from "lucide-react";
+import type { ReactNode } from "react";
+import { ArrowUpRight, Gem, Hammer, Hourglass, Lock, X } from "lucide-react";
 import type { PlayerProfile } from "../../shared/types";
 import {
   DIGGO_CONFIG,
@@ -23,6 +24,7 @@ import {
 } from "../../shared/economics";
 import { CREW_COMPONENTS, CREW_COMPONENT_GLYPHS, CREW_COMPONENT_LABELS, CREW_ROLES } from "../crewLabels";
 import { MineScene } from "./MineScene";
+import { useDialog } from "./useDialog";
 
 export interface CrewScreenProps {
   player: PlayerProfile;
@@ -87,6 +89,8 @@ export function CrewScreen({ player, pending, error, notice, onUpgrade, variant 
   const tier = crewTier(player.crewLevels);
   const totalLevel = CREW_COMPONENTS.reduce((sum, component) => sum + player.crewLevels[component], 0);
   const nextTier = DIGGO_CONFIG.crew.tiers.find((candidate) => candidate.minTotalLevel > totalLevel) ?? null;
+  const tierFloor = tier.minTotalLevel;
+  const tierProgress = nextTier ? Math.min(1, Math.max(0, (totalLevel - tierFloor) / Math.max(1, nextTier.minTotalLevel - tierFloor))) : 1;
 
   const board = (
     <>
@@ -100,8 +104,22 @@ export function CrewScreen({ player, pending, error, notice, onUpgrade, variant 
             {player.power.toLocaleString()} Mining Power · {Math.floor(player.oreBalance).toLocaleString()} ORE banked
             {nextTier ? ` · ${nextTier.minTotalLevel - totalLevel} levels to ${nextTier.name}` : " · top tier reached"}
           </p>
+          <div className="tier-progress">
+            <div className="tier-progress-bar" role="progressbar" aria-label="Progress to the next crew tier" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(tierProgress * 100)}>
+              <i style={{ width: (tierProgress * 100).toFixed(1) + "%" }} />
+            </div>
+            <small>
+              {nextTier ? (
+                <>
+                  Level {totalLevel} / {nextTier.minTotalLevel} <ArrowUpRight size={11} /> {nextTier.name}
+                </>
+              ) : (
+                "Legendary operation — every branch can still level up"
+              )}
+            </small>
+          </div>
         </div>
-        <MineScene tier={tier.tier} active={player.activationState === "ACTIVE"} />
+        <MineScene key={tier.tier} tier={tier.tier} active={player.activationState === "ACTIVE"} label={tier.name} />
       </div>
 
       <div className="crew-board">
@@ -118,7 +136,7 @@ export function CrewScreen({ player, pending, error, notice, onUpgrade, variant 
                   <strong>{CREW_COMPONENT_LABELS[component]}</strong>
                   <small>{role.deltaLabel}</small>
                 </div>
-                <b className="crew-card-level">LV. {level}</b>
+                <b className="crew-card-level" key={level}>LV. {level}</b>
               </header>
               <p className="crew-card-role">{role.role}</p>
               <div className="crew-card-delta">
@@ -166,27 +184,33 @@ export function CrewScreen({ player, pending, error, notice, onUpgrade, variant 
   );
 
   if (variant === "modal") {
-    return (
-      <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-        <section
-          className="crew-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Manage your Mining Crew"
-          onMouseDown={(event) => event.stopPropagation()}
-        >
-          <button className="modal-close" onClick={onClose} aria-label="Close">
-            <X size={20} />
-          </button>
-          {board}
-        </section>
-      </div>
-    );
+    return <CrewModalFrame onClose={onClose}>{board}</CrewModalFrame>;
   }
 
   return (
     <section className="crew-screen page-shell" id="crew">
       {board}
     </section>
+  );
+}
+
+function CrewModalFrame({ onClose, children }: { onClose?(): void; children: ReactNode }) {
+  const dialogRef = useDialog<HTMLElement>(onClose);
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        ref={dialogRef}
+        className="crew-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Manage your Mining Crew"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <button className="modal-close" onClick={onClose} aria-label="Close">
+          <X size={20} />
+        </button>
+        {children}
+      </section>
+    </div>
   );
 }
