@@ -21,6 +21,10 @@ import {
   getI64Encoder,
   getAddressEncoder,
 } from "@solana/kit";
+// Used only by the synchronous PDA helper below. @noble/curves is a declared dependency
+// (the worker already imports its ed25519 module) and it pins @noble/hashes.
+import { sha256 } from "@noble/hashes/sha2.js";
+import { ed25519 } from "@noble/curves/ed25519.js";
 
 type IInstruction = Instruction;
 type Bytes = Uint8Array | ReadonlyUint8Array;
@@ -43,6 +47,17 @@ const DISCRIMINATOR = {
   claimRewards: [4, 144, 132, 71, 116, 23, 151, 80],
   syncCrewPower: [69, 12, 225, 37, 147, 155, 26, 111],
   claimDiscovery: [82, 247, 137, 110, 42, 233, 221, 207],
+  // spec 19/23/35/37/65 hardening: scoped circuit breakers, guardian rotation, bounded
+  // keeper power, explicit trading fees.
+  pauseDiscoveryPayouts: [75, 20, 112, 149, 127, 54, 56, 174],
+  pauseRewardClaims: [42, 72, 213, 117, 127, 179, 47, 157],
+  pauseMineDiscovery: [89, 93, 22, 73, 178, 169, 66, 219],
+  rotateGuardian: [71, 22, 223, 22, 230, 118, 101, 114],
+  updatePowerBounds: [50, 202, 219, 213, 8, 191, 131, 216],
+  updateFeeConfig: [104, 184, 103, 242, 88, 151, 107, 20],
+  updateDiscoveryLimits: [16, 214, 96, 49, 233, 139, 101, 121],
+  claimCreatorFees: [0, 23, 125, 234, 156, 118, 134, 89],
+  claimPlatformFees: [159, 129, 37, 35, 170, 99, 163, 16],
 } as const satisfies Record<string, number[]>;
 
 // --- byte-level (Borsh-compatible) encoding helpers -------------------------------------
@@ -61,6 +76,7 @@ function concatBytes(...parts: Bytes[]): Uint8Array {
 const u8 = (n: number) => getU8Encoder().encode(n);
 const u16 = (n: number) => getU16Encoder().encode(n);
 const u64 = (n: bigint) => getU64Encoder().encode(n);
+const bool = (value: boolean) => u8(value ? 1 : 0);
 const i64 = (n: bigint) => getI64Encoder().encode(n);
 const pubkeyBytes = (a: Address) => getAddressEncoder().encode(a);
 function borshString(value: string): Uint8Array {
@@ -78,6 +94,38 @@ const accountSeed = (a: Address) => pubkeyBytes(a);
 export async function deriveProtocolPda(programAddress: Address): Promise<Address> {
   const [pda] = await getProgramDerivedAddress({ programAddress, seeds: [constSeed("protocol")] });
   return pda;
+}
+
+/**
+ * Synchronous PDA derivation, mirroring @solana/kit's getProgramDerivedAddress: hash the
+ * seeds, then the bump byte, then the program address and the "ProgramDerivedAddress"
+ * marker, and take the first bump whose digest is not a valid ed25519 point. It exists so
+ * that instruction builders whose callers compose transactions synchronously can still
+ * resolve a required PDA — see buildClaimRewardsInstruction.
+ */
+const PDA_MARKER = new TextEncoder().encode("ProgramDerivedAddress");
+
+function isOnCurveAddress(bytes: Uint8Array): boolean {
+  try {
+    ed25519.Point.fromBytes(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function findProgramAddressSync(seeds: Uint8Array[], programAddress: Address): Address {
+  const programBytes = pubkeyBytes(programAddress);
+  for (let bump = 255; bump >= 0; bump--) {
+    const digest = sha256(concatBytes(...seeds, Uint8Array.of(bump), programBytes, PDA_MARKER));
+    if (!isOnCurveAddress(digest)) return address(base58FromBytes(digest));
+  }
+  throw new Error("Unable to find a viable program address bump");
+}
+
+/** The protocol config PDA, resolved without awaiting — see findProgramAddressSync. */
+export function deriveProtocolPdaSync(programAddress: Address): Address {
+  return findProgramAddressSync([constSeed("protocol")], programAddress);
 }
 
 export async function deriveProgramDataAddress(programAddress: Address): Promise<Address> {
@@ -126,6 +174,19 @@ export async function deriveDiscoveryVaultPda(programAddress: Address, mint: Add
   const [pda] = await getProgramDerivedAddress({
     programAddress,
     seeds: [constSeed("discovery-vault"), accountSeed(mint)],
+  });
+  return pda;
+}
+
+/** Idempotency receipt PDA for one (mine, discovery_id) discovery payout. */
+export async function deriveDiscoveryReceiptPda(
+  programAddress: Address,
+  mine: Address,
+  discoveryId: bigint,
+): Promise<Address> {
+  const [pda] = await getProgramDerivedAddress({
+    programAddress,
+    seeds: [constSeed("discovery"), accountSeed(mine), u64(discoveryId)],
   });
   return pda;
 }
@@ -366,11 +427,14 @@ export function buildClaimRewardsInstruction(params: {
   reserveVault: Address;
   ownerTokens: Address;
   position: Address;
+  /** Optional override; the protocol PDA is derived synchronously when omitted. */
+  protocol?: Address;
 }): IInstruction {
   return {
     programAddress: params.programAddress,
     accounts: [
       ws(params.owner),
+      r(params.protocol ?? deriveProtocolPdaSync(params.programAddress)),
       w(params.mine),
       r(params.mint),
       w(params.reserveVault),
@@ -419,6 +483,7 @@ export const ACCOUNT_DISCRIMINATOR = {
   launchMarket: [73, 227, 118, 164, 34, 99, 10, 101],
   player: [205, 222, 112, 7, 165, 155, 206, 218],
   miningPosition: [132, 97, 97, 74, 238, 187, 109, 140],
+  discoveryReceipt: [168, 19, 166, 49, 77, 198, 78, 101],
 } as const satisfies Record<string, number[]>;
 
 function base58FromBytes(bytes: Uint8Array): string {
@@ -526,6 +591,11 @@ export interface DecodedMine {
   name: string;
   symbol: string;
   uri: string;
+  discoveryReserveTotal: bigint;
+  discoveryEpochBudget: bigint;
+  discoveryEpochSpent: bigint;
+  discoveryEpochEndsAt: bigint;
+  discoveryPaused: boolean;
   bump: number;
 }
 
@@ -557,12 +627,18 @@ export function decodeMine(data: Uint8Array): DecodedMine {
   const name = r.string();
   const symbol = r.string();
   const uri = r.string();
+  const discoveryReserveTotal = r.u64();
+  const discoveryEpochBudget = r.u64();
+  const discoveryEpochSpent = r.u64();
+  const discoveryEpochEndsAt = r.i64();
+  const discoveryPaused = r.bool();
   const bump = r.u8();
   return {
     mint, creator, reserveVault, discoveryVault, marketVault, feeVault, totalSupply, remainingReserve,
     remainingDiscoveryReserve, cumulativeDistributed, totalPower, rewardIndex, currentBlockReward,
     blockInterval, nextBlockAt, epoch, epochLength, epochEndsAt, reductionBps, minimumReward, status,
-    name, symbol, uri, bump,
+    name, symbol, uri, discoveryReserveTotal, discoveryEpochBudget, discoveryEpochSpent,
+    discoveryEpochEndsAt, discoveryPaused, bump,
   };
 }
 
@@ -573,6 +649,10 @@ export interface DecodedLaunchMarket {
   virtualSolReserve: bigint;
   graduationTarget: bigint;
   graduated: boolean;
+  creatorFeeClaimable: bigint;
+  platformFeeClaimable: bigint;
+  creatorFeeBps: number;
+  platformFeeBps: number;
   bump: number;
 }
 
@@ -586,6 +666,10 @@ export function decodeLaunchMarket(data: Uint8Array): DecodedLaunchMarket {
     virtualSolReserve: r.u64(),
     graduationTarget: r.u64(),
     graduated: r.bool(),
+    creatorFeeClaimable: r.u64(),
+    platformFeeClaimable: r.u64(),
+    creatorFeeBps: r.u16(),
+    platformFeeBps: r.u16(),
     bump: r.u8(),
   };
 }
@@ -593,8 +677,19 @@ export function decodeLaunchMarket(data: Uint8Array): DecodedLaunchMarket {
 export interface DecodedProtocolConfig {
   treasury: Address;
   keeper: Address;
+  /** Circuit-breaker authority: may only flip the scoped pause flags and tune the
+   * bounded parameters below, never move reserve tokens or LP SOL. */
+  guardian: Address;
   reserveBps: number;
   discoveryReserveBps: number;
+  creatorFeeBps: number;
+  platformFeeBps: number;
+  discoveryMaxBps: number;
+  discoveryEpochBudgetBps: number;
+  maxCrewPower: bigint;
+  maxPowerIncreaseBps: number;
+  discoveryPayoutsPaused: boolean;
+  rewardClaimsPaused: boolean;
   bump: number;
 }
 
@@ -604,8 +699,17 @@ export function decodeProtocolConfig(data: Uint8Array): DecodedProtocolConfig {
   return {
     treasury: r.pubkey(),
     keeper: r.pubkey(),
+    guardian: r.pubkey(),
     reserveBps: r.u16(),
     discoveryReserveBps: r.u16(),
+    creatorFeeBps: r.u16(),
+    platformFeeBps: r.u16(),
+    discoveryMaxBps: r.u16(),
+    discoveryEpochBudgetBps: r.u16(),
+    maxCrewPower: r.u64(),
+    maxPowerIncreaseBps: r.u16(),
+    discoveryPayoutsPaused: r.bool(),
+    rewardClaimsPaused: r.bool(),
     bump: r.u8(),
   };
 }
@@ -641,6 +745,29 @@ export function decodeMiningPosition(data: Uint8Array): DecodedMiningPosition {
     assignedPower: r.u64(),
     lastRewardIndex: r.u128(),
     pendingReward: r.u64(),
+    bump: r.u8(),
+  };
+}
+
+export interface DecodedDiscoveryReceipt {
+  mine: Address;
+  discoveryId: bigint;
+  recipient: Address;
+  amount: bigint;
+  claimedAt: bigint;
+  bump: number;
+}
+
+/** One receipt per (mine, discovery_id); its existence is the on-chain replay guard. */
+export function decodeDiscoveryReceipt(data: Uint8Array): DecodedDiscoveryReceipt {
+  const r = new ByteReader(data);
+  r.skipDiscriminator();
+  return {
+    mine: r.pubkey(),
+    discoveryId: r.u64(),
+    recipient: r.pubkey(),
+    amount: r.u64(),
+    claimedAt: r.i64(),
     bump: r.u8(),
   };
 }
@@ -684,6 +811,10 @@ export function buildClaimDiscoveryInstruction(params: {
   discoveryVault: Address;
   recipient: Address;
   recipientTokens: Address;
+  /** Unique id of the off-chain discovery record; replaying one fails on-chain. */
+  discoveryId: bigint;
+  /** PDA from deriveDiscoveryReceiptPda(programAddress, mine, discoveryId). */
+  receipt: Address;
   amount: bigint;
 }): IInstruction {
   return {
@@ -696,10 +827,169 @@ export function buildClaimDiscoveryInstruction(params: {
       w(params.discoveryVault),
       r(params.recipient),
       w(params.recipientTokens),
+      w(params.receipt),
       r(TOKEN_PROGRAM_ADDRESS),
       r(ASSOCIATED_TOKEN_PROGRAM_ADDRESS),
       r(SYSTEM_PROGRAM_ADDRESS),
     ],
-    data: concatBytes(Uint8Array.from(DISCRIMINATOR.claimDiscovery), u64(params.amount)),
+    data: concatBytes(
+      Uint8Array.from(DISCRIMINATOR.claimDiscovery),
+      u64(params.discoveryId),
+      u64(params.amount),
+    ),
+  };
+}
+
+// --- guardian / circuit-breaker / fee instructions (spec 19, 23, 35, 37, 65) --------
+
+/**
+ * Guardian-only. Pause instructions carry no mint, token account or vault: they can only
+ * flip a flag, never move a reserve token.
+ */
+export function buildPauseDiscoveryPayoutsInstruction(params: {
+  programAddress: Address;
+  guardian: Address;
+  protocol: Address;
+  paused: boolean;
+}): IInstruction {
+  return {
+    programAddress: params.programAddress,
+    accounts: [rs(params.guardian), w(params.protocol)],
+    data: concatBytes(Uint8Array.from(DISCRIMINATOR.pauseDiscoveryPayouts), bool(params.paused)),
+  };
+}
+
+export function buildPauseRewardClaimsInstruction(params: {
+  programAddress: Address;
+  guardian: Address;
+  protocol: Address;
+  paused: boolean;
+}): IInstruction {
+  return {
+    programAddress: params.programAddress,
+    accounts: [rs(params.guardian), w(params.protocol)],
+    data: concatBytes(Uint8Array.from(DISCRIMINATOR.pauseRewardClaims), bool(params.paused)),
+  };
+}
+
+export function buildPauseMineDiscoveryInstruction(params: {
+  programAddress: Address;
+  guardian: Address;
+  protocol: Address;
+  mine: Address;
+  mint: Address;
+  paused: boolean;
+}): IInstruction {
+  return {
+    programAddress: params.programAddress,
+    accounts: [rs(params.guardian), r(params.protocol), w(params.mine), r(params.mint)],
+    data: concatBytes(Uint8Array.from(DISCRIMINATOR.pauseMineDiscovery), bool(params.paused)),
+  };
+}
+
+export function buildRotateGuardianInstruction(params: {
+  programAddress: Address;
+  guardian: Address;
+  protocol: Address;
+  newGuardian: Address;
+}): IInstruction {
+  return {
+    programAddress: params.programAddress,
+    accounts: [rs(params.guardian), w(params.protocol)],
+    data: concatBytes(
+      Uint8Array.from(DISCRIMINATOR.rotateGuardian),
+      pubkeyBytes(params.newGuardian),
+    ),
+  };
+}
+
+export function buildUpdatePowerBoundsInstruction(params: {
+  programAddress: Address;
+  guardian: Address;
+  protocol: Address;
+  maxCrewPower: bigint;
+  maxPowerIncreaseBps: number;
+}): IInstruction {
+  return {
+    programAddress: params.programAddress,
+    accounts: [rs(params.guardian), w(params.protocol)],
+    data: concatBytes(
+      Uint8Array.from(DISCRIMINATOR.updatePowerBounds),
+      u64(params.maxCrewPower),
+      u16(params.maxPowerIncreaseBps),
+    ),
+  };
+}
+
+export function buildUpdateFeeConfigInstruction(params: {
+  programAddress: Address;
+  guardian: Address;
+  protocol: Address;
+  creatorFeeBps: number;
+  platformFeeBps: number;
+}): IInstruction {
+  return {
+    programAddress: params.programAddress,
+    accounts: [rs(params.guardian), w(params.protocol)],
+    data: concatBytes(
+      Uint8Array.from(DISCRIMINATOR.updateFeeConfig),
+      u16(params.creatorFeeBps),
+      u16(params.platformFeeBps),
+    ),
+  };
+}
+
+export function buildUpdateDiscoveryLimitsInstruction(params: {
+  programAddress: Address;
+  guardian: Address;
+  protocol: Address;
+  discoveryMaxBps: number;
+  discoveryEpochBudgetBps: number;
+}): IInstruction {
+  return {
+    programAddress: params.programAddress,
+    accounts: [rs(params.guardian), w(params.protocol)],
+    data: concatBytes(
+      Uint8Array.from(DISCRIMINATOR.updateDiscoveryLimits),
+      u16(params.discoveryMaxBps),
+      u16(params.discoveryEpochBudgetBps),
+    ),
+  };
+}
+
+/** Creator-only: pays out the creator's accrued trading fee, never LP SOL or reserves. */
+export function buildClaimCreatorFeesInstruction(params: {
+  programAddress: Address;
+  creator: Address;
+  mint: Address;
+  mine: Address;
+  market: Address;
+}): IInstruction {
+  return {
+    programAddress: params.programAddress,
+    accounts: [ws(params.creator), r(params.mint), r(params.mine), w(params.market)],
+    data: Uint8Array.from(DISCRIMINATOR.claimCreatorFees),
+  };
+}
+
+/** Treasury-only: pays out the platform trading fee accrued on one market. */
+export function buildClaimPlatformFeesInstruction(params: {
+  programAddress: Address;
+  treasury: Address;
+  protocol: Address;
+  mint: Address;
+  mine: Address;
+  market: Address;
+}): IInstruction {
+  return {
+    programAddress: params.programAddress,
+    accounts: [
+      ws(params.treasury),
+      r(params.protocol),
+      r(params.mint),
+      r(params.mine),
+      w(params.market),
+    ],
+    data: Uint8Array.from(DISCRIMINATOR.claimPlatformFees),
   };
 }
