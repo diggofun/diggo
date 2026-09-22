@@ -47,12 +47,40 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
-/** SPL Token Mint account layout is fixed-size; decimals sits at byte offset 44. */
-export async function readMintDecimals(rpc: Rpc<SolanaRpcApi>, mint: Address): Promise<number> {
+export interface MintInfo {
+  decimals: number;
+  /**
+   * A revoked mint authority means no new supply can ever be created, which is what makes a mine's
+   * fixed supply honest. Read straight from the SPL mint, not assumed.
+   */
+  mintAuthorityRevoked: boolean;
+  freezeAuthorityRevoked: boolean;
+}
+
+function readU32LE(bytes: Uint8Array, offset: number): number {
+  return (
+    (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0
+  );
+}
+
+/**
+ * SPL Token Mint account layout: mintAuthorityOption (u32) 0, mintAuthority 4..36, supply 36..44,
+ * decimals 44, isInitialized 45, freezeAuthorityOption (u32) 46..50, freezeAuthority 50..82.
+ * A COption is "Some" when its tag is 1, so authority revoked === tag 0.
+ *
+ * An unrecognised (too short) layout reports the authorities as NOT revoked: unknown is treated as
+ * worse health, so an unreadable mint can only ever lower a discovery's rarity, never raise it.
+ */
+export async function readMintInfo(rpc: Rpc<SolanaRpcApi>, mint: Address): Promise<MintInfo> {
   const info = await rpc.getAccountInfo(mint, { commitment: "confirmed", encoding: "base64" }).send();
   if (!info.value) throw new Error(`Mint account not found: ${mint}`);
   const bytes = base64ToBytes(info.value.data[0]);
-  return bytes[44];
+  const recognized = bytes.length >= 82;
+  return {
+    decimals: bytes[44] ?? 6,
+    mintAuthorityRevoked: recognized && readU32LE(bytes, 0) === 0,
+    freezeAuthorityRevoked: recognized && readU32LE(bytes, 46) === 0,
+  };
 }
 
 function mineStatusToTokenStatus(mine: DecodedMine, market: DecodedLaunchMarket): TokenStatus {
@@ -77,6 +105,23 @@ export interface ChainSyncedToken {
   nextBlockAt: number;
   nextEpochAt: number;
   decimals: number;
+  /** Program-controlled Discovery Reserve, in whole tokens (spec 23). */
+  discoveryReserveRemaining: number;
+  discoveryReserveTotal: number;
+  discoveryEpochBudget: number;
+  discoveryEpochSpent: number;
+  discoveryEpochEndsAt: number;
+  /** The program's own per-mine discovery circuit breaker (spec 65). */
+  discoveryPaused: boolean;
+  /** Program-controlled liquidity backing the price, in USD at the illustrative SOL rate. */
+  liquidityUsd: number;
+  mintAuthorityRevoked: boolean;
+  freezeAuthorityRevoked: boolean;
+  /**
+   * Always true for this protocol: the bonding-curve SOL and the post-graduation LP are held in
+   * program PDAs, so no creator or admin can withdraw them (spec 35, 36).
+   */
+  liquidityLocked: boolean;
 }
 
 /**
@@ -93,16 +138,17 @@ export async function readTokenFromChain(
   const mint = address(mintAddress);
   const { mine, market } = await deriveMineAddresses(programAddress, mint);
 
-  const [mineInfo, marketInfo, decimals] = await Promise.all([
+  const [mineInfo, marketInfo, mintInfo] = await Promise.all([
     rpc.getAccountInfo(mine, { commitment: "confirmed", encoding: "base64" }).send(),
     rpc.getAccountInfo(market, { commitment: "confirmed", encoding: "base64" }).send(),
-    readMintDecimals(rpc, mint),
+    readMintInfo(rpc, mint),
   ]);
   if (!mineInfo.value) throw new Error(`Mine account not found on-chain for mint ${mintAddress}`);
   if (!marketInfo.value) throw new Error(`Market account not found on-chain for mint ${mintAddress}`);
 
   const decodedMine = decodeMine(base64ToBytes(mineInfo.value.data[0]));
   const decodedMarket = decodeLaunchMarket(base64ToBytes(marketInfo.value.data[0]));
+  const decimals = mintInfo.decimals;
   const scale = 10 ** decimals;
 
   const priceSol = bondingCurveSpotPriceLamports(decodedMarket, decimals) / 1_000_000_000;
@@ -126,6 +172,16 @@ export async function readTokenFromChain(
     nextBlockAt: Number(decodedMine.nextBlockAt),
     nextEpochAt: Number(decodedMine.epochEndsAt),
     decimals,
+    discoveryReserveRemaining: Number(decodedMine.remainingDiscoveryReserve) / scale,
+    discoveryReserveTotal: Number(decodedMine.discoveryReserveTotal) / scale,
+    discoveryEpochBudget: Number(decodedMine.discoveryEpochBudget) / scale,
+    discoveryEpochSpent: Number(decodedMine.discoveryEpochSpent) / scale,
+    discoveryEpochEndsAt: Number(decodedMine.discoveryEpochEndsAt),
+    discoveryPaused: decodedMine.discoveryPaused,
+    liquidityUsd: (Number(decodedMarket.solReserve) / 1_000_000_000) * ILLUSTRATIVE_DEVNET_SOL_USD,
+    mintAuthorityRevoked: mintInfo.mintAuthorityRevoked,
+    freezeAuthorityRevoked: mintInfo.freezeAuthorityRevoked,
+    liquidityLocked: true,
   };
 }
 
@@ -159,8 +215,12 @@ export async function syncTokenToD1(
     `INSERT INTO tokens (
        mint, slug, name, symbol, description, creator, image_key, status,
        price_usd, price_sol, change_24h, market_cap_usd, reserve_remaining, reserve_total,
-       reward_per_block, network_power, next_block_at, next_epoch_at, decimals, synced_at, created_at
-     ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
+       reward_per_block, network_power, next_block_at, next_epoch_at, decimals, synced_at, created_at,
+       discovery_reserve_remaining, discovery_reserve_total, discovery_epoch_budget,
+       discovery_epoch_spent, discovery_epoch_ends_at, discovery_paused, liquidity_usd,
+       mint_authority_revoked, freeze_authority_revoked, liquidity_locked, discovery_synced_at
+     ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,
+               ?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33)
      ON CONFLICT(mint) DO UPDATE SET
        name = excluded.name, symbol = excluded.symbol, creator = excluded.creator,
        status = excluded.status, price_usd = excluded.price_usd, price_sol = excluded.price_sol,
@@ -168,6 +228,17 @@ export async function syncTokenToD1(
        reserve_total = excluded.reserve_total, reward_per_block = excluded.reward_per_block,
        network_power = excluded.network_power, next_block_at = excluded.next_block_at,
        next_epoch_at = excluded.next_epoch_at, decimals = excluded.decimals, synced_at = excluded.synced_at,
+       discovery_reserve_remaining = excluded.discovery_reserve_remaining,
+       discovery_reserve_total = excluded.discovery_reserve_total,
+       discovery_epoch_budget = excluded.discovery_epoch_budget,
+       discovery_epoch_spent = excluded.discovery_epoch_spent,
+       discovery_epoch_ends_at = excluded.discovery_epoch_ends_at,
+       discovery_paused = excluded.discovery_paused,
+       liquidity_usd = excluded.liquidity_usd,
+       mint_authority_revoked = excluded.mint_authority_revoked,
+       freeze_authority_revoked = excluded.freeze_authority_revoked,
+       liquidity_locked = excluded.liquidity_locked,
+       discovery_synced_at = excluded.discovery_synced_at,
        description = CASE WHEN ?21 THEN excluded.description ELSE tokens.description END,
        image_key = CASE WHEN ?22 THEN excluded.image_key ELSE tokens.image_key END`,
   )
@@ -178,6 +249,17 @@ export async function syncTokenToD1(
       now, createdAt,
       metadata?.description !== undefined ? 1 : 0,
       metadata?.imageKey !== undefined ? 1 : 0,
+      chain.discoveryReserveRemaining,
+      chain.discoveryReserveTotal,
+      chain.discoveryEpochBudget,
+      chain.discoveryEpochSpent,
+      chain.discoveryEpochEndsAt,
+      chain.discoveryPaused ? 1 : 0,
+      chain.liquidityUsd,
+      chain.mintAuthorityRevoked ? 1 : 0,
+      chain.freezeAuthorityRevoked ? 1 : 0,
+      chain.liquidityLocked ? 1 : 0,
+      now,
     )
     .run();
 
