@@ -49,7 +49,7 @@ import {
 } from "./lib.ts";
 
 /** The diggo_protocol program id; matches Anchor.toml and wrangler.jsonc. */
-const DEFAULT_PROGRAM_ID = "48WgfSPnEPitiasXV5B3aLpeAWtUisSt6YSR6djDZebC";
+const DEFAULT_PROGRAM_ID = "BLF7g1SbT72xb5M8rVrD7V3mdDXxb1AqwChcoeF4ppmE";
 
 /**
  * Owners that mean "this is an ordinary account, not a multisig". A plain wallet is owned by

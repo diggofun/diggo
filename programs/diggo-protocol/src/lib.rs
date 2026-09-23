@@ -6,7 +6,7 @@ use anchor_spl::token_interface::{
     self, Mint, MintTo, SetAuthority, TokenAccount, TokenInterface, TransferChecked,
 };
 
-declare_id!("48WgfSPnEPitiasXV5B3aLpeAWtUisSt6YSR6djDZebC");
+declare_id!("BLF7g1SbT72xb5M8rVrD7V3mdDXxb1AqwChcoeF4ppmE");
 
 pub const BPS: u128 = 10_000;
 pub const INDEX_SCALE: u128 = 1_000_000_000_000;
