@@ -9,7 +9,8 @@ ORE, which mine they pick and how a farm is shaped.
     npm run sim -- --scenario baseline --days 90
     npm run sim -- --quick             # small population, for iterating
     npm run sim -- --list              # scenario keys
-    npm run sim -- --selfcheck-only    # seven harness self-checks, no matrix
+    npm run sim -- --selfcheck-only    # the harness self-checks, no matrix
+    npm run sim -- --curve-phase       # the curve-phase scenario on its own, in seconds
     npm run sim -- --inspect --bots 0 --humans 400 --days 90   # one run, full summary JSON
 
 Outputs land in `scripts/sim/out/` (gitignored): per-scenario `*.mines.csv`, `*.daily.csv`,
@@ -59,6 +60,10 @@ Assumed by the harness, and therefore the only soft numbers in the results:
 - **Not modelled**: rate limits, circuit breakers, admin restrictions, and the fact that a wallet
   signature challenge is free for a script (the harness assumes it is always passed). Prices are
   constant per token, so discovery USD caps are evaluated at launch prices.
+- **Curve-phase scenario** (`scripts/sim/curve.ts`): trade arrivals are a seeded draw per
+  block (25% chance of a buy, 15% of a sell, uniform sizes), and one farm shape - every wallet on
+  one device and one network. Discovery, ORE and rank are not part of it: it prices the curve, the
+  cap and the sell capacity.
 
 ## Headline results
 
@@ -374,7 +379,8 @@ a hold destroys nothing.
 
 ## Harness self-checks
 
-`npm run sim` runs seven checks and prints them in `summary.md`:
+`npm run sim` runs the seven harness checks below, plus the five curve-phase checks that
+`scripts/sim/curve.ts` asserts, and prints them all in `summary.md`:
 
 | Check | Result (seed 20,260,922) |
 | --- | --- |
@@ -385,6 +391,57 @@ a hold destroys nothing.
 | Discovery caps hold end to end | PASS - token daily/period, global daily and per-request caps are never exceeded |
 | ORE ledger closes (`earned == held + overflow + spent`) | PASS - 69,354,528 = 3,300,733 + 854,415 + 65,199,380 |
 | Harness RNG matches `shared/random.ts` | PASS - HMAC mean 0.4966 / chi² 6.3, harness mean 0.5036 / chi² 7.9 (threshold 27.88 for 9 degrees of freedom) |
+
+
+## Curve-phase mining: what mining does to a curve
+
+Mining is paid out of the market's own bonding-curve token inventory before graduation, so it is a
+market question rather than an accounting one — and nothing else in this harness models a curve.
+`scripts/sim/curve.ts` does, on the real rules: the program's own quote math and spot price
+(`shared/program.ts`), the launch-time cap, rate, room and sell capacity (`shared/curve.ts`), and
+the same reward index the Worker runs (`shared/rewardIndex.ts`), with the power pointed at the mine
+split into honest players and one farm.
+
+Two curves run over the same seeded trade sequence, one that mines and one that does not, so the gap
+between them is the **price impact of the emission itself**, measured. It runs as the last section of
+every `summary.md` and on its own in a few seconds:
+
+    npm run sim -- --curve-phase --days 90
+
+| Day | Price (SOL) | Price with mining vs without | Curve inventory | Cap spent | Mined by humans | Mined by the farm | Farm share | Sell capacity (SOL) | Sell capacity (tokens) | Capped out |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 3.225e+1 | 0.17% | 936,870,570 | 3.3% | 828,908 | 746,092 | 47.4% | 0.21 | 6,549,431 | no |
+| 7 | 3.530e+1 | 1.17% | 890,759,292 | 23.3% | 8,028,065 | 2,996,935 | 27.2% | 1.45 | 42,931,076 | no |
+| 30 | 4.891e+1 | 5.06% | 739,957,277 | 100.0% | 41,858,695 | 5,391,305 | 11.4% | 6.19 | 152,757,311 | yes |
+| 60 | 6.031e+1 | 3.62% | 666,389,356 | 100.0% | 41,858,695 | 5,391,305 | 11.4% | 10.19 | 226,325,247 | yes |
+| 90 | 7.127e+1 | 2.60% | 613,025,364 | 100.0% | 41,858,695 | 5,391,305 | 11.4% | 13.69 | 279,689,252 | yes |
+
+5,000 honest wallets arriving over 30 days plus a 10,000-wallet farm, a 945,000,000 token curve
+inventory, the default 5% cap (47,250,000 tokens) over a 30-day runway, seed 20,260,922.
+
+Four things this run settles:
+
+1. **The cap is real and the runway is the reason it lasts.** The 5% budget is spent on **day 30** of
+   a 30-day runway, exactly where the launch arithmetic puts it — and from that block on, curve-phase
+   emission is over for everyone until the market graduates. Mined total: 47,250,000 of 47,250,000,
+   never a base unit more.
+2. **Mining moves the price and nothing else.** Against the same curve over the same trades with no
+   mining at all, the emission is worth **+5.06% at its peak on day 30** (and 2.60% by day 90, as
+   trading catches up). Sell capacity is the real SOL the curve holds — 0.21 SOL on day 1, 13.69 by
+   day 90 — and it moves only when somebody buys: mined tokens bring no SOL with them, so the two
+   curves' sell capacity is the same curve's worth of buying, not a lamport more.
+3. **A farm's share of the cap is damped but not zero, and it is front-loaded.** The farm takes
+   **47.4% of day 1's emission** — before the honest population has aged through the maturity ramp —
+   and 11.4% over the whole 30 days the cap lasts. The configured device and network factors are what
+   hold it there (10,000 wallets on one device keep the 1.5% floor), and this is the row that prices
+   them on a budget rather than on a stream: a finite cap is what a farm can actually exhaust.
+4. **Conservation holds to the base unit.** Curve inventory + mined out + bought - sold back == the
+   launch inventory, residual 0.00e+0 whole tokens, and the positions the index credited hold
+   47,249,999.992 of the 47,250,000 emitted — the 0.008 token difference is index rounding dust that
+   the program also leaves unallocated.
+
+The scenario asserts all five of its own checks (conservation, the cap, credited ≤ emitted, mining
+never lowers the price, mining never adds sell capacity) and `npm run sim` fails if any of them does.
 
 
 ## Limitations

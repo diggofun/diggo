@@ -84,6 +84,37 @@ while a block landing exactly on the activation instant is. Both boundaries are 
 of its activation instant and the mine's cursor, which is what makes the credited-block count exact
 for a crew that switched mines mid-window.
 
+### Which side pays: the curve phase
+
+Mining works from the launch block, not from graduation. While a market is still on its bonding
+curve, the blocks it pays are drawn out of **that curve's own token inventory** instead of the
+Mining Reserve, so a mined token moves the token side of the curve exactly where a bought one moves
+it and the SOL side does not move at all. `shared/curve.ts` is the client-and-Worker mirror of the
+rule (`isCurveMiningOpen`, `curveMiningRoom`, `curveMiningBlockReward`, `curveSellCapacity`),
+and `programs/diggo-protocol/src/lib.rs` is the authority for it.
+
+- **The budget is a launch parameter and immutable.** `curve_mining_bps` of the curve's initial
+  token inventory, default 5% and capped at 10%, snapshotted into `LaunchMarket.curve_mining_cap`
+  at launch. Nothing writes it again, and `migrate_account` can only default it to zero, so a
+  legacy market can never be handed an allowance it was not launched with.
+- **The rate is the cap over a runway**, not the mine's block reward: spread over
+  `curve_mining_runway_days` (30 by default) and flat, so a 5% budget is a month of rewards rather
+  than the hours a reserve-sized reward would spend it in. The reserve-runway schedule still steps
+  down on the mine's own epochs, because it governs the reserve the mine inherits at graduation.
+- **When the cap is spent, curve-phase emission stops.** The mine is idle, not finished: it keeps
+  its whole Mining Reserve, `FULLY_MINED` keeps its existing meaning of "nothing more to pay", and
+  graduation turns mining back on out of the reserve. The off-chain index follows the same rule
+  (`reconcileEmissionSource` in `worker/mining.ts`), so indexed accrual and on-chain emission can
+  never disagree about which side paid.
+- **Mined tokens bring no SOL.** Sell capacity is the real SOL the curve holds, which the quote path
+  caps every payout at, so pre-graduation sells are limited to what buyers put in. The API reports
+  it read-only as `sellCapacity` and the cap's progress as `curveMining`.
+- **Conservation holds through the phase.** Tokens in the curve plus mined out plus sold, net of
+  buy-backs, is the inventory the launch created; graduation seeds the pool with the post-mining
+  inventory and leaves the mined-but-unclaimed tokens in the market vault for the positions the
+  index already credited. `npm run sim -- --curve-phase` prices the whole scenario on the real
+  rules, including the price impact of the emission against the same curve with no mining at all.
+
 ## 6. Reserves, reductions and FULLY_MINED
 
 - The **Mining Reserve** and each token's **Discovery Reserve** are program-controlled. Neither a
@@ -91,7 +122,8 @@ for a crew that switched mines mid-window.
   discovery path.
 - Mining never mints. Supply is fixed at launch, mint and freeze authorities are revoked, and the
   default allocation has 0% creator and platform premine.
-- Block rewards are capped at the remaining reserve. When it runs out the mine is `FULLY_MINED`:
+- Block rewards are capped at the remaining reserve — or, before graduation, at the curve-mining cap
+  the launch set (see section 5). When the source runs out the mine is `FULLY_MINED`:
   mining stops, trading continues, and the crew can move to another coin.
 - Rewards reduce on a configured epoch schedule (e.g. 10,000 → 7,500 → 5,625 → 4,219). The
   configured minimum is a floor on how far one step may travel and can never raise a reward, so the
@@ -221,6 +253,14 @@ the floodgates nor stop a subsystem. Anti-abuse budgets, thresholds and alert ru
 in **`shared/riskOps.ts`** (`RISK_OPS`). Both are covered by unit tests, so the tuned values are the
 executable specification.
 
+Curve-phase mining adds one section to that object: `DIGGO_CONFIG.curve` holds the launch defaults
+and bounds for the pre-graduation emission budget (`defaultMiningBps`, `maxMiningBps`,
+`defaultRunwayDays`, `maxRunwayDays`) and the two windows the indexed 24h metrics are measured
+over (`changeBaselineSeconds`, `volumeWindowSeconds`). The share and the runway are per-launch
+parameters in the sense that a launcher picks them for each mine; these are the defaults a launch
+that does not pick gets, and they are pinned to the program's own constants by
+`shared/curve.test.ts`, because a default the program would reject is a launch that cannot land.
+
 The price oracle's bounds live in `DIGGO_CONFIG.oracle` (`shared/config.ts`) with every other
 tunable, and `worker/oracle.ts` re-exports them as `ORACLE_LIMITS` for its own callers, so one config
 object still describes the whole deployment. Its environment variables — `JUPITER_PRICE_URL`,
@@ -235,6 +275,7 @@ working default, so an unconfigured deployment still reads a real price.
 | --- | --- |
 | Config, risk-ops parameters | `shared/config.ts`, `shared/riskOps.ts` |
 | Crew, ORE, streak, reward index, rarity, discovery math | `shared/crew.ts`, `shared/ore.ts`, `shared/streak.ts`, `shared/rewardIndex.ts`, `shared/rarity.ts`, `shared/discovery.ts`, `shared/random.ts` |
+| Curve-phase mining: cap, rate, runway, sell capacity, budget selection | `shared/curve.ts` |
 | Activation, streak, report, claims | `worker/mining.ts` |
 | Discoveries | `worker/discovery.ts` |
 | Auth, challenges, sessions | `worker/auth.ts` |
