@@ -8,6 +8,10 @@
  * locked pool, and after that the program only accepts pool buys and sells (docs/ONCHAIN.md). The
  * quote and the slippage floor shown here come from the shared mirrors of the program's own math,
  * so what the form promises is what the program will enforce.
+ *
+ * While a market is still on its curve its mining is paid out of that curve's own token inventory,
+ * which adds no SOL to it, so a seller can only ever take out what buyers put in. That ceiling is
+ * stated here as the curve's sell capacity rather than left for the quote to reveal.
  */
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
@@ -15,7 +19,7 @@ import { Check, Radio, TrendingUp, Wallet, Zap } from "lucide-react";
 import type { MarketTrade, TokenSummary } from "../../shared/types";
 import { recordTrade } from "../api";
 import { track } from "../analytics";
-import { compact } from "../format";
+import { compact, solAmount } from "../format";
 import { requestWalletMenu } from "../wallet";
 import {
   address,
@@ -164,6 +168,11 @@ export function SwapPanel({
   const slippageBps = DEFAULT_SLIPPAGE_BPS;
   const parsedAmount = Number(amount);
   const venue = venueState?.venue ?? null;
+  /**
+   * Pre-graduation, from the venue the chain reports once it is read; before that read lands the
+   * token summary's own onCurve flag is the answer, and it is the same fact.
+   */
+  const onCurve = venue !== null ? venue === "curve" : token.curveMining.onCurve;
   const poolUnreadable = venue === "pool" && !venueState?.pool;
   /**
    * The quote for the current input, on the venue the market is actually on: the curve's own
@@ -239,7 +248,10 @@ export function SwapPanel({
         <div className="swap-price-tag">
           <span>SPOT PRICE</span>
           <strong>{spotPriceSol < 0.000001 ? spotPriceSol.toExponential(3) : spotPriceSol.toFixed(9)} SOL</strong>
-          <span>{venue === "pool" ? "LOCKED POOL · GRADUATED" : "BONDING CURVE"}</span>
+          <span>{onCurve ? "BONDING CURVE" : "LOCKED POOL · GRADUATED"}</span>
+          <span className={"badge " + (onCurve ? "badge-curve" : "badge-reserve")}>
+            <i aria-hidden="true" /> {onCurve ? "Curve emission" : "Reserve emission"}
+          </span>
         </div>
       </div>
       <div className="swap-grid">
@@ -321,6 +333,20 @@ export function SwapPanel({
                 ? " The market's locked pool could not be read — retry in a moment."
                 : " Retry in a moment."}
             </p>
+          )}
+          {onCurve && (
+            <div className="swap-capacity">
+              <span>SOL AVAILABLE TO SELLERS ON THE CURVE</span>
+              <strong>
+                {solAmount(token.sellCapacity.sol)} <small>SOL</small>
+              </strong>
+              <p>Before graduation, sells are limited to the SOL buyers have put into the curve.</p>
+              {token.sellCapacity.tokens !== null && (
+                <small>
+                  about {compact(token.sellCapacity.tokens)} ${token.symbol} would take all of it
+                </small>
+              )}
+            </div>
           )}
           <p className="swap-note">
             {venue === "pool" ? (

@@ -553,6 +553,16 @@ a { color: inherit; text-decoration: none; }
 .reduction-bar:first-child i { background: var(--orange); }
 .reduction-bar span { text-align: center; font: 800 8px var(--font-mono); color: var(--muted); }
 .reduction-schedule p, .fully-mined-progress p { margin: 0; color: var(--muted); font-size: var(--text-sm); line-height: 1.6; }
+/* A curve mine has no epoch steps to draw: one flat bar stands for the rate it pays until its launch
+   cap runs out (see describeEmissionWindow in src/mineView.ts). */
+.reduction-bars.is-flat .reduction-bar i { background: var(--orange); }
+/* The one-line status of a mine that cannot pay: a spent reserve, or a curve cap awaiting graduation. */
+.mine-status-note { margin: 0 0 var(--space-4); padding: 10px 12px; border: 1px solid currentColor; border-radius: var(--radius-sm); font: 700 var(--text-xs)/1.5 var(--font-mono); }
+.mine-status-note.is-paused { color: var(--orange-ink); background: rgba(255,97,56,.08); }
+.mine-status-note.is-danger { color: var(--danger); background: rgba(199,54,31,.06); }
+/* A curve mine's emission is a phrase rather than a countdown ("Awaiting graduation"), so the value
+   steps down from the numeric 24px to sit inside the metric panel's column. */
+.metric-panel strong.is-phrase { font-size: 19px; line-height: 1.2; letter-spacing: -.02em; }
 
 /* Discoveries (spec 55, 56, 57) */
 .discoveries { padding: 40px 0 90px; }
@@ -806,6 +816,10 @@ body.has-modal { overflow: hidden; }
 .badge-paused { color: var(--orange-ink); background: rgba(255,97,56,.1); }
 .badge-idle { color: var(--muted); }
 .badge-danger { color: var(--danger); background: rgba(199,54,31,.08); }
+/* Which side a mine's blocks are paid from: the bonding curve's own launch cap before graduation,
+   the Mining Reserve after it (see emissionSource in shared/types.ts). */
+.badge-curve { color: var(--ink); background: var(--acid); }
+.badge-reserve { color: var(--muted); background: var(--paper-3); }
 /* The .badge primitive in its square, clickable form: a mine's token symbol, or a jump to its page.
    Everything except the shape comes from .badge, so a change to the badge scale carries over. */
 .ledger-token { padding: 6px var(--space-2); border-color: var(--line); border-radius: var(--radius-sm); background: white; color: var(--ink); letter-spacing: normal; }
@@ -1007,7 +1021,9 @@ body.has-modal { overflow: hidden; }
 .report-ore strong { font-size: 26px !important; font-variant-numeric: tabular-nums; }
 .report-ore small { display: block; margin-top: 4px; font: 700 9px var(--font-mono); color: #3c3e33; }
 .report-ore { position: relative; }
-.report-ore-art { position: absolute; right: 10px; bottom: 8px; width: 40px; height: 40px; object-fit: contain; opacity: .9; }
+/* The cart gets a real size instead of a thumbnail, and the copy keeps clear of it. */
+.report-ore-art { position: absolute; right: 12px; top: 12px; width: 64px; height: 64px; object-fit: contain; }
+.report-ore > strong, .report-ore > small { padding-right: 70px; }
 .report-actions { position: relative; }
 .collect-burst { position: absolute; right: 60px; top: 50%; width: 0; height: 0; pointer-events: none; }
 .collect-burst i { position: absolute; width: 12px; height: 12px; border: 2px solid var(--ink); border-radius: 50%; background: var(--acid); animation: coin-burst 900ms var(--ease-out) forwards; }
@@ -1040,14 +1056,41 @@ body.has-modal { overflow: hidden; }
 .discovery-card.rarity-rare { border-top-color: var(--rarity-rare); }
 .discovery-card.rarity-epic { border-top-color: var(--rarity-epic); }
 .discovery-card.rarity-legendary, .discovery-card.rarity-mythic { border-top-color: var(--rarity-legendary); background: linear-gradient(180deg, #fff6df, var(--paper-2) 40%); }
-.discovery-card-art { width: 100%; height: 110px; object-fit: contain; }
+/* A proper square for the find, centred in the card: the art keeps its own size instead of
+   shrinking into a wide, mostly empty strip. */
+.discovery-card-art { width: min(100%, 152px); height: auto; aspect-ratio: 1; margin: 2px auto var(--space-1); object-fit: contain; }
 /* A player who asked for less motion still sees the find, just without the entrance. */
 .discovery-card.is-quiet { animation: none; }
-.discovery-event-art { width: 84px; height: 84px; object-fit: contain; }
-.discovery-event:has(.discovery-event-art) { display: grid; grid-template-columns: 84px 1fr; align-items: center; gap: var(--space-4); }
+.discovery-event-art { width: 112px; height: 112px; object-fit: contain; }
+.discovery-event:has(.discovery-event-art) { display: grid; grid-template-columns: 112px 1fr; align-items: center; gap: var(--space-4); }
 .discovery-grid .skeleton-card { height: 170px; }
 
 /* Market polish */
+/* A token the worker has no honest 24h change for (change24h is null, never zero): the market
+   surfaces show the indexed trades instead, in a neutral colour. */
+.ticker .unknown { color: #6e7066; }
+.change.unknown { background: var(--paper-3); color: var(--muted); }
+/* Curve-phase mining on the market surfaces: the same curve cap the mine info panel reports, at
+   card and token page scale. Mining spends the curve's token inventory and never its SOL. */
+.progress.is-curve i { background: var(--ink); }
+.card-curve-line { margin: -6px 0 0; font: 700 8px/1.5 var(--font-mono); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.selected-flags { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.selected-curve { display: grid; gap: var(--space-3); padding-block: var(--space-5); border-bottom: 1px solid var(--ink); }
+.selected-curve-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.selected-curve-head > span:last-child { font: 800 var(--text-xs)/1.3 var(--font-mono); color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+.selected-curve-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-3); }
+.selected-curve-stats > div { display: grid; gap: 4px; padding: var(--space-3); border: 1px solid var(--line); background: var(--paper-2); }
+.selected-curve-stats span { font: 800 9px var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.selected-curve-stats strong { font: 900 20px var(--font-mono); }
+.selected-curve-stats strong small { font: 700 9px var(--font-mono); color: var(--muted); }
+.selected-curve p { margin: 0; max-width: 78ch; color: var(--muted); font-size: var(--text-sm); line-height: 1.6; }
+.swap-capacity { display: grid; gap: 5px; padding: 12px; border: 1px solid var(--ink); border-radius: var(--radius-sm); background: var(--paper-2); }
+.swap-capacity > span { font: 800 9px var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.swap-capacity strong { font: 900 18px var(--font-mono); }
+.swap-capacity strong small { font: 700 9px var(--font-mono); color: var(--muted); }
+.swap-capacity p { margin: 0; font-size: var(--text-sm); line-height: 1.5; }
+.swap-capacity small { color: var(--muted); font: 700 var(--text-xs)/1.4 var(--font-mono); }
+.swap-price-tag .badge { display: inline-flex; margin-bottom: 0; }
 .token-card { display: block; color: inherit; }
 .token-card .card-cta { display: inline-flex; align-items: center; gap: 4px; padding: 7px 10px; border: 1px solid var(--ink); border-radius: var(--radius-sm); font: 900 10px/1 Inter, sans-serif; text-transform: uppercase; letter-spacing: .06em; transition: background-color var(--dur-fast); }
 .token-card:hover .card-cta { background: var(--acid); }
@@ -1084,12 +1127,27 @@ body.has-modal { overflow: hidden; }
 .ui-gallery-tiers figure { margin: 0; display: grid; gap: var(--space-2); align-content: start; }
 .ui-gallery-tiers figcaption { color: var(--muted); font: 800 var(--text-xs)/1.4 var(--font-mono); text-transform: uppercase; letter-spacing: .08em; }
 .ui-gallery-note { margin: 0; color: var(--muted); font-size: var(--text-sm); line-height: 1.6; }
-.ui-gallery-sound { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .ui-gallery-art { padding: var(--space-4); border: 1px dashed var(--line); border-radius: var(--radius-md); background: var(--paper-2); place-items: center; }
-.ui-gallery-art-img { width: 96px; height: 96px; object-fit: contain; }
-.ui-gallery-art-missing { width: 96px; height: 96px; display: grid; place-items: center; border-radius: var(--radius-sm); background: var(--paper-3); color: var(--muted); font: 800 9px/1.3 var(--font-mono); text-align: center; text-transform: uppercase; }
+.ui-gallery-art-img { width: 132px; height: 132px; object-fit: contain; }
+.ui-gallery-art-missing { width: 132px; height: 132px; display: grid; place-items: center; border-radius: var(--radius-sm); background: var(--paper-3); color: var(--muted); font: 800 9px/1.3 var(--font-mono); text-align: center; text-transform: uppercase; }
+/* Scene art and the social card are reviewed at their own ratio, not in a square thumbnail. */
+.ui-gallery-wide { grid-column: 1 / -1; }
+.ui-gallery-wide-art { width: 100%; max-width: 760px; height: auto; aspect-ratio: 16 / 9; object-fit: contain; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper-3); }
+.ui-gallery-wide-art.is-social { aspect-ratio: 1200 / 630; }
+.ui-gallery-tiers > .ui-gallery-brand { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-5); padding: var(--space-4); border: 1px dashed var(--line); border-radius: var(--radius-md); background: var(--paper-2); }
+.ui-gallery-brand img { display: block; height: 44px; width: auto; }
+.ui-gallery-brand .is-mark { height: 44px; }
+/* Every tile in the gallery is captured, so the art skips the fade-in the product uses: a
+   screenshot taken mid-transition would otherwise show an empty box over a perfectly good file. */
+.ui-gallery .game-art { transition: none; }
 
 
 .mine-info-head { flex-wrap: wrap; }
 .mine-info-loading { display: grid; gap: var(--space-3); padding-block: var(--space-5); }
 .mine-info-loading .skeleton { height: 120px; }
+/* The emission source badge sits with the status badge, on the header the two of them describe. */
+.mine-info-flags { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+/* Curve-phase budget: what the cap has emitted, its rate, and what is left of its runway. */
+.curve-mining-meta { display: flex; flex-wrap: wrap; gap: 6px var(--space-4); font: 700 var(--text-xs)/1.5 var(--font-mono); color: var(--muted); }
+.curve-mining-meta b { color: var(--ink); }
+.curve-mining-source { color: var(--muted); font-size: var(--text-xs); }

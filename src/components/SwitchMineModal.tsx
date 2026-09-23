@@ -8,6 +8,7 @@
 import { Pickaxe, Repeat2, X } from "lucide-react";
 import type { TokenSummary } from "../../shared/types";
 import { compact } from "../format";
+import { emissionEnded } from "../mineView";
 import { TokenOrb } from "./TokenOrb";
 import { useDialog } from "./useDialog";
 
@@ -39,7 +40,8 @@ export function SwitchMineModal({
   onSwitch,
   onClose,
 }: SwitchMineModalProps) {
-  const available = tokens.filter((token) => token.status !== "FULLY_MINED");
+  /* A mine that cannot pay another block is not worth switching to, whichever end of it ran dry. */
+  const available = tokens.filter((token) => !emissionEnded(token.status, token.curveMining));
   const dialogRef = useDialog<HTMLElement>(onClose);
 
   return (
