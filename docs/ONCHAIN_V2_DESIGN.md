@@ -9,10 +9,24 @@ there is no account migration path.
 The product owner's final decisions of 2026-09-23 are integrated throughout and the
 alternatives they superseded are removed: creator pays 100% by default with on-chain
 sponsorship events on top (1.4, 1.7); no per-player VRF, an epoch seed committed to a future
-slot's `SlotHashes` entry (4.1); a flat refundable bond with a no-bond starter mode instead of
-an operator attestation (3.2, 5); discovery caps in SOL priced by our own pool TWAP (4.3);
+slot's `SlotHashes` entry (4.1); no bond and no starter mode, because every wallet mines at full
+efficiency from its first block and posting a bond is refused, with the withdrawal path kept for
+lamports parked before the retirement (3.2, 5); discovery caps in SOL priced by our own pool
+TWAP (4.3);
 Squads 2-of-3 with a timelock, then a program freeze after audit (6); fresh deploy, no
 migration (7). Section 9.1 lists them as decisions and section 9.2 lists what is still open.
+
+**Amendment: the bond and the starter penalty are retired.** A later decision of 2026-09-23
+removes the last pay-to-play surface. Nothing a player does costs a lamport beyond the rent and
+the network fee of the transactions they sign: `post_bond` is refused with `BondRetired` (6097),
+`STARTER_EFFICIENCY_BPS` gates nothing, `mining_power(levels, maturity_bps)` takes no bond and no
+efficiency factor, every wallet is armed in the full tranche, and discovery eligibility is the
+milestone history alone. There is no fee floor either: no instruction charges a minimum fee, and
+the only protocol fee anywhere is the trade split, a bps share of a gross trade that is capped,
+rounds down and can be zero on a small trade. `request_unbond` and `withdraw_bond` stay live with
+the seven-day cooldown still enforced, so lamports parked before the retirement still come back.
+Sections 1.5, 3.2, 5, 8.2, 8.5 and 9 carry the corrected text; where an older paragraph
+disagrees with this amendment, this amendment wins.
 
 ## 0. Why, and what "the bigger part" means
 
@@ -49,8 +63,8 @@ This section is a hard product constraint and the rest of the design bends to it
 program serves every coin and the owner pays for it once; creating a coin costs about one cent
 of SOL and the creator pays it by default; and the user's ongoing cost is transaction fees
 only, never a charge per roll.** Sponsorship events (1.7) can move the creator's launch cost
-onto a sponsor vault, and the only deposit anyone else makes is the player's refundable bond
-(3.2), which is returned.
+onto a sponsor vault, and nobody else posts a deposit: a player pays only the network fee of the
+transactions they sign and the rent of the accounts they create (1.5, 3.2).
 
 ### 1.1 One-time program cost, and no per-coin deploys
 
@@ -70,7 +84,7 @@ cutover (section 7) and nothing is deployed per coin, ever.
 Growth is the only thing that costs more later. ProgramData is exactly the `.so` length
 plus 45 bytes, so any growth is an `ExtendProgram` at **6,960 lamports per byte**, capped at
 10,240 bytes added per instruction and 10 MB total. v2 grows the program with the curve
-tables, the bond, sponsor and epoch-seed logic and the discovery math, so budget **at most one
+tables, the sponsor and epoch-seed logic and the discovery math, so budget **at most one
 16 KB extend in two calls: 0.114 SOL**, and treat binary size as a real design requirement:
 
 - read the `SlotHashes` sysvar directly instead of linking a randomness vendor SDK or CPI-ing
@@ -228,17 +242,27 @@ them is a protocol requirement:
 
 These lamports are spent, not deposited: the coin account and the vault can never be closed
 while supply exists. The one realistically closable account is a `MiningPosition` once it
-is fully claimed and abandoned, which returns 0.00139896 SOL to the player. The player's bond
-(3.2) is a deposit rather than a spend, and it comes back.
+is fully claimed and abandoned, which returns 0.00139896 SOL to the player. No player-side
+lamport is a deposit either, now that the bond is retired (3.2): the `PlayerAccount` rent and
+the transaction fee are the whole of it (1.5).
 
 ### 1.5 Player-side costs
+
+A player's cost is **the network fee of the transactions they sign, plus rent**, and nothing
+else. There is no bond, no deposit, no subscription and no fee floor: no instruction charges a
+minimum fee to play, mine, roll or claim. The only protocol fee in the system is the trade split
+of section 6, a bps share of a gross trade that is capped at `MAX_TRADING_FEE_BPS` (100 = 1% over
+both shares), rounds down, and can therefore be zero on a small trade.
 
 `PlayerAccount` is 216 bytes: 159 for the game state and 57 for the bond block
 (`bond_lamports u64`, `bond_locked_at i64`, `unbond_available_at i64`,
 `bond_source u8`, `bond_sponsor_vault Pubkey`, plus the padding that keeps the struct
-8-byte aligned). It is allocated at its full size on the first `activate`, so posting a bond
-never reallocs an account, and the bond lamports themselves sit in the PDA's balance above its
-rent-exempt minimum, so they need no account of their own.
+8-byte aligned). That block is **legacy layout and nothing more** since the retirement in 3.2:
+nothing writes it except the withdrawal path of a bond posted before the change, a wallet that
+never posted one reads zeros, and no tranche, power, eligibility or maturity rule consults it. It
+is allocated at its full size on the first `activate`, so the layout never reallocs, and the
+lamports an old bond parked sit in the PDA's balance above its rent-exempt minimum, so they need
+no account of their own.
 
 The rest of the trimming is unchanged: `owner` drops because it is the PDA seed and every
 authority check is a `seeds` constraint (32 B); `grace_until` drops because it is
@@ -253,8 +277,8 @@ is transient and returns to the crank that settles it.
 | --- | --- | --- | --- |
 | First `activate` (creates `PlayerAccount`, 216 B) | 0.00239424 | ~0.000025 | 0.00242 SOL, about $0.36 |
 | First `assign_power` for a coin (creates `MiningPosition`, 73 B) | 0.00139896 | ~0.00003 | 0.00143 SOL |
-| `post_bond` (moves the bond into the PDA balance) | 0 | ~0.00002 | 0.07 SOL deposited, refundable |
-| `request_unbond` / `withdraw_bond` | 0 | ~0.00002 | refunds 0.07 SOL |
+| `post_bond` (retired) | 0 | ~0.00002 | refused with `BondRetired`; nothing moves |
+| `request_unbond` / `withdraw_bond` (a bond posted before the retirement) | 0 | ~0.00002 | refunds what the PDA balance holds, after the cooldown |
 | `activate` after that | 0 | ~0.000025 | 0.000025 |
 | `upgrade_crew` | 0 | ~0.000055 | 0.000055 |
 | `switch_mine` | 0 | ~0.00006 | 0.00006 |
@@ -262,13 +286,13 @@ is transient and returns to the crank that settles it.
 | `create_discovery_roll` | 0 | ~0.00004 | 0.00004 |
 | `settle_discovery` (anyone; closes the opportunity PDA) | refunds 0.00169824 | ~0.00005 | net credit |
 
-The one-time player cost is 0.0038 SOL of spent rent, about $0.57, plus a 0.07 SOL bond that is
-returned (3.2). Every daily action after that is 0.000025 to 0.00006 SOL. `activate` stays
-free in the sense the spec demands: no ORE, no tokens, no payment, only the network fee the
-player pays for any Solana transaction. Crew progression remains closed to real money, because
-the only way to spend ORE is `upgrade_crew` and the only way to get ORE is to play. A player
-who posts no bond mines in starter mode at reduced efficiency and spends nothing beyond the
-0.00242 SOL of `PlayerAccount` rent.
+The one-time player cost is 0.00242 SOL, all of it the `PlayerAccount` rent plus the network fee
+of the transaction that creates it, and every daily action after that is 0.000025 to 0.00006
+SOL. `activate` stays free in the sense the spec demands: no ORE, no tokens, no payment, only
+the network fee the player pays for any Solana transaction. Crew progression remains closed to
+real money, because the only way to spend ORE is `upgrade_crew` and the only way to get ORE is to
+play. A wallet that posts nothing mines at full efficiency from its first block (3.2), and the
+only lamports it can ever take back are the rent of an account it closes.
 
 ### 1.6 Discovery randomness: cost, and why it is never pay-to-play
 
@@ -307,7 +331,8 @@ Event kinds: `LaunchRentSubsidy` pays the mint, `Coin` and vault rent at
 `launch_token`; `PlatformTradeFeeWaiver` pays the platform share of the trading fee at
 accrual, so the trader pays the creator's share only and the treasury is kept whole from the
 vault; `PlayerAccountSubsidy` pays a player's `PlayerAccount` rent at
-`initialize_player`; `PlayerBondSubsidy` posts a player's bond from the vault (3.2).
+`initialize_player`. `PlayerBondSubsidy` is retired with the bond (3.2): the kind byte may still
+be decoded from an event created before the retirement, and no instruction accepts one.
 
 Rules, all enforced on-chain:
 
@@ -322,8 +347,9 @@ Rules, all enforced on-chain:
 - Withdrawal belongs to the sponsor owner alone, is capped at the unspent balance, and requires
   the event to have ended or to be closed with `close_sponsor_event`. Unspent lamports are
   never the protocol's.
-- A sponsor-funded bond is marked `bond_source = sponsor` with the vault recorded, is **not
-  withdrawable by the player**, and returns to the vault on exit (3.2).
+- No event may post or fund a bond: `PlayerBondSubsidy` is retired and no instruction accepts it
+  (3.2). Lamports an old sponsor-funded bond left in a PDA balance still return to the vault the
+  player recorded, through the same `withdraw_bond` path.
 - Sponsorship is not governance. The sponsor vault belongs to the owner's own wallet, it is not
   part of the Squads configuration, and it can never be a program upgrade or config authority.
 ## 2. Inventory of off-chain state and decisions
@@ -345,13 +371,13 @@ on it for correctness. "Removed" means the mechanism is deleted.
 | 9 | Maturity ramp (progression and power) | config ramps vs Worker `now` | On-chain vs `created_slot` and `created_at` | Time as the anti-Sybil resource, unarguable by the operator |
 | 10 | Block eligibility | Worker `isEligibleForBlock` | On-chain, same half-open rule | Already mirrored; the mine ledger is on-chain |
 | 11 | Discovery outcome (whether, which token, rarity, amount) | Worker commit-reveal with `DISCOVERY_SECRET` | On-chain, derived from the epoch seed (4.1) | The core RNG discretion, gone: the seed is a recorded fact, not a choice |
-| 12 | Discovery eligibility (age, active days, crew tier, maturity, bond) | `shared/discovery.ts` | On-chain | Caps the roll before it happens |
+| 12 | Discovery eligibility (age, active days, crew total level, maturity) | `shared/discovery.ts` | On-chain | Caps the roll before it happens; the bond is out of the rule |
 | 13 | Discovery caps (account/day, account/week, coin/epoch, global/day, per-call) | D1 aggregates in USD | `PlayerAccount` windows, `Coin` epoch counters, `GlobalBudget` PDA, all denominated in lamports | Damage bound that must survive a compromised Worker, priced by our own pool TWAP (4.3) |
 | 14 | Rarity table | `DIGGO_CONFIG.rarity.tiers` | `ProtocolConfig` table | Rarity is a value class; keep it auditable and timelocked |
 | 15 | Price for value normalisation | `worker/oracle.ts` (Jupiter, Pyth) | Pool TWAP kept by `apply_pool_swap` | Removes the off-chain oracle: the only price the program trusts is its own AMM |
 | 16 | Discovery payout (`claim_discovery`) | keeper-signed | `settle_discovery`, permissionless | Idempotent per opportunity PDA, no keeper |
 | 17 | Mining reward claim | already user-signed `claim_rewards` | unchanged | Already correct |
-| 18 | Risk score, holds, bans | `worker/risk.ts` | Off-chain advisory only, with no on-chain effect | Needs device and network signals that cannot be consensus facts; the bond (5) takes over its on-chain role |
+| 18 | Risk score, holds, bans | `worker/risk.ts` | Off-chain advisory only, with no on-chain effect | Needs device and network signals that cannot be consensus facts; maturity, the milestone gates and the caps are what the chain can hold instead (5) |
 | 19 | Circuit-breaker pauses | guardian authority | Timelocked, self-expiring and narrow (6) | Cannot move value, but is still discretion, so bound it in time and put it behind governance |
 | 20 | Fees: accrual, split, payout | on-chain accrual, authority-signed `claim_platform_fees` | Fixed split to fixed destinations, permissionless sweep; a fee-waiver event can pay the platform share from a sponsor vault | Removes per-call routing discretion |
 | 21 | Keeper power sync | `sync_crew_power` | **Removed** | Replaced by on-chain derivation (8) |
@@ -360,7 +386,7 @@ on it for correctness. "Removed" means the mechanism is deleted.
 | 24 | Price oracle (Jupiter, Pyth) | `worker/oracle.ts` | Off-chain advisory and display only | Screen copy and cross-checks; no instruction consumes it |
 | 25 | Launch metadata, achievements, cosmetics, notifications, leaderboards | Worker and D1 | Off-chain | Not value-bearing |
 | 26 | **Who pays for a launch** | the creator, with no alternative | `SponsorVault` + `SponsorEvent` + `SponsorGrant` on-chain (1.7) | The only way to move launch cost off the creator: bounded per coin and per wallet, and unable to touch the game |
-| 27 | **Anti-bot economic commitment** | none | Refundable bond in `PlayerAccount`, plus starter mode (3.2, 5) | A flat, identical, non-power-bearing cost that a cycled balance cannot fake and no operator can waive |
+| 27 | **Anti-bot economic commitment** | none | **None**: the refundable bond and starter mode were tried and retired (3.2, 5) | The deposit gated honest players as hard as it gated farms, so what remains is maturity, eligibility and the caps |
 
 ## 3. On-chain Player account v2
 
@@ -386,11 +412,11 @@ untouched.
 | `day_index`, `week_index` | `u16` | Discovery budget windows, 179 years of days |
 | `spent_day_lamports`, `spent_week_lamports` | `u64` | Caps, charged at roll creation |
 | `roll_window` | `u16` | Last window a roll was created in; a repeat is a no-op, never a reroll |
-| `bond_lamports` | `u64` | Lamports locked in this PDA's balance above its rent-exempt minimum |
-| `bond_locked_at` | `i64` | When the bond was posted; not a maturity input |
-| `unbond_available_at` | `i64` | Cooldown end, set by `request_unbond` |
-| `bond_source` | `u8` | 0 = the player's own lamports, 1 = a sponsor vault |
-| `bond_sponsor_vault` | `Pubkey` | The vault a sponsor-funded bond returns to; zero when self-funded |
+| `bond_lamports` | `u64` | Legacy: lamports a pre-retirement bond left in this PDA's balance above its rent-exempt minimum (3.2) |
+| `bond_locked_at` | `i64` | Legacy: when that bond was posted; never a maturity input |
+| `unbond_available_at` | `i64` | Cooldown end set by `request_unbond`, which is live for a legacy bond |
+| `bond_source` | `u8` | Legacy: 0 = the player's own lamports, 1 = a sponsor vault. It only decides where the lamports go on exit |
+| `bond_sponsor_vault` | `Pubkey` | Legacy: the vault a sponsor-funded bond returns to; zero when self-funded |
 | `bump`, `version` | `u8` | Layout versioning, same discipline as v4 |
 
 216 bytes with the discriminator, which is 0.00239424 SOL of rent
@@ -399,41 +425,33 @@ of overhead, which is 0.00089 SOL, so moving fields into a second PDA only pays 
 roughly 128 bytes moved. Keep it as one account, allocated at full size on the first
 `activate`.
 
-### 3.2 Bond and starter mode
+### 3.2 The bond and the starter penalty are retired
 
-The anti-bot layer is an economic commitment, not a fingerprint: a **flat, refundable bond**,
-identical for every wallet, that buys no power and no reward. It exists only to make a farm
-pay rent on capital it must leave parked for a week.
+The anti-bot layer used to be an economic commitment: a flat, refundable bond that bought full
+efficiency and discovery eligibility. It is gone. No new bond may be posted, no sponsor may fund
+one, and nothing a wallet holds or pays changes what it earns. The decision is that there is no
+pay-to-play: a wallet plays with the ordinary rent and network SOL it already needs, and there is
+no starter penalty either, because there is no longer a tier to belong to.
 
 | Rule | Value |
 | --- | --- |
-| Bond amount | `bond_lamports`, default **70,000,000 lamports = 0.07 SOL**, about $10 at $150/SOL. Flat and identical for every wallet; no tier, no discount, no scaling |
-| What it unlocks | full mining efficiency (100% of the maturity-adjusted power) and discovery eligibility |
-| What it does not do | no power bonus, no ORE bonus, no rarity bonus, no cap increase, no priority, no fee discount |
-| Starter mode (no bond) | mines immediately at `starter_efficiency_bps`, default **2,500 = 25%** of the same power, and is **not eligible for discovery** |
-| Withdrawal | `request_unbond` sets `unbond_available_at = now + bond_cooldown_seconds` (default **604,800 s = 7 days**), then `withdraw_bond` returns the lamports. Requires no active `MiningPosition` (unassign first) and the cooldown to have elapsed |
-| Sponsor-funded bond | `bond_source = 1` with `bond_sponsor_vault` set. It unlocks exactly the same things, the player can never withdraw it, and it returns to the vault when the player exits |
-| Maturity | measured from the `PlayerAccount` PDA creation slot, and **not** from the bond. Posting or withdrawing a bond never resets, accelerates or delays maturity |
+| Posting a bond | `post_bond` refuses with `BondRetired` (6097). Its account list is unchanged, so an old client gets a named program error rather than a deserialization failure |
+| Mining power | `mining_power(levels, maturity_bps)`: crew levels and maturity, nothing else. There is no bond argument and no efficiency factor, and `STARTER_EFFICIENCY_BPS` gates nothing |
+| Tranche | `PlayerAccount::tranche()` is the full tranche for every wallet, so a live coin's starter tranche stays empty. `STARTER_TRANCHE_BPS` (1,000 = 10%) still bounds only a position armed *before* the retirement, which keeps the tranche it was armed with until it is removed |
+| Discovery eligibility | The milestone history alone: account age, active days, valid activations, crew total level and maturity. The bond is out of the rule in `math/rarity.rs` |
+| Maturity | Still measured from the `PlayerAccount` PDA creation slot, and never from anything a player deposits or holds. Nothing a wallet posts or withdraws resets, accelerates or delays it |
+| Legacy withdrawal | `request_unbond` sets `unbond_available_at = now + bond_cooldown_seconds` (604,800 s = 7 days), then `withdraw_bond` returns the lamports parked before the retirement. It requires no active `MiningPosition` (unassign first), pays the player, or the sponsor vault when `bond_source = 1`, and there is no partial withdrawal |
+| Cost to a player | The `PlayerAccount` rent and the network fee of the transactions they sign (1.5). No deposit, no hold, no minimum fee and no fee floor |
 
-**Amendment from the Phase 0 review (2026-09-23): the starter tranche cap.** A player with no
-bond mines at `starter_efficiency_bps`, but the unbonded players of a coin may collectively
-receive at most `STARTER_TRANCHE_BPS` (default `1_000` = 10%) of each block's reward. A bonded
-player therefore always keeps at least 90% of a block, and when a coin has no bonded power at
-all the unassigned remainder stays in the Mining Reserve: it is never burned and never
-re-assigned to the starter index. The implementation is two reward indexes per mine, a bonded
-index and a starter index, which is why `Coin` carries `bonded_power` and `starter_power`.
-Both bounds apply at once and neither can be traded for the other: starter mode is 25% of the
-same maturity-adjusted power **and** capped at 10% of the block. The reserve is debited only by
-what is actually distributed, so the remainder needs no carry field and cannot be spent twice.
+The point of keeping the withdrawal path is narrow and worth stating exactly: the lamports a
+player parked before the retirement are theirs, they sit in the PDA's own balance above its
+rent-exempt minimum, and `withdraw_bond` returns them in one piece. That is also why the
+seven-day cooldown is still enforced: it is the only thing standing between a bond posted before
+the retirement and its withdrawal.
 
-Why not the alternatives: an instantaneous balance check is cyclable, so a farm with one funded
-wallet could satisfy it for ten thousand wallets in the same slot; an off-chain wallet-age
-attestation is an operator key deciding who may earn, which is the exact thing this design
-exists to remove. A locked, refundable, identical bond is neither: it costs the farm real
-capital for a week per wallet, it cannot be cycled through one funded account, and no operator
-signature can waive it. The residual is honest and stated: the bond raises a farm's cost per
-wallet from near zero to 0.07 SOL of locked capital, which is a real but finite deterrent
-(section 5).
+What is left of the anti-bot layer is time, eligibility and the caps (5). The honest reading is
+that a farm's per-wallet cost drops back to the rent of the accounts it creates, and the
+re-measurement in 5 is what prices that.
 
 ### 3.3 Instructions
 
@@ -445,13 +463,13 @@ All signed by the player wallet, none with a paid path:
 | `activate` | Settle accrual, roll the window: `active_until = now + activationSeconds`, apply the streak rule against `last_activation_at`, grant milestone ORE, arm the position. Rate-limited on-chain by `minimumReactivationSeconds`. Free, always |
 | `collect_ore` | Settle lazily accrued ORE into `ore_balance`, clamped by storage capacity; overflow is reported, never silently kept |
 | `upgrade_crew(component)` | `ore_balance -= cost`, `crew_levels[c] += 1`. Cost and the foreman discount read from the same on-chain curves, so the price cannot be steered |
-| `assign_power(coin)` | Creates the `MiningPosition` PDA. The v4 `power: u64` argument is gone: power is `crew_power(crew_levels, maturity, bond)` computed in-program, so a caller cannot assert it |
+| `assign_power(coin)` | Creates the `MiningPosition` PDA. The v4 `power: u64` argument is gone: power is `crew_power(crew_levels, maturity)` computed in-program, so a caller cannot assert it |
 | `remove_power(coin)` | Settles the index delta and clears the position; required before `request_unbond` |
 | `switch_mine(coin)` | Settle the old `MiningPosition` index delta, re-arm on the new coin; never touches activation or streak |
 | `claim_rewards(coin)` | Unchanged, user-signed |
-| `post_bond` | Moves `bond_lamports` from the owner into the PDA balance, or, with a `PlayerBondSubsidy` event plus its `SponsorGrant`, from the sponsor vault |
-| `request_unbond` | Requires no active position; sets `unbond_available_at`. Cancelled by posting a new bond |
-| `withdraw_bond` | After the cooldown: pays the player, or the sponsor vault when `bond_source = 1`. No partial withdrawal |
+| `post_bond` | Retired: refuses with `BondRetired` (6097), with its account list unchanged so an old client gets a named error. Nothing may post or fund a bond (3.2) |
+| `request_unbond` | Legacy bond only: requires no active position and sets `unbond_available_at` (3.2) |
+| `withdraw_bond` | Legacy bond only, after the cooldown: pays the player, or the sponsor vault when `bond_source = 1`. No partial withdrawal |
 | `create_discovery_roll` | Section 4 |
 | `settle_discovery` | Section 4, permissionless |
 | `expire_opportunity` | Section 4, permissionless |
@@ -523,9 +541,15 @@ Per-opportunity PDA: `seeds = [b"opportunity", coin, owner, window_index]`, so a
 opportunity exists at most once and a reroll is impossible by construction rather than by a
 guarded SQL update.
 
+**Which window index, exactly (CCR-F1).** The seed uses `player.roll_window` **as it stands before
+the handler runs**: the accounts struct derives the PDA from that field, the body copies it into
+`opportunity.window_index`, and the increment happens last. A wallet's pending opportunity is
+therefore always the window one below its current `roll_window`, `roll_window == 0` means it has
+never rolled, and a client needs no probe. Frozen in CONTRACTS.md.
+
 | Step | Who | What happens |
 | --- | --- | --- |
-| `create_discovery_roll` | the player | Checks eligibility (including the bond, 3.2) and caps, **charges the account's day and week budget immediately**, creates the PDA as pending against the current epoch. No randomness is requested here |
+| `create_discovery_roll` | the player | Checks eligibility (milestones and maturity, 3.2) and caps, **charges the account's day and week budget immediately**, creates the PDA as pending against the current epoch. No randomness is requested here |
 | `settle_discovery` | anyone | Requires `epoch_seed_epoch` to cover the opportunity's epoch. Derives occur, rarity and amount from the seed, marks the opportunity settled, transfers units from the coin's vault against the discovery ledger, updates the coin's epoch spend, and closes the PDA, refunding its rent to the caller |
 | `expire_opportunity` | anyone | A pending opportunity past its window can be marked expired, which pays nothing and refunds no budget |
 
@@ -580,15 +604,14 @@ one.
 
 After v2 the on-chain Sybil dampers are:
 
-- **Maturity**, on `created_slot` for power and `created_at` for ORE: day 1
-  20%, day 3 40%, day 7 70%, then 100%. A farm's 10,000 wallets still have to age.
-- **The refundable bond (3.2)**: a flat 0.07 SOL locked per wallet behind a 7-day cooldown,
-  identical for everyone, which is what a farm must park per wallet before it can mine at full
-  efficiency or see a discovery. It buys no power and no reward, so it cannot be bought into an
-  advantage; it only makes a wallet expensive to hold.
-- **Starter mode**: an honest new player mines immediately at 25% with no discovery, so the bond
-  is a choice rather than a paywall, and the cheapest farm is a starter-mode farm earning a
-  quarter of a share with no discovery at all.
+- **Maturity**, on `created_slot` for power and `created_at` for ORE, on the schedule of
+  `MATURITY_RAMP`: 20% under a day, 40% at 1-2 days, 70% at 3-6 days, 100% from day 7. The rungs
+  are read as `days < up_to_day` (CCR-F1's neighbour in CONTRACTS.md), so the prose here names the
+  rungs and the table there is what a client reproduces. A farm's 10,000 wallets still have to age.
+- **No capital cost at all (3.2)**: the refundable bond and the starter penalty are retired, so a
+  wallet's floor is the `PlayerAccount` rent and the network fee of what it signs. Every wallet
+  mines at full efficiency from its first block, and discovery stays behind the milestone
+  history, so there is no tier to buy into, no deposit to park and no fee floor to clear.
 - **Streak and valid activations as eligibility**, so discovery stays behind time rather than
   behind a fingerprint.
 - **Per-account caps charged at roll creation**, which is what bounds the epoch-seed selection
@@ -598,17 +621,16 @@ After v2 the on-chain Sybil dampers are:
 
 Why not the obvious alternatives: an instantaneous balance check is cyclable, so one funded
 wallet would satisfy it for ten thousand wallets in a single slot; an off-chain wallet-age or
-proof-of-humanity attestation is an operator key deciding who may earn, which is the exact
-thing this design exists to remove. A locked, flat, refundable bond is neither, and no operator
-signature can waive it.
+proof-of-humanity attestation is an operator key deciding who may earn, which is the exact thing
+this design exists to remove; and the third option, a locked refundable bond, was built and then
+retired (3.2), because a deposit gated an honest player as hard as it gated a farm.
 
 What is lost is cluster damping and the cluster share ceiling, which the sim credits with
 taking a 10,000-wallet naive farm from 8.8% to 5.7% of mined tokens. The 10.8%-of-accrual row
 is the *gate-off* row, and it already contains both cluster mechanisms, so the true post-v2
 on-chain-only bound is **looser than 10.8%** and should be re-measured with `npm run sim`
-before any mainnet decision rather than quoted from this document. The bond is a new input to
-that model: WS-G (8.3) adds it as a per-wallet capital cost plus cooldown so the re-measurement
-covers it.
+before any mainnet decision rather than quoted from this document. The model must carry no bond
+input at all now that it is retired (3.2), which is what WS-G (8.3) re-measures.
 
 `worker/risk.ts` stays as an **advisory** layer with no on-chain effect: it can flag, rate
 limit HTTP surfaces, gate off-chain rewards and inform support. It cannot lower a player's
@@ -650,6 +672,14 @@ an active `PlatformTradeFeeWaiver` event, the platform share is paid from the sp
 to the treasury PDA instead of by the trader, within the event's limits (1.7): the split itself
 never changes, only who funds it.
 
+**The order of operations, pinned (CCR-F2).** A trade pays exactly two fees, both taken off the
+gross at accrual: the creator's share and the protocol's share, each `mul_bps(gross, bps)` and each
+rounded down, with the remainder going to the curve or the pool. The crank-pool share is **not** a
+third fee: `ProtocolConfig.crank_pool_fee_bps` is carved out of the protocol's own bucket at sweep
+time by `split_platform_bucket`, and a crank tip comes from the same bucket. That is why `Coin`
+carries two fee fields and two claimable buckets and no third one, and why a quote that charges the
+crank-pool share to the trader is wrong in the trader's disfavour.
+
 **Pause flags and config.** Every pause carries a mandatory `paused_until` no further than
 72 hours out; extending a pause past that requires the timelocked governance path; and
 `unpause` is permissionless once the expiry passes. Parameter changes (fee config, discovery
@@ -671,7 +701,7 @@ owner's own wallet, it holds lamports, and it has no program authority of any ki
   a single file is auditable. Phase 0 splits it before any behaviour change. The deployed
   `.so` is 707,728 bytes, so any growth is an `ExtendProgram` at 6,960 lamports per
   byte (section 1.1): the refactor itself should be size-neutral, and the curve tables, the
-  bond, sponsor and epoch-seed logic and the discovery math are budgeted at **at most one
+  sponsor and epoch-seed logic and the discovery math are budgeted at **at most one
   16 KB extend, 0.114 SOL**. Nothing vendor-shaped is linked: no VRF SDK, no CPI into a
   randomness program, no oracle program.
 - **Account sizes and rent.** All measured, and collected in sections 1, 3 and 1.7:
@@ -689,7 +719,10 @@ owner's own wallet, it holds lamports, and it has no program authority of any ki
 | `SponsorVault` | 70 B | 0.00137736 SOL | the sponsor owner |
 | `SponsorEvent` | 92 B | 0.0015312 SOL | the sponsor vault |
 | `SponsorGrant` | 42 B | 0.0011832 SOL | the sponsor vault, only on the sponsored path |
-| player bond | no account | 0.07 SOL | the player (or a `PlayerBondSubsidy` event); held in the PDA balance, returned on exit |
+
+No bond appears in this table, because nothing a player does parks capital any more: the
+`PlayerAccount` rent above is the whole of it, and lamports a pre-retirement bond left in a PDA
+balance still come back through `withdraw_bond` (3.2).
 
   Creating a new player's accounts cannot be one transaction, because `PlayerAccount` and
   `MiningPosition` need two calls, which is fine since the second is the player's first real
@@ -702,7 +735,7 @@ owner's own wallet, it holds lamports, and it has no program authority of any ki
 | `activate` | 15-25k | one account, no CPI, no token movement |
 | `collect_ore` | 10-20k | curve lookup and a clamp |
 | `upgrade_crew` | 40-70k | settle index delta plus a curve table lookup |
-| `post_bond` / `request_unbond` / `withdraw_bond` | 10-20k | lamport moves inside one PDA |
+| `request_unbond` / `withdraw_bond` (a bond posted before the retirement) | 10-20k | lamport moves inside one PDA; `post_bond` is retired and does nothing |
 | `assign_power` / `remove_power` / `switch_mine` | 25-45k | index delta and maturity |
 | `claim_rewards` | 30-50k | unchanged |
 | `advance_mine` (64 segments) | 100-250k | existing implementation; measure it |
@@ -857,7 +890,7 @@ here and must not move.
 | `upgrade_crew` | `component: u8` | owner | `instructions/player_crew.rs` |
 | `assign_power` / `remove_power` / `switch_mine` | none (coin is an account) | owner | `instructions/player_mine.rs` |
 | `claim_rewards` | none | owner | `instructions/player_mine.rs` |
-| `post_bond` / `request_unbond` / `withdraw_bond` | optional `PlayerBondSubsidy` accounts | owner | `instructions/player_bond.rs` |
+| `post_bond` (retired: `BondRetired`) / `request_unbond` / `withdraw_bond` (a pre-retirement bond) | optional `PlayerBondSubsidy` accounts | owner | `instructions/player_bond.rs` |
 | `advance_mine` | none | permissionless | `instructions/mining_advance.rs` |
 | `commit_epoch_seed` | none (`SlotHashes` sysvar) | permissionless | `instructions/mining_seed.rs` |
 | `create_discovery_roll` | none | owner | `instructions/discovery.rs` |
@@ -883,7 +916,8 @@ pool (`LedgerInvariantViolated`, `MetadataTooLong`, `InvalidMintLayout`,
 `SeedNotCommitted`, `CoinNotAdvanced`); 6400-6449 discovery
 (`RollAlreadyExists`, `NotDiscoveryEligible`, `OpportunityExpired`,
 `OpportunityAlreadySettled`, `DailyCapExceeded`, `WeeklyCapExceeded`,
-`GlobalCapExceeded`, `EpochBudgetExhausted`).
+`GlobalCapExceeded`, `EpochBudgetExhausted`). `BondRetired` (6097) is appended after every
+block above, so the retirement moved no existing code.
 
 **Events.** Declared in full in `events.rs` by Phase 0b; Phase 1 only emits them.
 `ProtocolInitialized`, `CoinLaunched{coin, mint, creator, sponsor_event}`,
@@ -891,21 +925,28 @@ pool (`LedgerInvariantViolated`, `MetadataTooLong`, `InvalidMintLayout`,
 `EpochSeedTargetArmed{coin, epoch_index, target_slot}`,
 `EpochSeedCommitted{coin, epoch_index, target_slot, recorded_slot, seed}`,
 `EpochSeedRearmed{coin, epoch_index, target_slot}`, `PlayerInitialized`,
-`Activated`, `OreCollected`, `CrewUpgraded`, `BondPosted`, `UnbondRequested`,
+`Activated`, `OreCollected`, `CrewUpgraded`, `BondPosted` (declared, unreachable),
+`UnbondRequested`,
 `BondWithdrawn`, `PowerAssigned`, `PowerRemoved`, `MineSwitched`,
 `RewardsClaimed`, `DiscoveryRollCreated{opportunity, coin, owner, window_index, day_index}`,
 `DiscoverySettled{opportunity, coin, owner, rarity, units, value_lamports}`,
 `DiscoveryExpired`, `MarketGraduated`, `FeesSwept`, `CrankTipPaid`,
 `SponsorVaultInitialized`, `SponsorEventCreated`, `SponsorSpend{grant, kind, lamports}`.
 
-**Constants** (`constants.rs`, Phase 0b): `BOND_LAMPORTS = 70_000_000`,
-`BOND_COOLDOWN_SECONDS = 604_800`, `STARTER_EFFICIENCY_BPS = 2_500`,
-`STARTER_TRANCHE_BPS = 1_000`,
+**Constants** (`constants.rs`, Phase 0b):
 `EPOCH_SEED_DELAY_SLOTS = 32`, `EPOCH_SEED_MAX_LATENESS_SLOTS = 512`,
 `SLOT_HASHES_WINDOW = 512`, `CRANK_TIP_BPS = 200`, `MAX_PAUSE_SECONDS = 259_200`,
 `MAX_RARITY_TIERS = 8`, `MAX_NAME_LEN = 16`, `MAX_SYMBOL_LEN = 8`,
 `MAX_URI_LEN = 96`, plus the default fee split and cap values in lamports. All of them are
 `ProtocolConfig` fields, not hard-coded behaviour, except the layout bounds.
+
+Four bond-era constants survive, and only for the reasons above: `BOND_LAMPORTS = 70_000_000` and
+`STARTER_EFFICIENCY_BPS = 2_500` are retired values, kept because the frozen `PlayerAccount` and
+`ProtocolConfig` layouts and the parity vectors still carry the fields; `BOND_COOLDOWN_SECONDS =
+604_800` is still enforced, because it is the only thing between a bond posted before the
+retirement and its withdrawal; and `STARTER_TRANCHE_BPS = 1_000` still bounds a position armed
+before the retirement (3.2). `DEFAULT_SPONSOR_PER_WALLET_LIMIT_LAMPORTS` is still one retired
+bond's worth, a form default for a wallet-subject subsidy and nothing more.
 
 ### 8.3 Phase 1 workstreams, disjoint file ownership
 
@@ -960,9 +1001,10 @@ differs, the Rust value wins and the TypeScript is the bug, because the chain is
    `outstanding_claims` being neither double-counted nor omitted.
 2. Rounding direction in the curve quotes, the fee split and the reward index: every path
    rounds in the protocol's favour, never the caller's.
-3. Bond accounting: the bond is lamports above the PDA's rent-exempt minimum; no path lets a
-   player withdraw a sponsor-funded bond; `request_unbond` cannot be cycled to reset the
-   cooldown; `withdraw_bond` leaves the account rent-exempt.
+3. Legacy bond accounting: the lamports sit above the PDA's rent-exempt minimum; `post_bond`
+   refuses with `BondRetired`; no path lets a player withdraw a sponsor-funded bond;
+   `request_unbond` cannot be cycled to reset the cooldown; `withdraw_bond` leaves the account
+   rent-exempt. That path is the only reason the bond fields stay in the layout.
 4. Sponsor vault and events: withdrawal capped at unspent, per-coin and per-wallet limits
    enforced before the spend, `SponsorGrant` uniqueness per (event, coin), event expiry,
    and the invariance test that sponsorship changes no power and no discovery outcome.
@@ -974,9 +1016,8 @@ differs, the Rust value wins and the TypeScript is the bug, because the chain is
    nothing, the budget is charged exactly once.
 7. Caps: integer math in all four scopes, no bypass by rotating wallets or switching coins, and
    the `GlobalBudget` close and reopen path.
-8. Power derivation: `crew_power(levels, maturity, bond)` is monotonic in levels, a bond adds
-   exactly zero power, starter mode never exceeds the bonded value, and no instruction accepts
-   a caller-supplied power.
+8. Power derivation: `crew_power(levels, maturity)` is monotonic in levels, there is no bond and
+   no efficiency factor left to read, and no instruction accepts a caller-supplied power.
 9. Maturity: `created_slot` is fixed at PDA creation, is not reset by unbond or rebond, and
    cannot be inherited from another account.
 10. Fees: the bps split sums within 10000, no instruction takes a destination, a waiver can
@@ -1000,7 +1041,7 @@ differs, the Rust value wins and the TypeScript is the bug, because the chain is
 2. `scripts/onchain/wipe-devnet.ts` - retire the v4 program on devnet and close its buffers.
    Devnet holds no coins, so nothing of value is discarded.
 3. `scripts/onchain/init-v2.ts` - `initialize_protocol` with the rarity table, the fee
-   split, the caps in lamports, the curve tables, the bond parameters and the epoch-seed
+   split, the caps in lamports, the curve tables, the sponsor defaults and the epoch-seed
    delays, then hand the protocol authority to the multisig.
 4. `scripts/onchain/squads-setup.ts` - create the 2-of-3 Squads v4 multisig, set the 48-hour
    transaction timelock, transfer the program upgrade authority and the protocol authority to
@@ -1011,7 +1052,7 @@ differs, the Rust value wins and the TypeScript is the bug, because the chain is
    `scripts/onchain/transfer-authorities.ts` with the Squads script, since its single-key
    form is exactly what 6 removes.
 7. Acceptance for the phase: one fresh devnet run end to end - launch paid by the creator, then
-   launch subsidised by a sponsor event, buy, sell, activate, bond, assign, advance, seed
+   launch subsidised by a sponsor event, buy, sell, activate, assign, advance, seed
    commit, roll, settle, sweep and graduate - with the indexer following along, and
    `npm run check` green.
 
@@ -1023,8 +1064,8 @@ differs, the Rust value wins and the TypeScript is the bug, because the chain is
 | --- | --- |
 | Creator pays 100% by default; on-chain sponsorship and events can subsidise, and sponsorship never affects power, rewards or discovery | 1.4, 1.7 |
 | No per-player VRF: one seed per (coin, epoch) committed to a future slot's `SlotHashes` entry, participation locked before the seed is known, all outcomes derived from it | 1.6, 4.1, 4.2 |
-| Anti-bot by economic commitment: a flat, identical, refundable bond with no power, plus a no-bond starter mode | 3.2, 5 |
-| Starter tranche capped at `STARTER_TRANCHE_BPS` (10%) of each block whatever the bonded power is; the unassigned remainder stays in the Mining Reserve and is never burned | 3.2, 8.2 |
+| No bond and no starter mode: every wallet mines at full efficiency from its first block, `post_bond` is refused, and `request_unbond` / `withdraw_bond` stay live so lamports parked before the retirement can be withdrawn | 3.2, 5 |
+| The starter tranche and its `STARTER_TRANCHE_BPS` (10%) cap survive only for a position armed before the retirement; a live coin's starter tranche is empty, the whole block goes to the full tranche, and the unassigned remainder is never burned | 3.2, 8.2 |
 | Discovery caps denominated in SOL, priced by our own pool TWAP, no external oracle | 4.3 |
 | Governance: Squads 2-of-3 with a timelock now, program frozen after audit, no discretionary guardian pause over user funds | 6 |
 | Fresh start: new program id, wiped devnet, no v2 migration code | 7 |
@@ -1034,12 +1075,13 @@ differs, the Rust value wins and the TypeScript is the bug, because the chain is
 
 1. **Token-2022 metadata display.** Verify wallet and explorer rendering before launch copy
    promises metadata, with the lazy Metaplex fallback of 1.3(c) as the documented plan B.
-2. **Bond size and starter efficiency.** 0.07 SOL and 25% are the defaults and both are config;
-   confirm them against a fresh `npm run sim` run with the bond in the model (8.3, WS-G).
+2. **No bond in the model.** Nothing a player posts is config any more, so the farm bound must be
+   re-measured with the retired bond input dropped from the sim (8.3, WS-G).
 3. **Curve-table governance cadence.** `set_curve_table` exists behind the timelock and stays
    unused until a balance pass needs it; who proposes and how often is a process question.
-4. **A fifth sponsor event kind.** The four kinds are the whole surface; adding one is a program
-   upgrade, and after the freeze of 6 it is not possible at all.
+4. **A new sponsor event kind.** Three kinds are the whole surface now that the bond subsidy is
+   retired; the old byte still decodes, and adding a kind is a program upgrade, which after the
+   freeze of 6 is not possible at all.
 
 ### 9.3 Accepted residuals
 
@@ -1051,5 +1093,5 @@ differs, the Rust value wins and the TypeScript is the bug, because the chain is
 - Cluster damping and the cluster share ceiling are gone; the post-v2 farm bound must be
   re-measured with the sim rather than quoted (5).
 - Caps in SOL float with the price of SOL (4.3).
-- The bond raises a farm's per-wallet cost to 0.07 SOL of locked capital for a week; it is a
-  real deterrent, not a proof of humanity (5).
+- The bond is retired, so a farm's per-wallet floor is time - maturity and the milestone gates -
+  rather than capital; the re-measurement in 5 is what prices what is left (3.2).

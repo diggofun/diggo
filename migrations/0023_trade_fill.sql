@@ -16,4 +16,3 @@
 
 ALTER TABLE trades ADD COLUMN amount_out TEXT NOT NULL DEFAULT '0';
 ALTER TABLE trades ADD COLUMN fill_source TEXT NOT NULL DEFAULT 'instruction';
-

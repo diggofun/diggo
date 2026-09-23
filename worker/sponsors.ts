@@ -134,4 +134,3 @@ export async function sponsorEventsForOwner(
   if (!isBase58Address(owner)) return apiError("A base58 wallet address is required.");
   return json({ events: await summaries(env, owner) });
 }
-

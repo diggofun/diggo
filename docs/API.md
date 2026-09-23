@@ -1,212 +1,253 @@
 # API surface
 
-| Method | Route | Purpose |
+The Worker is an indexer of the on-chain v2 program, a read API over that index, a notification
+sender, and an optional permissionless crank. It is not an authority over anyone's money, and the
+API reflects that: **every endpoint below is read-only with respect to value.** Nothing here can
+move a token, a lamport, a claim or a reserve, and no endpoint decides an outcome.
+
+Two conventions run through every payload:
+
+- An integer amount that came from the chain is a **string** (`"70000000"`), because a lamport
+  count and a u128 reward index do not survive a JavaScript number without losing digits.
+- A number that was **derived for display** is a separate field with its own name (`priceUsd`,
+`unitsWhole`, `mining.bond.sol`). A client can therefore always tell a program fact from a display
+convenience, and a conversion bug can never masquerade as a balance.
+
+Anything that changes state is a Solana transaction the player signs. The paths that used to exist
+for that - `/api/mine/activate`, `/api/crew/upgrade`, `/api/mine/switch`, `/api/rewards/claim`,
+`/api/discovery/roll`, `/api/discovery/claim` - are gone, along with the keeper-signed write path
+behind them.
+
+## Read endpoints
+
+| Method | Path | Returns |
 | --- | --- | --- |
-| `GET` | `/api/bootstrap?limit=1000` | one request for public runtime config and up to 1,000 cached token cards |
-| `GET` | `/api/config` | public cluster, Turnstile site key and suffix |
-| `GET` | `/api/tokens` | KV-cached token discovery list backed by D1 |
-| `GET` | `/api/tokens/:slug` | token detail |
-| `GET` | `/api/tokens/:mint/live` | WebSocket stream backed by a per-mint Durable Object |
-| `POST` | `/api/auth/challenge` | create a single-use wallet message |
-| `POST` | `/api/auth/verify` | verify Ed25519 signature and issue a short session |
-| `POST` | `/api/media` | authenticated token image upload to private Supabase Storage |
-| `POST` | `/api/tokens` | authenticated, Turnstile-protected launch job |
-| `POST` | `/api/mine/activate/challenge` | create a single-use, wallet-signed daily-activation message |
-| `POST` | `/api/mine/activate` | verify the activation signature, settle offline ORE/streak, roll an eligible Discovery, extend the 24h window |
-| `POST` | `/api/mine/switch` | move an already-active crew to a different mine without resetting activation or streak |
-| `POST` | `/api/mine/report/collect` | authenticated; settles the live mining position and returns the idempotent Mining Report |
-| `GET` | `/api/mines/:mint/info` | public mine information: block reward, total power, remaining reserve, labelled block-share estimate, reward-reduction schedule, fully-mined progress |
-| `POST` | `/api/rewards/claim/challenge` | create a single-use, wallet-signed claim message bound to one reward id |
-| `POST` | `/api/rewards/claim` | verify the claim signature and move exactly one reward `ELIGIBLE -> CLAIMED` |
-| `POST` | `/api/rewards/claim/confirm` | verify the player's own `claim_rewards` transaction against chain and record the payout (idempotent; a signature already backing another reward is a 409) |
-| `GET` | `/api/player/:wallet/rewards` | authenticated (self only) reward-claim history |
-| `POST` | `/api/crew/upgrade` | authenticated, ORE-only Crew component upgrade |
-| `GET` | `/api/player/:wallet` | authenticated (self only) Crew/ORE/streak/activation profile |
-| `GET` | `/api/profile/:wallet` | public: one wallet's public username, or `null` when it never set one |
-| `POST` | `/api/profile/username` | authenticated; set or change the public username (3-20 characters, case-insensitively unique, one change per 7 days) |
-| `POST` | `/api/discovery/opportunity` | authenticated; lazily authors this window's single-use discovery opportunity (idempotent inside the window) |
-| `POST` | `/api/discovery/roll` | authenticated; consumes the window's opportunity and rolls the server-authoritative discovery. 409 once the window is spent |
-| `POST` | `/api/discovery/claim/challenge` | create a single-use, wallet-signed discovery-claim message |
-| `POST` | `/api/discovery/claim` | verify the claim signature and commit the discovery to the keeper (PENDING -> ELIGIBLE -> CLAIMED) |
-| `GET` | `/api/discovery/commitments` | public, unauthenticated commit-reveal RNG schedule: the current epoch, its commitment and its window |
-| `GET` | `/api/discovery/commitments/:epoch` | one epoch's commitment, plus its revealed seed once that epoch has ended |
-| `GET` | `/api/player/:wallet/discoveries` | authenticated (self only) discovery history plus the live opportunity |
-| `GET` | `/api/notifications` | authenticated; generates anything due for the signed-in wallet, then returns its notifications and unread count |
-| `POST` | `/api/notifications/read` | authenticated; mark one notification, or all of them, read |
-| `GET` | `/api/push/key` | the VAPID application server key a browser needs before it can subscribe (readable before sign-in) |
-| `POST` | `/api/push/subscription` | authenticated; register this device for the signed-in wallet |
-| `DELETE` | `/api/push/subscription` | authenticated; drop this device's subscription |
-| `POST` | `/api/telegram/link` | authenticated; issue a one-time code for linking a Telegram chat |
-| `POST` | `/api/appeals` | authenticated; file one appeal against a hold or restriction |
-| `GET` | `/api/admin/appeals?status=` | admin; the appeals queue (`OPEN`/`ACCEPTED`/`REJECTED`, or all) |
-| `POST` | `/api/admin/appeals` | admin; decide one appeal. Requires a signed step-up, and can only lift restrictions |
-| `POST` | `/api/admin/stepup` | admin; issue the short-lived, single-use message an admin mutation has to sign |
-| `POST` | `/webhooks/helius` | authenticated async event ingestion |
-| `POST` | `/webhooks/telegram` | Telegram's own callback for the optional notification channel; fails closed unless `TELEGRAM_WEBHOOK_SECRET` matches |
-| `GET` | `/media/*` | streamed private Supabase Storage object delivery |
+| GET | `/api/config` | Cluster, program id and public client keys |
+| GET | `/api/bootstrap` | The coin list plus the protocol parameters the UI needs |
+| GET | `/api/tokens?limit=` | `{ tokens: CoinSummary[], syncedAt }` |
+| GET | `/api/tokens/:slug` | One coin |
+| GET | `/api/tokens/:mint/trades?limit=` | Indexed trades for one coin |
+| GET | `/api/tokens/:mint/live` | The live market snapshot Durable Object |
+| GET | `/api/leaderboards?limit=` | Every board, each capped at `limit` |
+| GET | `/api/mines/:slug/info` | Mine information, including the vault ledger check |
+| GET | `/api/mines/:slug/report?wallet=` | One wallet's position on one coin |
+| GET | `/api/coins/:mint/discoveries` | A coin's indexed rolls |
+| GET | `/api/player/:wallet` | Profile: username, mirrored account, positions |
+| GET | `/api/player/:wallet/discoveries` | A wallet's own rolls |
+| GET | `/api/player/:wallet/achievements` | Earned achievements |
+| GET | `/api/discovery/seeds?coin=&limit=` | Committed epoch seeds, for independent verification |
+| GET | `/api/discovery/budget` | The protocol-wide daily discovery budget |
+| GET | `/api/cosmetics` | The cosmetic catalogue and what the caller owns |
+| GET | `/api/notifications` | Notifications derived from indexed state |
+| GET | `/api/profile/:wallet` | Public username |
+| GET | `/api/push/key` | The VAPID application server key |
+| GET | `/api/status` | Indexer and crank diagnostics |
+| GET | `/media/:key` | An uploaded image |
 
-Authenticated calls use `Authorization: Bearer <session>`. The Helius route uses its own independently configured authorization value. `/api/player/:wallet*` routes 401 unless the session's wallet matches the path wallet — no player can read another player's Crew/ORE/discovery state.
+### `CoinSummary`
 
-Daily activation is a distinct signed-challenge flow from wallet sign-in (`/api/auth/challenge` + `/api/auth/verify`): it uses its own nonce namespace and message, is consumed on first use (replay protection), and is rate-limited per-wallet in addition to the general per-IP limiter. See `docs/ARCHITECTURE.md` §3.
+Every value-bearing field is the program's own, copied from the `Coin` account: `reserveRemaining`,
+`discoveryReserveRemaining`, `networkPower`, `bondedPower`, `starterPower`, `rewardPerBlock`,
+`epochIndex`, `liquidityLamports`. `priceSol`, `priceUsd`, `marketCapUsd`, `liquiditySol` and
+`curveMining.*` are derived for display.
 
-Block rewards settle through a per-mine cumulative reward index (`mine_reward_state`) with one
-position per wallet and mine (`mining_positions`). Blocks are advanced lazily and in bounded
-batches when a report, switch, upgrade or claim reads the mine, so nothing scales with
-players × blocks. A position is eligible for a block only while `activated_at <= blockTime <
-active_until`: the block landing exactly on `active_until` is not credited, and a paused crew
-keeps neither ORE nor block rewards. Settling moves a position's pending reward into one
-`reward_claims` row, and claiming is a single conditional `UPDATE` guarded on
-`status = 'ELIGIBLE' AND eligible_until > now`, so of any number of concurrent claims exactly one
-can win. `HELD`/under-review rewards are parked and only become claimable once the hold is lifted.
-When a mine's on-chain program is authoritative, the numbers in these responses are the indexed
-estimate and say so (`accounting.source = 'ONCHAIN_INDEXED'`); otherwise they are the accounting
-source for the report. See `worker/mining.ts`.
+`bondedPower` and `starterPower` are the coin's two tranche totals rather than two classes of
+player: every position armed since the bond was retired is in the full tranche, so a live coin's
+`starterPower` stays zero, and only lamports parked by a bond posted before the retirement keep
+the withdrawal path of `docs/ONCHAIN_V2_DESIGN.md` 3.2 alive.
 
-A settled reward is paid by the **player**, not the backend. The Mining Reserve is program-controlled
-and leaves the program only through the user-signed `claim_rewards` instruction, so the
-`reward_claim` indexing job never moves it: with no reported transaction it exposes the claim as
-`ready`, and with one it verifies the transaction against chain before recording it through
-`markClaimPaid`. Every claim view therefore carries
-`payout: { route: 'USER_SIGNED', instruction: 'claim_rewards', ready, txSignature }`, where
-`ready: true` means the accounting is finished and the player still has to submit the on-chain
-claim. A keeper-signed payout of the Mining Reserve is deliberately not implemented — it would give
-a backend key the power to drain a mine (see `docs/SECURITY.md` invariant 7 and
-`settleRewardClaim` in `worker/mining.ts`).
+`venue` is `"curve"` before graduation and `"pool"` after it, whether or not the pool account came
+back: a graduated coin's curve reserves are zero by design, so calling it a curve would describe a
+venue that holds nothing. A graduated coin whose pool cannot be read reports a price of zero rather
+than its empty curve, because a visibly wrong zero is better than a plausibly wrong price.
 
-`POST /api/rewards/claim/confirm` closes that loop: the player's wallet has submitted
-`claim_rewards`, and the client reports `{ rewardId, signature }`. Nothing is recorded on trust —
-the Worker fetches the transaction and checks that it really is this reward's payout before writing
-`tx_signature` through `markClaimPaid`. The endpoint is idempotent in both directions: confirming
-the same signature again succeeds (`idempotent: true`), while a signature that already backs a
-different reward is refused with `SIGNATURE_REUSED` (a partial UNIQUE index on `tx_signature`
-enforces the same rule in storage), an unverifiable transaction is `PAYOUT_UNVERIFIED`, and a claim
-whose accounting has not settled is `NOT_SETTLED`. Its per-IP budget is deliberately higher than the
-claim endpoint's, because a player with several banked rewards confirms them one after another.
-Reporting the signature is not optional housekeeping: `worker/reconcile.ts` compares paid claims
-against chain, and a settled reward with no recorded signature is what halts a mine's mint.
+`epochSeedCommitted` says whether the epoch's seed has been recorded on chain; until it has, no roll
+from that epoch can settle.
 
-Discovery is the most protected surface in the API, because it hands out real memecoin value. One
-opportunity is authored per active Crew per time window, carries a deterministic `eventId` and a
-server-derived `nonce`, and can be rolled exactly once — a second roll in the same window is a 409,
-not a reroll. The roll itself, the token, the rarity, the visual event and the token amount are all
-derived server-side from `DISCOVERY_SECRET`; the client sends no seed and never computes an outcome.
-Claiming needs its own wallet-signed single-use challenge, and the payout is committed by one guarded
-`PENDING -> ELIGIBLE` update, so concurrent claims cannot both win. See `docs/ARCHITECTURE.md` and
-`worker/discovery.ts`.
+### `/api/mines/:slug/info` and the ledger check
 
-The RNG is **commit-reveal**, not a bare random draw. Each epoch the Worker derives a seed from
-`DISCOVERY_SECRET` and publishes only its commitment, so an outcome cannot be ground out after the
-fact; the seed is revealed once the epoch has closed, and anyone can check it against the
-commitment they read earlier. `GET /api/discovery/commitments` is public and unauthenticated for
-exactly that reason — a commitment nobody can read proves nothing. The epoch length is
-`DISCOVERY_EPOCH_SECONDS`, bounded to `[3600, 2592000]` and a day by default.
+The `ledger` block is the vault invariant of design 1.3(a), recomputed from a fresh vault read:
 
-Two more surfaces deserve a note. **Appeals** are the only path by which a player can ask a person
-to look again: `POST /api/appeals` is signed-in only, rate limited on five dimensions, length
-bounded, and answers with the same neutral sentence whether or not the account is under anything,
-so it cannot be used to probe what the risk layer thinks. Filing one changes nothing by itself, and
-deciding one can only lift restrictions, never add them. **Web push and Telegram** are delivery
-channels for notifications a player can already read through `/api/notifications`; both are opt-in,
-both are optional to the deployment, and a push subscription is always scoped to the signed-in
-wallet.
+```
+vault.amount >= curve_tokens + reserve_remaining + discovery_remaining + outstanding_claims
+```
+
+The Worker **reports** this and cannot enforce it, because it cannot move a token. `ok: false` with
+a `shortfall` is a finding for a human, not a halt.
+
+### `/api/discovery/seeds`
+
+The endpoint that makes the whole scheme auditable. Every discovery outcome is
+`sha256(epoch_seed || owner_pubkey_bytes || window_index_u16_le)`, expanded in order into whether
+the roll occurs, which rarity tier, and how much. With a seed from this endpoint, anyone can
+recompute any past outcome and check a payout without trusting this server.
+
+The seed is a `SlotHashes` entry the program recorded at a slot that was in the future while the
+epoch's rolls were being created. It is not an operator value, and there is no commitment to
+publish because there is no operator to commit.
+
+## Write endpoints (no value)
+
+These mutate off-chain data only. Each requires a signed wallet session.
+
+| Method | Path | Effect |
+| --- | --- | --- |
+| POST | `/api/auth/challenge` | Issue a sign-in challenge |
+| POST | `/api/auth/verify` | Exchange a signature for a session |
+| POST | `/api/profile/username` | Set the caller's username |
+| POST | `/api/tokens/register` | Attach a description and image to a coin **the indexer has already seen** |
+| POST | `/api/media` | Upload an image |
+| POST | `/api/cosmetics/equip`, `/api/cosmetics/unequip` | Equip a cosmetic (visual only) |
+| POST | `/api/seasonal/sync` | Recompute off-chain seasonal points |
+| POST | `/api/notifications/read` | Mark notifications read |
+| POST/DELETE | `/api/push/subscription` | Manage web-push subscriptions |
+| POST | `/api/telegram/link` | Start a Telegram link |
+| POST | `/api/rpc` | Read-only JSON-RPC proxy; signed transaction methods require a wallet session |
+| POST | `/api/verify/challenge` | Clear progressive friction for a short window |
+
+`/api/tokens/register` is the one worth reading twice: it refuses a mint the indexer has never
+seen. In v4 a client-reported launch created a row; now a coin that does not exist on chain has no
+row to attach metadata to, and only the coin's own creator may set it.
+
+`/api/rpc` forwards only the documented read methods anonymously. `sendTransaction` and
+`simulateTransaction` require a session created by `/api/auth/verify`; the session wallet must be
+the transaction fee payer, every required signature is checked, and transactions may call the
+Diggo program plus the standard system, token, associated-token and compute-budget programs.
+Send-capable wallets may also submit directly through their provider. The Worker never holds a
+transaction-signing key for player actions.
+
+## Webhooks
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| POST | `/webhooks/helius` | Authenticated by `HELIUS_WEBHOOK_AUTH` |
+| POST | `/webhooks/telegram` | Fails closed when `TELEGRAM_WEBHOOK_SECRET` is unset or wrong |
+
+The Helius handler **never trusts its payload for content**. It reads a signature or an account out
+of the delivery, enqueues a job, and the consumer re-reads the fact from chain. A forged or replayed
+delivery can therefore cause a redundant read and nothing else.
+
+## Admin
+
+Admin is a real signed wallet session whose wallet appears in `ADMIN_WALLETS`, plus a short-lived
+signature (`/api/admin/stepup`) on every mutating call.
+
+| Method | Path | Effect |
+| --- | --- | --- |
+| GET | `/api/admin/abuse` | A compact anti-abuse view, with no raw IP, device or session id |
+| POST | `/api/admin/restrictions` | Place or lift an **off-chain** restriction |
+| GET | `/api/admin/metrics` | Metrics, alerts, advisory alerts and the audit trail |
+| POST | `/api/admin/stepup` | Issue the step-up proof |
+| GET/POST | `/api/admin/appeals` | Read the appeal queue, resolve an appeal |
+
+There is no breaker endpoint. In v4 an operator could halt discoveries, claims or one mine's
+Discovery Reserve; v2 has no such switch, because a claim is decided by the player's own signed
+instruction and a public crank. What replaced it is the advisory alert list on
+`/api/admin/metrics`: the same detections, recorded instead of enforced.
+
+## Indexer operations
+
+| Method | Path | Effect |
+| --- | --- | --- |
+| POST | `/api/indexer/coin?mint=` | Re-read one coin from chain now |
+| POST | `/api/indexer/player?wallet=` | Re-read one wallet's account now |
+
+Both only re-read chain. The cron trigger does the same work on a two-minute cadence: a signature
+sweep (events and trade instructions) and an account sweep (coins, pools, positions, opportunities,
+budgets, sponsor accounts, the protocol config, and every wallet the indexer has seen).
+
+Two intakes feed the index and neither is trusted for content. A webhook is a hint; the sweep is the
+backstop, so the index converges even with no webhook configured at all.
+
+### Where trades come from
+
+v2 emits no trade event, so a fill is indexed in two halves and each is labelled with where it came
+from:
+
+| Column | Meaning |
+| --- | --- |
+| `amount_in` | what the trader offered: lamports for a buy, base units for a sell, read from the trade **instruction** that caused it |
+| `amount_out` | what the trader received, read from the transaction's own **balance table** (`meta.preTokenBalances`/`postTokenBalances`, and the lamport delta plus the fee for a sell). 0 when the table was not in the response |
+| `fill_source` | `meta` when `amount_out` came from the balance table, `instruction` when only the input is known, `event` reserved for a v2 trade event if the contract ever declares one |
+| `price_sol` | the venue's **observed spot price** at that slot, never presented as the fill |
+
+`GET /api/tokens/:slug/trades` returns all four. If the contract gains a trade event, that event
+becomes the first source for `amount_out` and `fill_source` becomes `event`; the columns and the
+endpoint do not change.
+
+## Sponsorship
+
+| Method | Path | Returns |
+| --- | --- | --- |
+| GET | `/api/sponsors/events` | every sponsor event the indexer knows about |
+| GET | `/api/sponsors/:owner/events` | the same list, scoped to one sponsor vault's owner |
+
+Sponsor events are PDAs keyed on `(vault, event_id)` and there is deliberately no on-chain registry
+that lists them, so the indexer is the only thing that can enumerate them: it sweeps every
+SponsorEvent by discriminator and mirrors them in D1. Each item carries the event id, so a client can
+re-read the event on chain before believing it, which is what the launch form does
+(`findLaunchSubsidy` in src/solanaProgram.ts is the decision; this endpoint is the address list).
+
+```ts
+{
+  eventId: number;               // the vault's event_count at creation, i.e. the event PDA's seed
+  event: string; vault: string;  // the SponsorEvent and SponsorVault PDAs
+  kind: number;                  // 0 launch rent, 1 platform fee waiver, 2 player account, 3 bond (retired)
+  startAt: number; endAt: number;
+  budgetLamports: string; spentLamports: string;
+  perCoinLimitLamports: string; perWalletLimitLamports: string;
+  paused: boolean;
+}
+```
+
+Both endpoints are public: a sponsor event is a public on-chain fact and the payload holds no
+wallet's private state, so scoping by owner only narrows the list. An event whose id cannot be
+recovered - its vault is not mirrored yet - is left out rather than given a guessed id, because the
+client re-reads at the id it is handed and a wrong id would silently drop a real subsidy. An empty
+list means "the creator pays", which is the honest default.
+
+### The one gap in the shared decoder surface
+
+`shared/program.ts` names an event from its discriminator but does not read the body, so the Anchor
+event **payload** reader lives in `worker/v2/program.ts` (`decodeEventData`,
+`decodeProgramEvents`) and is the only decode code outside the shared layer. `worker/v2/program.ts`
+is otherwise a pure re-export of `shared/program.ts` and `shared/pdas.ts`; its own test pins the set
+of events it can read against the contract's table, so an event added to the program fails the test
+until a reader exists rather than decoding to null.
 
 ## Notifications
 
-Notifications are **server-authored**. `shared/social.ts` (`computeNotifications`) is the only
-place that decides one exists — a mine expiring within three hours, a mine that has expired, a
-streak deadline inside twelve hours, a rare discovery, a seven-day streak milestone, a reward
-reduction coming, a mine nearly out of reserve — and `worker/notifications.ts` is the only place
-that stores it. The bell in the header renders what `GET /api/notifications` returns and marks
-rows read; it cannot invent a row, and neither can anything else in `src/`.
+Notifications are **derived from indexed on-chain state** and from off-chain progression, never
+authored by an operator. The generator reads a wallet's mirrored account, its coin and its recent
+discoveries and emits the events those facts imply; the sweep in `runSocialCron` covers wallets
+that are not currently in the app.
 
-Generation runs on two paths, both idempotent:
-
-- the **scheduled trigger** (`*/5 * * * *`, `worker/index.ts`) calls `runSocialCron`, which
-  sweeps every `NORMAL` account that has a notification due and not yet stored. This is the path
-  that reaches players who are not in the app at all, and it runs first in the handler inside its
-  own guard, so a failure in an unrelated cron step cannot skip it.
-- `GET /api/notifications` generates for the signed-in wallet before it reads, so opening the bell
-  between two cron ticks still shows what is due.
-
-Both write through `INSERT OR IGNORE` against `notifications.dedupe_key`, which is `UNIQUE`, so
-an event is never stored twice however often either path runs. The stored key is namespaced by
-wallet (`<wallet>:<kind>:<event>`) because the underlying event values are not unique across
-players — two wallets can be in the same mine, and two wallets can activate in the same second — so
-a bare key would let whichever account was swept first claim the row and deny the same notification
-to everyone else.
-
-The sweep is bounded to 200 accounts per tick, to stay inside the Worker's subrequest budget, and it
-selects only accounts that still owe a notification, most urgent first. A backlog therefore drains
-over consecutive ticks instead of starving the accounts behind it. `UNDER_REVIEW`, `HELD` and
-`BLOCKED` accounts are never swept: a restricted account is not nudged to chase rewards.
-
-Delivery is separate from generation and never invents an alert. In-app, the bell polls
-`GET /api/notifications` every 60 seconds and again when the window regains focus or the page
-becomes visible, shows the unread count, and marks rows read through
-`POST /api/notifications/read` — one id, a list of ids, or everything unread when the body omits
-`ids`. Web Push and Telegram are the opt-in channels for those same stored rows; both are
-described above, both are off by default, and `push_deliveries` claims each
-(notification, channel, target) with `INSERT OR IGNORE` before the network call, so delivery is at
-most once per target.
+Delivery is Web Push (RFC 8291/8292) and an optional Telegram channel. Without the VAPID keys the
+push channel reports itself unavailable and the bell stays empty rather than silently dropping
+alerts.
 
 ### Exercising notifications locally
 
-`wrangler dev` does not fire cron triggers on a clock, and Wrangler 4 exposes the handler without
-any extra flag. With the local pair running (`npm run dev:local`), invoke one tick by hand:
-
-```sh
-curl http://localhost:8787/cdn-cgi/handler/scheduled
+```bash
+npm run db:local
+npm run dev:worker
+curl -s localhost:8787/api/notifications -H "cookie: diggo_session=<session>"
 ```
-
-That runs the same `scheduled` handler production runs, notification sweep included, against local
-D1. To see a notification appear end to end, give a wallet a mine that is about to close, take one
-tick, and read what was stored:
-
-```sh
-npx wrangler d1 execute diggo-db --local --command \
-  "UPDATE players SET activation_expires_at = unixepoch() + 7200, last_activation_at = unixepoch() - 3600, streak = 5 WHERE wallet = '<wallet>'"
-curl http://localhost:8787/cdn-cgi/handler/scheduled
-npx wrangler d1 execute diggo-db --local --command \
-  "SELECT kind, dedupe_key FROM notifications WHERE wallet = '<wallet>'"
-```
-
-`GET /api/notifications` with that wallet's session then returns the same row, and a second tick
-stores nothing further. The full handler also runs the epoch, risk, reconciliation and
-RNG-commitment steps, so a local environment without on-chain configuration logs failures from
-those; the notification sweep is guarded and still runs. `npm test` covers the generation and
-dedupe rules with no dev server at all — see `worker/test/notifications-cron.test.ts`.
 
 ## Price oracle
 
-`worker/oracle.ts` is the only module that answers what a token or SOL is worth, and it is built to
-refuse rather than guess: `getRobustPrice` combines the token's own observed history, a
-volume-weighted average of recorded trades, Jupiter and Pyth, and returns `null` when the sources
-disagree beyond the deviation gate or are stale. A discovery that cannot be valued pays nothing.
-`GET /api/mines/:mint/info` and the token cards carry whatever the oracle last agreed on; the
-`price_usd` column is display-only and settlement never reads it. Every knob is an optional
-environment variable with a working default — `JUPITER_PRICE_URL`, `JUPITER_PRICE_V2_URL`,
-`JUPITER_API_KEY`, `PYTH_HERMES_URL`, `PYTH_API_KEY`, `PYTH_SOL_USD_FEED_ID`,
-`ORACLE_MIN_EXTERNAL_SOURCES` and `ORACLE_SOL_USD_OVERRIDE` (the last pins the rate for local work
-only). See `docs/SECURITY.md`.
+The oracle is **display-only** in v2. Discovery value is normalised by the coin's own pool TWAP, a
+price the program observed itself, so no external source is consulted in any payout path.
+`getSolUsd()` reads Jupiter's wrapped-SOL price and Pyth's published SOL/USD feed, caches the result
+for five minutes, and falls back to `ILLUSTRATIVE_DEVNET_SOL_USD` with `fromOracle: false` when
+neither answers. A wrong rate moves a number on a page and nothing else.
 
-## Risk enforcement, step-up and appeals
+## Risk, step-up and appeals
 
-`RISK_OPS.enforcement.mode` decides what a score-derived refusal actually does. It ships as
-`shadow`: the gate still reaches a verdict and records it (`risk.shadow_would_block`, the
-`shadowed` flag and `computedState` on every admin account row), but the account keeps playing. An
-operator moves it to `enforce` once they have reviewed what it would have done, and
-`enforcement.overrides` can enforce or shadow a single action while the global mode stays put.
-Hard safety is never shadowed: rate limits, circuit breakers and an operator restriction all still
-apply in either mode.
+The risk layer is **advisory**. It can flag, rate limit HTTP surfaces and inform support, and it
+cannot lower a player's on-chain power, freeze a position, or touch ORE, crew levels, claims or
+reserves. There is no instruction that reads it.
 
-Every mutating admin call carries a **step-up**: `POST /api/admin/stepup` issues a short-lived
-message bound to one action and its exact payload, the admin wallet signs it, and the signature is
-sent back as `stepUp: { nonce, signature }`. It is single use, so a captured admin request cannot be
-replayed against a different payload — an admin session on its own can never place a restriction,
-flip a breaker or decide an appeal.
-
-The full admin route set is `GET /api/admin/abuse`, `GET /api/admin/metrics`,
-`POST /api/admin/restrictions`, `POST /api/admin/breakers`, `POST /api/admin/stepup`,
-`GET /api/admin/appeals` and `POST /api/admin/appeals`. All of them require a session whose wallet
-is listed in `ADMIN_WALLETS`, all answer 401 for anyone else, and all are audited. None can move,
-seize or redirect value: they can only restrict an account, halt a scope, or lift a restriction.
+`gateAction` is the one gate that still refuses something: it applies multi-key rate limits and
+account restrictions to *off-chain* actions (a username change, an appeal, a metadata edit). A
+refusal there costs a request, never a reward.

@@ -1,9 +1,8 @@
 /**
  * Local D1 fixtures.
  *
- * Everything the suite needs beyond the demo mines is prepared with the same wrangler commands the
- * repo's own scripts use (npm run db:local and npm run seed:local, see scripts/dev-local.mjs),
- * invoked as "node node_modules/wrangler/bin/wrangler.js" so no shell shim is involved on Windows.
+ * The schema is prepared with the same wrangler command as npm run db:local, invoked as
+ * "node node_modules/wrangler/bin/wrangler.js" so no shell shim is involved on Windows.
  *
  * The local database is shared with the running wrangler dev process, so every call retries: the
  * two do contend for the same SQLite file. Fixture failures are handed back to the caller instead of
@@ -17,6 +16,8 @@ import process from "node:process";
 const REPO_ROOT = process.cwd();
 const WRANGLER_BIN = path.join(REPO_ROOT, "node_modules", "wrangler", "bin", "wrangler.js");
 const DATABASE = "diggo-db";
+/** The Worker half of the dev pair, overridable with the client's own proxy target. */
+const WORKER_URL = process.env.DIGGO_E2E_WORKER_URL ?? "http://localhost:8787";
 
 export interface D1Result {
   ok: boolean;
@@ -68,16 +69,9 @@ export function d1Execute(sql: string): D1Result {
   return withRetries(() => wrangler(["d1", "execute", DATABASE, "--local", "--command", sql]));
 }
 
-/** Applies pending migrations and reloads the local demo mines: the npm run seed:local pair. */
-export function seedLocalDemoData(): D1Result {
-  const migrations = withRetries(() => wrangler(["d1", "migrations", "apply", DATABASE, "--local"]));
-  if (!migrations.ok) return migrations;
-  return withRetries(() => wrangler(["d1", "execute", DATABASE, "--local", "--file=scripts/dev-seed.sql"]));
-}
-
-/** Gives the suite's own wallet the ORE a crew-upgrade test needs. */
-export function setPlayerOreBalance(address: string, ore: number): D1Result {
-  return d1Execute("UPDATE players SET ore_balance = " + Math.floor(ore) + " WHERE wallet = '" + address + "'");
+/** Applies pending migrations. It intentionally does not load demo application rows. */
+export function prepareLocalD1(): D1Result {
+  return withRetries(() => wrangler(["d1", "migrations", "apply", DATABASE, "--local"]));
 }
 
 /**
@@ -89,7 +83,7 @@ export async function waitForWorker(timeoutMs = 90_000): Promise<void> {
   let lastError = "no attempt made";
   while (Date.now() < deadline) {
     try {
-      const response = await fetch("http://localhost:8787/api/bootstrap?limit=1");
+      const response = await fetch(WORKER_URL + "/api/bootstrap?limit=1");
       if (response.ok) return;
       lastError = "HTTP " + response.status;
     } catch (error) {
@@ -97,7 +91,7 @@ export async function waitForWorker(timeoutMs = 90_000): Promise<void> {
     }
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
-  throw new Error("the Worker on :8787 did not answer /api/bootstrap: " + lastError);
+  throw new Error("the Worker at " + WORKER_URL + " did not answer /api/bootstrap: " + lastError);
 }
 
 /** First line of a wrangler output block, for compact skip reasons. */

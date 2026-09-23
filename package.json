@@ -33,7 +33,6 @@
     "@solana/web3.js": "^1.99.0",
     "bs58": "latest",
     "lightweight-charts": "^4.2.3",
-    "lucide-react": "latest",
     "posthog-js": "^1.431.2",
     "react": "latest",
     "react-dom": "latest"

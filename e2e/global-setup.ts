@@ -1,17 +1,17 @@
 /**
- * Prepares the local backend the suite runs against: waits for the Worker, then makes sure the local
- * D1 holds the demo mines the repo's own dev workflow uses. Both steps are idempotent, and a failing
- * seed is reported rather than fatal, so the tests that need that data can skip with the reason.
+ * Prepares the local backend the suite runs against: waits for the Worker, then applies pending D1
+ * migrations. The suite never seeds application rows: v2 reads indexed chain state and must show
+ * honest empty/unavailable states when no validator has produced any.
  */
-import { firstLine, seedLocalDemoData, waitForWorker } from "./fixtures/d1";
+import { firstLine, prepareLocalD1, waitForWorker } from "./fixtures/d1";
 
 export default async function globalSetup(): Promise<void> {
   await waitForWorker();
 
-  const seeded = seedLocalDemoData();
-  if (seeded.ok) {
-    console.log("[e2e] local D1 prepared (migrations + scripts/dev-seed.sql)");
+  const prepared = prepareLocalD1();
+  if (prepared.ok) {
+    console.log("[e2e] local D1 prepared (migrations only)");
     return;
   }
-  console.warn("[e2e] could not prepare local D1: " + firstLine(seeded.output));
+  console.warn("[e2e] could not prepare local D1: " + firstLine(prepared.output));
 }

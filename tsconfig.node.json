@@ -10,5 +10,8 @@
     "noEmit": true,
     "strict": true
   },
-  "include": ["vite.config.ts", "vitest.config.ts", "scripts"]
+  "include": ["vite.config.ts", "vitest.config.ts", "scripts"],
+  // scripts/tmp/ is scratch written by parallel workers (see .gitignore): probe harnesses and
+  // copied spines that are not part of the tree and must not gate `npm run typecheck`.
+  "exclude": ["scripts/tmp"]
 }

@@ -11,7 +11,8 @@
 import bs58 from "bs58";
 import { signMessageBytes, wallet } from "./wallet";
 
-const WORKER_ORIGIN = "http://localhost:8787";
+/** The Worker half of the dev pair, overridable so a run can target a pair on other ports. */
+const WORKER_ORIGIN = process.env.DIGGO_E2E_WORKER_URL ?? "http://localhost:8787";
 const SESSION_COOKIE = "diggo_session";
 const RETRY_AFTER_MS = 62_000;
 

@@ -14,6 +14,8 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
   testMatch: /.*\.e2e\.ts$/,
+  // Overridable so a run can be pointed at a pair on other ports (see vite.config.ts): with the
+  // server already answering, Playwright reuses it instead of starting its own on 5173.
   // The suite drives the shared local D1 through the Worker, so tests stay ordered inside a file
   // and each file keeps one worker. Every worker also gets its own wallet (see e2e/fixtures).
   //
@@ -32,7 +34,7 @@ export default defineConfig({
   expect: { timeout: 20_000 },
   globalSetup: "./e2e/global-setup.ts",
   use: {
-    baseURL: "http://localhost:5173",
+    baseURL: process.env.DIGGO_E2E_BASE_URL ?? "http://localhost:5173",
     actionTimeout: 20_000,
     navigationTimeout: 30_000,
     trace: "retain-on-failure",

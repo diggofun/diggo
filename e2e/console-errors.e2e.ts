@@ -23,7 +23,9 @@ test("the game surfaces render without console errors", async ({ page }) => {
   const routes: { path: string; anchor: string }[] = [
     { path: "/", anchor: ".hero" },
     { path: "/mine", anchor: ".dashboard-panel" },
-    { path: "/crew", anchor: ".crew-board" },
+    // The crew board renders only once the player's PlayerAccount has been read from chain, so the
+    // anchor here is the page shell: this test is about what the app logs, not about a chain read.
+    { path: "/crew", anchor: "main#content" },
     { path: "/discoveries", anchor: ".discoveries" },
     { path: "/leaderboards", anchor: ".leaderboards" },
     { path: "/explore", anchor: "main#content" },

@@ -5,4 +5,3 @@ ALTER TABLE tokens ADD COLUMN usd_price_available INTEGER NOT NULL DEFAULT 0;
 UPDATE tokens
 SET volume_24h_usd = 0
 WHERE usd_price_available = 0;
-
