@@ -58,6 +58,10 @@ pub const SPONSOR_EVENT_SEED: &[u8] = b"sponsor-event";
 pub const SPONSOR_GRANT_SEED: &[u8] = b"sponsor-grant";
 /// The launch mint: [b"mint", creator, nonce u8].
 pub const MINT_SEED: &[u8] = b"mint";
+/// Referral credit marker: [b"referral", referrer, referee].
+pub const REFERRAL_CREDIT_SEED: &[u8] = b"referral";
+/// Referral weekly counter: [b"referral_week", referrer].
+pub const REFERRAL_WEEK_SEED: &[u8] = b"referral_week";
 
 /// Seeds of the DiscoveryOpportunity PDA. The window index is little-endian and u16, so the
 /// PDA is unique per (coin, owner, window) and a reroll is impossible by construction.

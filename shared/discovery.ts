@@ -1,4 +1,142 @@
 import { DIGGO_CONFIG, type DiggoConfig, type RewardState } from "./config";
+import { crewTotalLevel } from "./crew";
+import { V2_BPS } from "./rewardIndex";
+import { DISCOVERY_PRICE_SCALE, coinPriceScaled, type V2CoinFacts } from "./rarity";
+
+// ---- v2: eligibility and the reservation a roll charges (design 3.2, 4.2, 4.3) ----------
+//
+// Mirrors the eligibility rule, the two budget windows and the reservation in
+// programs/diggo-protocol/src/{math/rarity.rs, instructions/discovery.rs}. The lamport caps
+// are charged at roll creation, while the epoch seed still does not exist, which is what
+// makes the scheme safe whatever a wallet knows about the seed before it rolls.
+
+/** Eligibility floors, mirroring the constants in math/rarity.rs. */
+export const DISCOVERY_MIN_ACCOUNT_AGE_DAYS = 7;
+export const DISCOVERY_MIN_ACTIVE_DAYS = 5;
+export const DISCOVERY_MIN_VALID_ACTIVATIONS = 5;
+export const DISCOVERY_MIN_TOTAL_CREW_LEVEL = 15;
+export const DISCOVERY_MIN_MATURITY_BPS = 5_000;
+
+/** The maturity rungs of MATURITY_RAMP: day, and the bps of full power it unlocks. */
+export const MATURITY_RAMP: readonly (readonly [number, number])[] = [
+  [1, 2_000],
+  [3, 4_000],
+  [7, 7_000]
+];
+
+export const SECONDS_PER_DAY = 86_400;
+export const SECONDS_PER_WEEK = 604_800;
+
+/** How far a wallet's maturity ramp has come, in bps of full power. */
+export function discoveryMaturityBps(createdAt: number, now: number): number {
+  const ageDays = Math.floor(Math.max(0, now - createdAt) / SECONDS_PER_DAY);
+  const lastRung = MATURITY_RAMP[MATURITY_RAMP.length - 1][0];
+  if (ageDays > lastRung) return 10_000;
+  let bps = 0;
+  for (const [day, value] of MATURITY_RAMP) {
+    if (ageDays >= day) bps = value;
+  }
+  return bps;
+}
+
+export interface V2DiscoveryPlayer {
+  readonly createdAt: number;
+  readonly activeDays: number;
+  readonly validActivations: number;
+  readonly crewLevels: readonly number[];
+}
+
+/**
+ * The whole on-chain eligibility rule, and it is milestones only: how long the account has existed,
+ * how many days it actually played, how many activations it got credit for, how far its crew has
+ * come and how mature it is. Holding SOL is not one of the gates - a roll is earned by playing.
+ */
+export function discoveryIsEligibleV2(player: V2DiscoveryPlayer, now: number): boolean {
+  return (
+    player.activeDays >= DISCOVERY_MIN_ACTIVE_DAYS &&
+    player.validActivations >= DISCOVERY_MIN_VALID_ACTIVATIONS &&
+    crewTotalLevel(player.crewLevels) >= DISCOVERY_MIN_TOTAL_CREW_LEVEL &&
+    discoveryMaturityBps(player.createdAt, now) >= DISCOVERY_MIN_MATURITY_BPS
+  );
+}
+
+export function discoveryDayIndex(now: number): number {
+  return Math.floor(Math.max(0, now) / SECONDS_PER_DAY) % 65_536;
+}
+
+export function discoveryWeekIndex(now: number): number {
+  return Math.floor(Math.max(0, now) / SECONDS_PER_WEEK) % 65_536;
+}
+
+/**
+ * The largest value one discovery on this coin could pay right now, which is what a roll
+ * reserves at creation: the top live tier's value class, clamped by every token-side ceiling
+ * the coin carries and priced at the coin's own price. Null when the coin has no price.
+ */
+export function discoveryReservationLamports(
+  tiers: readonly { readonly valueLamports: bigint }[],
+  discoveryMaxBps: number,
+  coin: V2CoinFacts
+): bigint | null {
+  let top = 0n;
+  for (const tier of tiers) {
+    if (tier.valueLamports > top) top = tier.valueLamports;
+  }
+  if (top === 0n) return 0n;
+  const price = coinPriceScaled(coin);
+  if (price === null) return null;
+  let ceiling = (coin.discoveryReserveTotal * BigInt(discoveryMaxBps)) / V2_BPS;
+  if (ceiling > coin.discoveryRemaining) ceiling = coin.discoveryRemaining;
+  const epochRemaining =
+    coin.discoveryEpochBudget > coin.discoveryEpochSpent
+      ? coin.discoveryEpochBudget - coin.discoveryEpochSpent
+      : 0n;
+  if (ceiling > epochRemaining) ceiling = epochRemaining;
+  const valueCeiling = (ceiling * price) / DISCOVERY_PRICE_SCALE;
+  return top < valueCeiling ? top : valueCeiling;
+}
+
+export type V2DiscoveryCapReason = "ok" | "daily" | "weekly";
+
+/**
+ * The account-side caps, checked against a reservation before the roll is created. The
+ * protocol-wide day is a separate GlobalBudget account, keyed by day index.
+ */
+export function discoveryAccountCapCheck(
+  spentDayLamports: bigint,
+  spentWeekLamports: bigint,
+  reservationLamports: bigint,
+  dailyCapLamports: bigint,
+  weeklyCapLamports: bigint
+): V2DiscoveryCapReason {
+  if (spentDayLamports + reservationLamports > dailyCapLamports) return "daily";
+  if (spentWeekLamports + reservationLamports > weeklyCapLamports) return "weekly";
+  return "ok";
+}
+
+export function discoveryWindowReset(
+  dayIndex: number,
+  weekIndex: number,
+  spentDayLamports: bigint,
+  spentWeekLamports: bigint,
+  now: number
+): {
+  readonly dayIndex: number;
+  readonly weekIndex: number;
+  readonly spentDayLamports: bigint;
+  readonly spentWeekLamports: bigint;
+} {
+  const day = discoveryDayIndex(now);
+  const week = discoveryWeekIndex(now);
+  const dayRolled = dayIndex !== day;
+  const weekRolled = weekIndex !== week;
+  return {
+    dayIndex: day,
+    weekIndex: week,
+    spentDayLamports: dayRolled ? 0n : spentDayLamports,
+    spentWeekLamports: weekRolled ? 0n : spentWeekLamports
+  };
+}
 
 /**
  * Discovery eligibility and multi-level budget caps (spec 44, 45, 54, 64).

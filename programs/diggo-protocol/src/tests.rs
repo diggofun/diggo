@@ -1855,11 +1855,11 @@ fn v2_account_sizes_match_their_frozen_layouts() {
 /// is the test that makes them a contract rather than a comment.
 #[test]
 fn v2_account_sizes_are_the_documented_numbers() {
-    assert_eq!(Coin::SIZE, 408);
+    assert_eq!(Coin::SIZE, 464);
     assert_eq!(PlayerAccount::SIZE, 216);
     assert_eq!(MiningPosition::SIZE, 51);
     assert_eq!(LiquidityPool::SIZE, 185);
-    assert_eq!(DiscoveryOpportunity::SIZE, 116);
+    assert_eq!(DiscoveryOpportunity::SIZE, 124);
     assert_eq!(GlobalBudget::SIZE, 53);
     assert_eq!(SponsorVault::SIZE, 70);
     assert_eq!(SponsorEvent::SIZE, 92);
@@ -1927,14 +1927,18 @@ fn v2_error_codes_are_appended_in_the_designed_order() {
         DiggoError::WeeklyCapExceeded,
         DiggoError::GlobalCapExceeded,
         DiggoError::EpochBudgetExhausted,
+        DiggoError::UnclaimedRewards,
+        DiggoError::BondRetired,
     ];
-    assert_eq!(v2.len(), 48);
+    assert_eq!(v2.len(), 50);
     for pair in v2.windows(2) {
         assert_eq!(u32::from(pair[1]), u32::from(pair[0]) + 1);
     }
     // The v4 enum holds 48 variants, so the v2 block starts at 6000 + 48.
     assert_eq!(u32::from(v2[0]), ERROR_CODE_OFFSET + 48);
-    assert_eq!(u32::from(*v2.last().unwrap()), ERROR_CODE_OFFSET + 95);
+    // BondRetired is appended last, so every code a client already matches on keeps its number.
+    assert_eq!(u32::from(*v2.last().unwrap()), ERROR_CODE_OFFSET + 97);
+    assert_eq!(u32::from(DiggoError::BondRetired), ERROR_CODE_OFFSET + 97);
 }
 
 /// The v2 seed prefixes are the ones design section 8.2 freezes. Changing one is a contract
@@ -1967,18 +1971,35 @@ fn v2_seed_prefixes_are_the_frozen_ones() {
     assert_eq!(&day[GLOBAL_BUDGET_SEED.len()..], &3u16.to_le_bytes());
 }
 
-/// The STARTER_TRANCHE_CAP amendment: the starter tranche is a tenth of a block whatever the
-/// bonded power is, and the unassigned remainder stays in the reserve rather than being
-/// burned or handed to the starter index.
+/// The STARTER_TRANCHE_CAP amendment and the retired bond: the starter tranche is a tenth of a
+/// block whatever the bonded power is, the unassigned remainder stays in the reserve rather than
+/// being burned or handed to the starter index, and the bond constants keep their frozen values
+/// even though no new bond may be posted.
 #[test]
 fn starter_tranche_cap_and_defaults_are_the_amended_ones() {
     assert_eq!(STARTER_TRANCHE_BPS, 1_000);
     assert_eq!(STARTER_EFFICIENCY_BPS, 2_500);
+    // Retired, and still exactly the numbers the frozen layouts and the parity vectors carry.
     assert_eq!(BOND_LAMPORTS, 70_000_000);
     assert_eq!(BOND_COOLDOWN_SECONDS, 604_800);
     assert_eq!(EPOCH_SEED_DELAY_SLOTS, 32);
     assert_eq!(EPOCH_SEED_MAX_LATENESS_SLOTS, SLOT_HASHES_WINDOW);
     assert_eq!(MAX_PAUSE_SECONDS, 72 * 3_600);
-    assert_eq!(MINT_V2_SIZE, 359);
+    assert_eq!(MINT_V2_SIZE, 438);
+    // The mint size is derived from the metadata caps rather than quoted, so a cap change that the
+    // layout cannot hold is a failing test here instead of a mint that cannot be initialised.
+    assert_eq!(
+        MINT_V2_SIZE,
+        MINT_BASE_SIZE
+            + MINT_ACCOUNT_TYPE_SIZE
+            + MINT_METADATA_POINTER_SIZE
+            + MINT_TLV_HEADER_SIZE
+            + 32
+            + 32
+            + (4 + MAX_NAME_LEN)
+            + (4 + MAX_SYMBOL_LEN)
+            + (4 + MAX_URI_LEN)
+            + 4
+    );
     assert_eq!(MIN_CURVE_MINING_BLOCKS, 48);
 }

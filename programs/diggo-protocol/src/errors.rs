@@ -216,4 +216,18 @@ pub enum DiggoError {
     GlobalCapExceeded,
     #[msg("The coin's epoch discovery budget is exhausted")]
     EpochBudgetExhausted,
+    #[msg("The position still has an unclaimed reward")]
+    UnclaimedRewards,
+    /// Appended after every other variant, so no existing code moves. The flat bond and the
+    /// starter penalty it bought are retired: nothing may post a new bond and nothing may fund
+    /// one from a sponsor vault. The legacy withdrawal path still returns bonds already posted,
+    /// which is why the variants above it stay.
+    #[msg("The bond is retired: no new bond may be posted or funded")]
+    BondRetired,
+    #[msg("Referral credit amount must be greater than zero and at most 250 ORE")]
+    ReferralAmountOutOfRange,
+    #[msg("The referrer has reached the weekly referral credit cap")]
+    ReferralWeeklyCapExceeded,
+    #[msg("The referral referee argument does not match the supplied account")]
+    ReferralRefereeMismatch,
 }

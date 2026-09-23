@@ -131,6 +131,11 @@ pub const MINE_PHASE_APPENDED_BYTES: usize = 2 + 8;
 /// `graduated` alone, exactly as it did before this field existed.
 pub const ACCOUNT_VERSION: u8 = 5;
 
+/// Hard ceiling for one referral credit, mirrored by `shared/config.ts`.
+pub const MAX_REFERRAL_ORE_PER_CREDIT: u64 = 250;
+/// Maximum number of referral credits a referrer may receive in one week.
+pub const MAX_REFERRAL_ORE_CREDITS_PER_WEEK: u8 = 25;
+
 
 /// Account kinds accepted by migrate_account.
 pub const ACCOUNT_KIND_PROTOCOL: u8 = 0;
@@ -154,17 +159,21 @@ pub const PROTOCOL_GUARDIAN_OFFSET: usize = 8 + 32 + 32;
 // 5: v2 is a fresh program id with a wiped devnet and no migration path, so no v2 account ever
 // decodes a v4 layout.
 
-/// Flat, refundable anti-bot bond, identical for every wallet. It buys no power, no ORE, no
-/// rarity and no cap: it only makes a farm park real capital behind a cooldown.
+/// Retired. The flat 0.07 SOL anti-bot bond no longer gates anything: no new bond may be
+/// posted, and nothing a player can do costs a lamport beyond the rent and the transaction fee
+/// they already pay. The value is kept only because the frozen PlayerAccount and ProtocolConfig
+/// layouts and the parity vectors still carry the field.
 pub const BOND_LAMPORTS: u64 = 70_000_000;
-/// Cooldown between request_unbond and withdraw_bond: seven days.
+/// Cooldown between request_unbond and withdraw_bond: seven days. Still enforced, because it is
+/// the only thing standing between a bond posted before the retirement and its withdrawal.
 pub const BOND_COOLDOWN_SECONDS: i64 = 604_800;
-/// Mining efficiency of an unbonded (starter-mode) player, in bps of the same power.
+/// Retired. Every player mines at full efficiency, so no position is throttled by this factor.
+/// The value is kept because ProtocolConfig still carries the frozen field.
 pub const STARTER_EFFICIENCY_BPS: u16 = 2_500;
 /// Share of one block's reward the starter tranche may ever receive, in bps, whatever the
-/// bonded power is. A bonded player therefore always keeps at least 90% of a block, and the
-/// remainder a starter-only coin cannot assign stays in the Mining Reserve: it is never
-/// burned and never re-allocated to the starter index.
+/// bonded power is. Every newly armed position is the full tranche, so this cap only still binds
+/// on a position armed before the retirement and not yet removed: the coin's power totals and
+/// both indexes are keyed by the tranche a position was armed with.
 pub const STARTER_TRANCHE_BPS: u16 = 1_000;
 /// Slots between an epoch's end and the SlotHashes entry its seed is taken from.
 pub const EPOCH_SEED_DELAY_SLOTS: u64 = 32;
@@ -190,7 +199,8 @@ pub const DEFAULT_DISCOVERY_DAILY_CAP_LAMPORTS: u64 = 1_000_000_000;
 pub const DEFAULT_DISCOVERY_WEEKLY_CAP_LAMPORTS: u64 = 4_000_000_000;
 pub const DEFAULT_DISCOVERY_GLOBAL_DAILY_CAP_LAMPORTS: u64 = 50_000_000_000;
 pub const DEFAULT_DISCOVERY_EPOCH_BUDGET_LAMPORTS: u64 = 2_000_000_000;
-/// Default per-wallet sponsor limit for a bond or account subsidy: one bond.
+/// Default per-wallet sponsor limit for a wallet-subject subsidy: one bond's worth. The bond
+/// kind is retired, but an account subsidy still sizes its limit off the same figure.
 pub const DEFAULT_SPONSOR_PER_WALLET_LIMIT_LAMPORTS: u64 = BOND_LAMPORTS;
 /// Default crank-pool share of a trade's fee. The tip a crank may take is bounded by
 /// CRANK_TIP_BPS of the coin's accrued fees, and it can only ever be paid out of accrual.
@@ -198,6 +208,21 @@ pub const DEFAULT_CRANK_POOL_FEE_BPS: u16 = 0;
 /// Length of one discovery day and one discovery week, in seconds.
 pub const DISCOVERY_DAY_SECONDS: i64 = 86_400;
 pub const DISCOVERY_WEEK_SECONDS: i64 = 604_800;
+/// Length of the short price window the discovery payout is normalised by, in slots.
+///
+/// Design 4.3 asks for a short window next to the accumulator. A lifetime average cannot be
+/// moved by a sandwich, but it is dragged by the pool's whole history, so on a young pool it is
+/// not a price anyone traded at, and it says nothing about the price right now. 900 slots is
+/// about six minutes at 400 ms: long enough that a single pump cannot own the window, short
+/// enough that it tracks the market the discovery is actually paid out of.
+pub const TWAP_WINDOW_SLOTS: u64 = 900;
+/// How far the spot price may sit from the short-window TWAP before the TWAP is used alone.
+///
+/// The payout takes the *higher* of the two readings, which is already the safe direction: a
+/// pushed-down spot cannot buy more units and a pushed-up spot only pays fewer. This bound is
+/// the second line - past it the spot is not merely unhelpful, it is evidence of a sandwich, so
+/// it is dropped and the window stands on its own.
+pub const DISCOVERY_TWAP_MAX_DEVIATION_BPS: u16 = 2_000;
 /// Seconds a pending DiscoveryOpportunity may stay unsettleable before expire_opportunity
 /// may close it: one epoch plus a settle window, so an honest settle is never griefed.
 pub const OPPORTUNITY_EXPIRY_SECONDS: i64 = 1_209_600;
@@ -206,17 +231,51 @@ pub const OPPORTUNITY_EXPIRY_SECONDS: i64 = 1_209_600;
 pub const MATURITY_RAMP: [(u64, u16); 3] = [(1, 2_000), (3, 4_000), (7, 7_000)];
 /// A player may re-activate at most once every this many seconds.
 pub const MIN_REACTIVATION_SECONDS: i64 = 86_400;
+/// How early inside the previous window a re-activation may land.
+///
+/// The window is half open - [last_activation_at, active_until) - and MIN_REACTIVATION_SECONDS
+/// is exactly ACTIVATION_SECONDS, so an honest player who re-activates the moment they are
+/// allowed to lands one second *after* their own window closed. That instant is exactly where a
+/// position's accrual is settled, so without this the diligent player would forfeit the window
+/// they just mined. The early window puts the legal re-activation comfortably inside the window
+/// it closes, which is the only place a settle can credit it exactly (CONTRACTS.md, the
+/// activation-gate amendment).
+pub const REACTIVATION_EARLY_SECONDS: i64 = 3_600;
 /// Activation window granted by activate, and the grace the UI derives from it.
 pub const ACTIVATION_SECONDS: i64 = 86_400;
 pub const ACTIVATION_GRACE_SECONDS: i64 = 3_600;
 
 // ---- Token-2022 mint layout (design 1.3(c)) ----------------------------------------------
 
-pub const MINT_BASE_SIZE: usize = 82;
+/// The base region of a Token-2022 account, mint or token alike: 165 bytes.
+///
+/// Token-2022 8.0.1 writes the account-type byte at `Account::LEN` (165) for both base states -
+/// see `BASE_ACCOUNT_LENGTH` and `type_and_tlv_indices` in its `extension/mod.rs` - so a mint's
+/// own 82 bytes are followed by 83 zero bytes of padding before that byte, and the extension TLV
+/// data starts at 166. Sizing the account from the mint's 82 alone is what made every launch fail
+/// inside MetadataPointerInstruction::Initialize with InvalidAccountData: the account type is read
+/// at `BASE_ACCOUNT_LENGTH - Mint::LEN`, and a buffer that stops short of that index is refused.
+pub const MINT_BASE_SIZE: usize = 165;
 pub const MINT_ACCOUNT_TYPE_SIZE: usize = 1;
 pub const MINT_METADATA_POINTER_SIZE: usize = 68;
-pub const MINT_TOKEN_METADATA_SIZE: usize = 208;
-/// The whole hand-written Token-2022 mint launch_token creates: 359 bytes.
+/// The 4-byte TLV header every Token-2022 extension entry carries.
+pub const MINT_TLV_HEADER_SIZE: usize = 4;
+/// The TokenMetadata TLV entry, at exactly the v2 metadata caps.
+///
+/// The entry is a borsh instance of spl-token-metadata-interface's TokenMetadata, so its size is
+/// a function of the caps rather than a number of its own: the update authority and the mint
+/// (32 + 32), the three length-prefixed strings at MAX_NAME_LEN, MAX_SYMBOL_LEN and MAX_URI_LEN,
+/// and the empty additional-metadata vector. That is 204 bytes. The 208 it replaces was the same
+/// arithmetic against a stale 200-byte URI cap - four bytes the program paid rent on and the
+/// client was told to expect. See CONTRACTS.md and docs/CONTRACT_CHANGE_REQUESTS.md.
+pub const MINT_TOKEN_METADATA_SIZE: usize = MINT_TLV_HEADER_SIZE
+    + 32
+    + 32
+    + (4 + MAX_NAME_LEN)
+    + (4 + MAX_SYMBOL_LEN)
+    + (4 + MAX_URI_LEN)
+    + 4;
+/// The whole hand-written Token-2022 mint launch_token creates: 438 bytes.
 pub const MINT_V2_SIZE: usize = MINT_BASE_SIZE
     + MINT_ACCOUNT_TYPE_SIZE
     + MINT_METADATA_POINTER_SIZE

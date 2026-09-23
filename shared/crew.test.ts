@@ -12,6 +12,12 @@ import {
   minersBasePower,
   upgradeCostMultiplier,
   upgradeOreCost,
+  onchainCrewPower,
+  onchainMaturityRampBps,
+  onchainMiningPower,
+  onchainPowerMaturityBps,
+  onchainUpgradeOreCost,
+  SLOTS_PER_DAY,
 } from "./crew";
 import { oreEfficiency } from "./ore";
 
@@ -199,5 +205,61 @@ describe("effective Mining Power (spec 40, 53, 58, 61, 64)", () => {
         mineTotalPower: 500_000,
       }),
     ).toBe(2_259n);
+  });
+});
+
+// ---- the on-chain mirror (math/power.rs) --------------------------------------------------
+//
+// These are the golden vectors of shared/parity/player.json, emitted from the Rust side. WS-G
+// asserts the whole file; the values below are the ones a reader can check by hand, and they
+// fail here - in the module that computes them - the moment a table is regenerated.
+
+describe("on-chain power (math/power.rs)", () => {
+  it("pins the golden crew power vectors", () => {
+    expect(onchainCrewPower(starter)).toBe(100);
+    expect(onchainCrewPower({ ...starter, miners: 2 })).toBe(153);
+    expect(onchainCrewPower({ ...starter, miners: 50, drills: 50 })).toBe(1_463);
+    expect(onchainCrewPower({ ...starter, miners: 100 })).toBe(1_737);
+    expect(onchainCrewPower({ ...starter, drills: 100 })).toBe(129);
+    expect(onchainCrewPower(veteran)).toBe(2_257);
+    // The deployed config's crewPower IS the chain's number rather than a second opinion,
+    // because the client prices upgrades with it.
+    expect(crewPower({ ...starter, miners: 50, drills: 50 })).toBe(1_463);
+    expect(crewPower(veteran)).toBe(2_257);
+  });
+
+  it("pins the golden upgrade prices and the Foreman discount", () => {
+    expect(onchainUpgradeOreCost("miners", 1, 1)).toBe(80);
+    expect(onchainUpgradeOreCost("miners", 1, 100)).toBe(56);
+    expect(onchainUpgradeOreCost("miners", 99, 1)).toBe(49_771);
+    expect(onchainUpgradeOreCost("foreman", 99, 1)).toBe(118_206);
+    expect(onchainUpgradeOreCost("storage", 99, 100)).toBe(65_362);
+    expect(upgradeOreCost("miners", 1)).toBe(80);
+    expect(upgradeOreCost("miners", 1, 100)).toBe(56);
+    // MAX_CREW_LEVEL is a real level with a real price; refusing to buy past it is the
+    // instruction's job (CrewAtMaxLevel), not the table's.
+    expect(onchainUpgradeOreCost("miners", 100, 1)).toBeGreaterThan(0);
+    expect(() => onchainUpgradeOreCost("miners", 101, 1)).toThrow();
+    expect(() => onchainUpgradeOreCost("shafts" as CrewComponent, 1, 1)).toThrow();
+  });
+
+  it("throttles by maturity alone: there is no deposit that changes power", () => {
+    // The full-power figure is the only figure. Nothing a wallet holds can multiply it or cut it
+    // down, which is what removing the bond and starter mode means in one assertion.
+    expect(onchainMiningPower(veteran, 10_000)).toBe(2_257);
+    expect(onchainMiningPower(veteran, 2_000)).toBe(Math.floor((2_257 * 2_000) / 10_000));
+    expect(onchainMiningPower(veteran, 10_000)).toBe(onchainCrewPower(veteran));
+  });
+
+  it("measures maturity from the creation slot in whole days", () => {
+    expect(onchainPowerMaturityBps(0, 0)).toBe(2_000);
+    expect(onchainPowerMaturityBps(0, SLOTS_PER_DAY - 1)).toBe(2_000);
+    expect(onchainPowerMaturityBps(0, SLOTS_PER_DAY)).toBe(4_000);
+    expect(onchainPowerMaturityBps(0, 3 * SLOTS_PER_DAY)).toBe(7_000);
+    expect(onchainPowerMaturityBps(0, 7 * SLOTS_PER_DAY)).toBe(10_000);
+    // A clock that reads before the account existed is throttled, never credited.
+    expect(onchainPowerMaturityBps(500, 100)).toBe(0);
+    expect(onchainMaturityRampBps(0)).toBe(2_000);
+    expect(onchainMaturityRampBps(365)).toBe(10_000);
   });
 });

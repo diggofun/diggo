@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { DIGGO_CONFIG, createDiggoConfig } from "./config";
 import {
+  ONCHAIN_ACTIVATION_GRACE_SECONDS,
+  ONCHAIN_STREAK_MILESTONES,
+  onchainActivateOutcome,
+  onchainActivationEligibility,
+  onchainActivationWindow,
+  onchainFreezesEarnedByInterval,
+  onchainGrantFreezes,
+  onchainMilestoneRewards,
+  onchainNextStreak,
   activationEligibility,
   activationWindow,
   applyActivation,
@@ -202,6 +211,62 @@ describe("block eligibility boundaries (spec 77)", () => {
     expect(times).toHaveLength(25);
     expect(eligible).toHaveLength(24);
     expect(eligible[eligible.length - 1]).toBe(window.activeUntil - HOUR);
+  });
+});
+// ---- the on-chain mirror (math/ore.rs and instructions/player_activate.rs) ----------------
+
+describe("on-chain activation", () => {
+  it("pins the golden milestone and freeze vectors", () => {
+    expect(ONCHAIN_STREAK_MILESTONES.length).toBe(7);
+    expect(onchainMilestoneRewards(0, 1)).toEqual({ ore: 0, freezes: 0 });
+    expect(onchainMilestoneRewards(0, 3)).toEqual({ ore: 75, freezes: 0 });
+    expect(onchainMilestoneRewards(2, 30)).toEqual({ ore: 2_025, freezes: 1 });
+    expect(onchainMilestoneRewards(0, 365)).toEqual({ ore: 34_525, freezes: 5 });
+    // A milestone is crossed once: a repeat activation and a broken streak mint nothing.
+    expect(onchainMilestoneRewards(365, 400)).toEqual({ ore: 0, freezes: 0 });
+    expect(onchainMilestoneRewards(10, 1)).toEqual({ ore: 0, freezes: 0 });
+    expect(onchainFreezesEarnedByInterval(6, 7)).toBe(1);
+    expect(onchainFreezesEarnedByInterval(7, 21)).toBe(2);
+    expect(onchainFreezesEarnedByInterval(100, 1)).toBe(0);
+    expect(onchainGrantFreezes(0, 4)).toEqual({ freezes: 3, awarded: 3 });
+    expect(onchainGrantFreezes(3, 5)).toEqual({ freezes: 3, awarded: 0 });
+  });
+
+  it("pins the golden streak steps", () => {
+    expect(onchainNextStreak(null, 0, 4, 1)).toEqual({ streak: 1, freezes: 1, usedFreeze: false });
+    expect(onchainNextStreak(1_000, 1_000, 4, 1)).toEqual({ streak: 5, freezes: 1, usedFreeze: false });
+    // Inside the window plus the one-hour grace the chain grants.
+    expect(onchainNextStreak(1_000, 91_000, 4, 1)).toEqual({ streak: 5, freezes: 1, usedFreeze: false });
+    // One missed window with a freeze in hand: the freeze is spent and the streak lives.
+    expect(onchainNextStreak(1_000, 91_001, 4, 1)).toEqual({ streak: 5, freezes: 0, usedFreeze: true });
+    expect(onchainNextStreak(1_000, 177_400, 4, 1)).toEqual({ streak: 5, freezes: 0, usedFreeze: true });
+    // Past the freeze deadline, or with no freeze: the streak breaks back to one.
+    expect(onchainNextStreak(1_000, 177_401, 4, 1)).toEqual({ streak: 1, freezes: 1, usedFreeze: false });
+    expect(onchainNextStreak(1_000, 91_001, 4, 0)).toEqual({ streak: 1, freezes: 0, usedFreeze: false });
+  });
+
+  it("uses the chain's own window, grace and rate limit", () => {
+    const window = onchainActivationWindow(1_000);
+    expect(window.activeUntil).toBe(1_000 + 86_400);
+    expect(window.graceUntil).toBe(1_000 + 86_400 + ONCHAIN_ACTIVATION_GRACE_SECONDS);
+    expect(onchainActivationEligibility(null, 5_000).eligible).toBe(true);
+    expect(onchainActivationEligibility(1_000, 1_000).eligible).toBe(false);
+    expect(onchainActivationEligibility(1_000, 1_000 + 86_400).eligible).toBe(true);
+  });
+
+  it("books the whole activation, ORE included", () => {
+    const first = onchainActivateOutcome(record(), 7 * DAY, 1_000);
+    expect(first.streak).toBe(1);
+    expect(first.activeUntil).toBe(1_000 + 86_400);
+    expect(first.ore).toBe(50);
+    // The next day, streak 2 -> 3 crosses the day-3 milestone.
+    const third = onchainActivateOutcome(
+      record({ lastActivationAt: 1_000, streak: 2 }),
+      7 * DAY,
+      1_000 + DAY,
+    );
+    expect(third.streak).toBe(3);
+    expect(third.ore).toBe(50 + 75);
   });
 });
 

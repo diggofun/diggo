@@ -1,5 +1,6 @@
 import { DIGGO_CONFIG, type DiggoConfig } from "./config";
-import type { DecodedLaunchMarket } from "./program";
+import { ACCOUNT_RENT_LAMPORTS } from "./program";
+import type { DecodedCoin, DecodedLiquidityPool } from "./program";
 import type { MineEmissionSource } from "./types";
 
 /**
@@ -43,7 +44,20 @@ export interface CurveMiningState {
   blockReward: bigint;
 }
 
-export function curveMiningStateOf(market: DecodedLaunchMarket): CurveMiningState {
+/**
+ * The five curve-ledger fields of a decoded `Coin`, which is all this ledger reads. They are
+ * named rather than taken from `DecodedCoin` so a caller holding only the ledger - a test, the
+ * sim's own market - can use the same helpers without inventing a whole account.
+ */
+export interface CurveMiningLedgerFields {
+  graduated: boolean;
+  curveMiningCap: bigint;
+  curveMiningMined: bigint;
+  curveMiningUnpaid: bigint;
+  curveMiningBlockReward: bigint;
+}
+
+export function curveMiningStateOf(market: CurveMiningLedgerFields): CurveMiningState {
   return {
     graduated: market.graduated,
     cap: market.curveMiningCap,
@@ -197,7 +211,15 @@ export interface CurveSellCapacity {
   tokensForFullCapacity: bigint | null;
 }
 
-export function curveSellCapacity(market: DecodedLaunchMarket): CurveSellCapacity {
+/** The reserve pair and the graduation flag a sell capacity is read from. */
+export interface CurveVenueReserves {
+  graduated: boolean;
+  solReserve: bigint;
+  virtualSolReserve: bigint;
+  tokenReserve: bigint;
+}
+
+export function curveSellCapacity(market: CurveVenueReserves): CurveSellCapacity {
   if (market.graduated) return { realSolLamports: 0n, tokensForFullCapacity: 0n };
   const realSol = market.solReserve;
   const virtual = market.virtualSolReserve;
@@ -250,4 +272,361 @@ export function activeMineBudget(input: ActiveMineBudgetInput): ActiveMineBudget
     remainingReserve: input.reserveRemaining,
     rewardPerBlock: input.reserveBlockReward,
   };
+}
+
+// ---- v2: the bonding curve, the locked pool, the fee split and the on-chain TWAP -----------
+//
+// The client-and-Worker mirror of programs/diggo-protocol/src/math/curve.rs, math/fees.rs and
+// the Coin ledger helpers of state/coin.rs. None of it decides anything: the chain is the
+// authority and a disagreement here is a bug to fix, not a rule to apply. Every function rounds
+// the way the Rust does - down, never in the caller's favour - and the golden vectors in
+// shared/parity/coin.json pin the pair from the Rust side.
+//
+// A launched coin trades on its bonding curve until it reaches its graduation target and in its
+// locked pool afterwards. Both paths charge the same two fees, snapshotted into the coin at
+// launch so a later config change can never alter an existing market retroactively.
+
+/** Scale of every price the program derives from its own pool, in lamports per base unit. */
+export const PRICE_SCALE = 1_000_000_000_000n;
+
+/** Slots per second, used to turn an epoch's length in seconds into slots. */
+export const SLOTS_PER_SECOND = 2n;
+
+/** Basis points, as the chain counts them. */
+export const BPS_V2 = 10_000n;
+
+/** The share of a graduation target a curve starts with as a virtual SOL reserve. */
+export const DEFAULT_VIRTUAL_SOL_BPS = 3_500;
+
+/** Rent-exempt minimum of an account of this size: (size + 128) * 3,480 * 2 lamports. */
+export function rentExemptLamports(size: number): bigint {
+  return (BigInt(size) + 128n) * 6_960n;
+}
+
+/** A share of an amount in bps, rounded down: the direction every split on this path rounds. */
+export function mulBpsV2(amount: bigint, bps: number): bigint {
+  return (amount * BigInt(bps)) / BPS_V2;
+}
+
+/** The tokens a curve buy returns for a net SOL input, with the fees already taken. */
+export function curveBuyOut(
+  tokenReserve: bigint,
+  solReserve: bigint,
+  virtualSolReserve: bigint,
+  netSol: bigint,
+): bigint {
+  return (tokenReserve * netSol) / (solReserve + virtualSolReserve + netSol);
+}
+
+/**
+ * The gross SOL a curve sell returns for a token input, capped at the curve's real SOL.
+ *
+ * The virtual reserve inflates the price but can never be paid out, so the cap is what stops a
+ * sell from being paid out of lamports the curve does not hold.
+ */
+export function curveSellOut(
+  tokenReserve: bigint,
+  solReserve: bigint,
+  virtualSolReserve: bigint,
+  tokensIn: bigint,
+): bigint {
+  const raw = ((solReserve + virtualSolReserve) * tokensIn) / (tokenReserve + tokensIn);
+  return raw < solReserve ? raw : solReserve;
+}
+
+/** Tokens out of the locked pool for a net SOL input. */
+export function poolBuyOut(tokenReserve: bigint, solReserve: bigint, netSol: bigint): bigint {
+  return (tokenReserve * netSol) / (solReserve + netSol);
+}
+
+/** SOL out of the locked pool for a token input, before the explicit fees. */
+export function poolSellOut(tokenReserve: bigint, solReserve: bigint, tokensIn: bigint): bigint {
+  const raw = (solReserve * tokensIn) / (tokenReserve + tokensIn);
+  return raw < solReserve ? raw : solReserve;
+}
+
+/** The two destinations of one trade's fee, in lamports. */
+export interface TradeFeesV2 {
+  creator: bigint;
+  platform: bigint;
+}
+
+/**
+ * Splits a trade's gross lamports into the creator's share and the protocol's share.
+ *
+ * Both shares round down, so the net the curve or the pool receives is the remainder and the
+ * lamports always add up. The two shares together may never exceed the protocol cap, which is
+ * what stops a governance mistake from turning a trade into a fee.
+ */
+export function splitTradeFees(
+  gross: bigint,
+  creatorFeeBps: number,
+  platformFeeBps: number,
+): TradeFeesV2 {
+  return {
+    creator: mulBpsV2(gross, creatorFeeBps),
+    platform: mulBpsV2(gross, platformFeeBps),
+  };
+}
+
+/** What the curve or the pool receives after the fees. */
+export function netAfterTradeFees(gross: bigint, fees: TradeFeesV2): bigint {
+  return gross - fees.creator - fees.platform;
+}
+
+/** The share of the protocol bucket the crank-pool PDA receives at sweep time. */
+export function crankPoolShare(platformLamports: bigint, crankPoolFeeBps: number): bigint {
+  return mulBpsV2(platformLamports, crankPoolFeeBps);
+}
+
+/** Splits the protocol bucket between the crank pool and the treasury. The two always add up. */
+export function splitPlatformBucket(
+  platformLamports: bigint,
+  crankPoolFeeBps: number,
+): { crankPool: bigint; treasury: bigint } {
+  const crankPool = crankPoolShare(platformLamports, crankPoolFeeBps);
+  return { crankPool, treasury: platformLamports - crankPool };
+}
+
+/** The largest tip one crank_tip may pay: CRANK_TIP_BPS of the protocol bucket. */
+export function maxCrankTip(platformLamports: bigint, crankTipBps = 200): bigint {
+  return mulBpsV2(platformLamports, crankTipBps);
+}
+
+/** The lamports-per-base-unit price of one reserve pair, scaled by PRICE_SCALE. */
+export function priceLamportsPerUnit(solReserve: bigint, tokenReserve: bigint): bigint {
+  return (solReserve * PRICE_SCALE) / tokenReserve;
+}
+
+/** One observation into a cumulative price-slot accumulator. */
+export function accumulatePrice(cum: bigint, price: bigint, slots: bigint): bigint {
+  return slots === 0n ? cum : cum + price * slots;
+}
+
+/** The time-weighted average of an accumulator's increment over the slots it covered. */
+export function twapAverage(cumDelta: bigint, slots: bigint): bigint {
+  return cumDelta / slots;
+}
+
+/** The base units a lamport amount buys at a scaled price, rounded down. */
+export function unitsForLamports(lamports: bigint, price: bigint): bigint {
+  return (lamports * PRICE_SCALE) / price;
+}
+
+/** The value in lamports of some base units at a scaled price, rounded down. */
+export function lamportsForUnits(units: bigint, price: bigint): bigint {
+  return (units * price) / PRICE_SCALE;
+}
+
+/**
+ * The launch split of one total supply: the Mining Reserve, the Discovery Reserve and the
+ * curve's inventory, in that order. Both reserves round down, so the curve keeps the remainder
+ * and the three always add up to the whole supply.
+ */
+export function splitSupply(
+  totalSupply: bigint,
+  reserveBps: number,
+  discoveryReserveBps: number,
+): { reserve: bigint; discovery: bigint; curve: bigint } {
+  const reserve = mulBpsV2(totalSupply, reserveBps);
+  const discovery = mulBpsV2(totalSupply, discoveryReserveBps);
+  return { reserve, discovery, curve: totalSupply - reserve - discovery };
+}
+
+/** The virtual SOL depth a curve starts with, derived from its graduation target. */
+export function virtualSolReserve(graduationTarget: bigint): bigint {
+  return mulBpsV2(graduationTarget, DEFAULT_VIRTUAL_SOL_BPS);
+}
+
+/**
+ * The initial per-block reward of a coin's Mining Reserve: the reserve spread over the blocks of
+ * one epoch, floored at the launch's minimum reward.
+ */
+export function initialBlockReward(
+  reserveRemaining: bigint,
+  epochLength: number,
+  blockInterval: number,
+  minimumReward: bigint,
+): bigint {
+  const blocks = BigInt(Math.max(1, Math.floor(epochLength / blockInterval)));
+  const reward = reserveRemaining / blocks;
+  return reward > minimumReward ? reward : minimumReward;
+}
+
+/**
+ * The rent one launch costs the creator, account by account: the mint at the frozen 438-byte
+ * `MINT_V2_SIZE` layout the Rust program funds, the Coin account at its 464-byte `Coin::SIZE` and
+ * the single vault at 165. The figures are read from the frozen account table rather than restated,
+ * so a contract change moves this function with it.
+ */
+export function launchRentLamports(): {
+  mint: bigint;
+  coin: bigint;
+  vault: bigint;
+  total: bigint;
+} {
+  const mint = ACCOUNT_RENT_LAMPORTS.mint;
+  const coin = ACCOUNT_RENT_LAMPORTS.coin;
+  const vault = ACCOUNT_RENT_LAMPORTS.coinVault;
+  return { mint, coin, vault, total: mint + coin + vault };
+}
+
+/**
+ * The two launch defaults the form sends for the reserve split, mirroring
+ * `constants.rs::DEFAULT_RESERVE_BPS` and `constants.rs::DEFAULT_DISCOVERY_RESERVE_BPS`.
+ *
+ * They are launch arguments rather than protocol policy, so a creator may name different ones and
+ * the form shows the split it will actually send. They live here, with `splitSupply`, because
+ * that is the function that turns them into the three parts of a supply (CCR-F5).
+ */
+export const DEFAULT_RESERVE_BPS = 500;
+export const DEFAULT_DISCOVERY_RESERVE_BPS = 50;
+
+// ---- the quotes a form shows, and the guards the program applies ---------------------------
+//
+// The single home of the trade quote mirror (CCR-F4). Every function is a transcription of
+// programs/diggo-protocol/src/math/curve.rs and math/fees.rs, with the same integer widths and
+// the same rounding direction: division truncates, and every truncation is arranged so the
+// protocol keeps the remainder rather than the caller. When a value disagrees, the Rust value
+// wins and this file is the bug, because the chain is what pays. The four quote functions also
+// reproduce the program's `require!` guards, so a trade the program would reject is refused
+// before anything is signed.
+
+/** `mul_bps`, under the name the quote path has always used. One implementation: `mulBpsV2`. */
+export { mulBpsV2 as mulBps };
+
+/** The two fee rates one trade carries, both snapshotted into the coin at launch. */
+export interface TradeFeeBps {
+  creatorFeeBps: number;
+  platformFeeBps: number;
+}
+
+/** The three parts of one trade's gross: what the venue sees and the two explicit fees. */
+export interface FeeSplit {
+  /** What the curve or the pool sees, or what the wallet receives on a sell. */
+  net: bigint;
+  creatorFee: bigint;
+  platformFee: bigint;
+  /** creatorFee + platformFee, which is what `split_trade_fees` caps as a pair. */
+  totalFee: bigint;
+}
+
+/**
+ * Splits a gross amount into the net and the two explicit fees.
+ *
+ * A coin carries exactly two fee buckets, so a trader pays exactly two fees. The crank pool is
+ * **not** a third one: `ProtocolConfig.crank_pool_fee_bps` is carved out of the protocol's own
+ * bucket at sweep time by `split_platform_bucket`, and a crank tip is paid from the same bucket
+ * (math/fees.rs, CCR-F2). Charging it to the trader as well would over-state the fee and
+ * under-state the floor a form sends.
+ */
+export function splitFees(amount: bigint, bps: TradeFeeBps): FeeSplit {
+  const fees = splitTradeFees(amount, bps.creatorFeeBps, bps.platformFeeBps);
+  return {
+    net: netAfterTradeFees(amount, fees),
+    creatorFee: fees.creator,
+    platformFee: fees.platform,
+    totalFee: fees.creator + fees.platform,
+  };
+}
+
+/** Thrown when a trade cannot be priced, or when the program would refuse it. */
+export class QuoteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "QuoteError";
+  }
+}
+
+/**
+ * The tokens a curve buy returns for a net SOL input, with the fees already taken.
+ *
+ * The curve's token inventory may never be emptied, because graduation needs both sides
+ * non-zero, so a buy that would take the last base unit is refused here exactly as
+ * `curve_buy_out` refuses it on-chain.
+ */
+export function quoteCurveBuy(
+  coin: Pick<DecodedCoin, "tokenReserve" | "solReserve" | "virtualSolReserve">,
+  netSol: bigint,
+): bigint {
+  if (netSol <= 0n) throw new QuoteError("Enter an amount to trade.");
+  if (coin.tokenReserve <= 0n) throw new QuoteError("This coin's curve has sold out.");
+  const out = curveBuyOut(coin.tokenReserve, coin.solReserve, coin.virtualSolReserve, netSol);
+  if (out <= 0n) throw new QuoteError("This trade is too small to fill.");
+  if (out >= coin.tokenReserve) {
+    throw new QuoteError(
+      "This buy would empty the curve, which the program refuses. Try a smaller amount.",
+    );
+  }
+  return out;
+}
+
+/**
+ * The gross SOL a curve sell returns for a token input, capped at the curve's real SOL. The
+ * virtual reserve only ever inflates the price, never the payout, so a sell can never be paid
+ * out of lamports the curve does not hold.
+ */
+export function quoteCurveSell(
+  coin: Pick<DecodedCoin, "tokenReserve" | "solReserve" | "virtualSolReserve">,
+  tokensIn: bigint,
+): bigint {
+  if (tokensIn <= 0n) throw new QuoteError("Enter an amount to trade.");
+  if (coin.tokenReserve <= 0n) throw new QuoteError("This coin's curve has sold out.");
+  if (coin.solReserve <= 0n) throw new QuoteError("This curve holds no SOL to pay a sell.");
+  const gross = curveSellOut(coin.tokenReserve, coin.solReserve, coin.virtualSolReserve, tokensIn);
+  if (gross <= 0n) throw new QuoteError("This curve holds no SOL to pay a sell.");
+  return gross;
+}
+
+/** Tokens out of the locked pool for a net SOL input. k can only grow. */
+export function quotePoolBuy(
+  pool: Pick<DecodedLiquidityPool, "tokenReserve" | "solReserve">,
+  netSol: bigint,
+): bigint {
+  if (netSol <= 0n) throw new QuoteError("Enter an amount to trade.");
+  if (pool.tokenReserve <= 0n || pool.solReserve <= 0n) {
+    throw new QuoteError("This pool is not initialised yet.");
+  }
+  const out = poolBuyOut(pool.tokenReserve, pool.solReserve, netSol);
+  if (out <= 0n) throw new QuoteError("This trade is too small to fill.");
+  if (out >= pool.tokenReserve) {
+    throw new QuoteError("This buy would empty the pool. Try a smaller amount.");
+  }
+  return out;
+}
+
+/** SOL out of the locked pool for a token input, before the explicit fees. */
+export function quotePoolSell(
+  pool: Pick<DecodedLiquidityPool, "tokenReserve" | "solReserve">,
+  tokensIn: bigint,
+): bigint {
+  if (tokensIn <= 0n) throw new QuoteError("Enter an amount to trade.");
+  if (pool.tokenReserve <= 0n || pool.solReserve <= 0n) {
+    throw new QuoteError("This pool is not initialised yet.");
+  }
+  const out = poolSellOut(pool.tokenReserve, pool.solReserve, tokensIn);
+  if (out <= 0n) throw new QuoteError("This pool holds no SOL to pay a sell.");
+  return out;
+}
+
+/**
+ * The spot price in lamports per base unit, from the venue that actually backs the price.
+ * The pool's own reserves price a graduated coin; the curve prices one before graduation.
+ *
+ * Display only: the program prices its own discovery caps off the pool TWAP, never off a spot
+ * read, and nothing here is an input to any instruction.
+ */
+export function curveSpotPriceLamportsPerUnit(
+  coin: Pick<DecodedCoin, "tokenReserve" | "solReserve" | "virtualSolReserve">,
+): number | null {
+  if (coin.tokenReserve <= 0n) return null;
+  const effective = coin.solReserve + coin.virtualSolReserve;
+  return Number((effective * 1_000_000_000n) / coin.tokenReserve) / 1_000_000_000;
+}
+
+export function poolSpotPriceLamportsPerUnit(
+  pool: Pick<DecodedLiquidityPool, "tokenReserve" | "solReserve">,
+): number | null {
+  if (pool.tokenReserve <= 0n || pool.solReserve <= 0n) return null;
+  return Number((pool.solReserve * 1_000_000_000n) / pool.tokenReserve) / 1_000_000_000;
 }

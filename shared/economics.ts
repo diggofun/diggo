@@ -65,6 +65,10 @@ export * from "./rewardIndex";
 export * from "./rarity";
 export * from "./risk";
 export * from "./discovery";
+// `crewTotalLevel` is the one name two of the star exports above both provide. The crew module
+// owns it (it is the crew's total, and discovery reads it for its eligibility floor), so it is
+// re-exported explicitly here rather than left ambiguous.
+export { crewTotalLevel } from "./crew";
 export * from "./random";
 
 /** Legacy shape of a discovery rarity row, derived from the central config. */
@@ -91,5 +95,49 @@ export const CREW_TIERS = DIGGO_CONFIG.crew.tiers;
 export function discoveryTokenAmount(valueUsd: number, priceUsd: number): number {
   if (valueUsd <= 0 || !Number.isFinite(priceUsd) || priceUsd <= 0) return 0;
   return valueUsd / priceUsd;
+}
+
+// ---- v2: what a launch and a trade cost on-chain -------------------------------------------
+//
+// The product constraint the whole v2 design bends to: the owner pays for the program once, and
+// creating a coin costs about a cent of SOL which the creator pays by default. Sponsorship
+// events can move that cost onto a sponsor vault, and the only deposit anyone else makes is the
+// player's refundable bond. These numbers are measured in the program's own tests
+// (the_launch_rent_is_exactly_the_sum_of_the_three_accounts) rather than quoted.
+
+/** Rent-exempt minimum of an account of this size: (size + 128) * 3,480 * 2 lamports. */
+export function v2RentExemptLamports(size: number): bigint {
+  return (BigInt(size) + 128n) * 6_960n;
+}
+
+/**
+ * The three accounts a launch creates, and what the creator pays for them: the mint at the frozen
+ * 438-byte `MINT_V2_SIZE` layout, the Coin at its 464-byte `Coin::SIZE` and the vault at 165.
+ */
+export const V2_LAUNCH_RENT_LAMPORTS = {
+  mint: v2RentExemptLamports(438),
+  coin: v2RentExemptLamports(464),
+  vault: v2RentExemptLamports(165),
+} as const;
+
+/** 0.01009896 SOL: the whole launch, before transaction fees. */
+export const V2_LAUNCH_RENT_TOTAL_LAMPORTS =
+  V2_LAUNCH_RENT_LAMPORTS.mint +
+  V2_LAUNCH_RENT_LAMPORTS.coin +
+  V2_LAUNCH_RENT_LAMPORTS.vault;
+
+/**
+ * The mint's settled size for a maximal metadata, which is the same number as the funded layout:
+ * the caps are the layout, so a shorter metadata reallocs the difference away.
+ */
+export const V2_MINT_SETTLED_SIZE = 438;
+
+/**
+ * The dollar figure the UI shows for a lamport cap, converted at display time. No instruction
+ * consults a price: the caps' real value floats with the price of SOL, which is the accepted
+ * trade-off of keeping a manipulable external input out of the program.
+ */
+export function v2CapUsd(lamports: bigint, solUsd: number): number {
+  return (Number(lamports) / 1_000_000_000) * solUsd;
 }
 

@@ -8,6 +8,127 @@ import {
   heldUsageCountedUsd,
   type DiscoveryUsage,
 } from "./discovery";
+import {
+  DISCOVERY_MIN_TOTAL_CREW_LEVEL,
+  discoveryAccountCapCheck,
+  discoveryDayIndex,
+  discoveryIsEligibleV2,
+  discoveryMaturityBps,
+  discoveryReservationLamports,
+  discoveryWeekIndex,
+  discoveryWindowReset
+} from "./discovery";
+import { crewTotalLevel } from "./crew";
+
+describe("v2 eligibility, windows and reservation (parity with math/rarity.rs)", () => {
+  const TIERS = [{ valueLamports: 333_333n }, { valueLamports: 133_333_333n }];
+  const THIN = {
+    tokenReserve: 1_000_000_000n,
+    solReserve: 100_000_000n,
+    virtualSolReserve: 30_000_000_000n,
+    graduationTarget: 100_000_000_000n,
+    discoveryReserveTotal: 10_000_000n,
+    discoveryRemaining: 10_000_000n,
+    discoveryEpochBudget: 1_000_000n,
+    discoveryEpochSpent: 0n
+  };
+  const CREATED = 1_000_000;
+
+  function player(overrides: Partial<{
+    createdAt: number;
+    activeDays: number;
+    validActivations: number;
+    crewLevels: number[];
+  }> = {}) {
+    return {
+      createdAt: CREATED,
+      activeDays: 5,
+      validActivations: 5,
+      crewLevels: [3, 3, 3, 3, 3],
+      ...overrides
+    };
+  }
+
+  it("steps the maturity ramp at its rungs and completes past the last one", () => {
+    const at = (days: number) => discoveryMaturityBps(CREATED, CREATED + days * DAY);
+    expect(at(0)).toBe(0);
+    expect(at(1)).toBe(2_000);
+    expect(at(3)).toBe(4_000);
+    expect(at(7)).toBe(7_000);
+    expect(at(8)).toBe(10_000);
+    expect(at(365)).toBe(10_000);
+  });
+
+  it("requires the milestones: history, crew and maturity", () => {
+    const now = CREATED + 30 * DAY;
+    expect(discoveryIsEligibleV2(player(), now)).toBe(true);
+    expect(discoveryIsEligibleV2(player({ activeDays: 4 }), now)).toBe(false);
+    expect(discoveryIsEligibleV2(player({ validActivations: 4 }), now)).toBe(false);
+    expect(discoveryIsEligibleV2(player({ crewLevels: [2, 2, 2, 2, 2] }), now)).toBe(false);
+    // A wallet created a minute ago cannot roll. There is no longer any amount of SOL that would
+    // change that, because the bond gate is gone: a roll is earned by the account's own history.
+    expect(discoveryIsEligibleV2(player(), CREATED + 60)).toBe(false);
+  });
+
+  it("sums all five crew components", () => {
+    expect(crewTotalLevel([0, 0, 0, 0, 0])).toBe(0);
+    expect(crewTotalLevel([3, 3, 3, 3, 3])).toBe(DISCOVERY_MIN_TOTAL_CREW_LEVEL);
+    expect(crewTotalLevel([100, 100, 100, 100, 100])).toBe(500);
+  });
+
+  it("advances the budget windows by their own periods", () => {
+    expect(discoveryDayIndex(0)).toBe(0);
+    expect(discoveryDayIndex(DAY - 1)).toBe(0);
+    expect(discoveryDayIndex(DAY)).toBe(1);
+    expect(discoveryWeekIndex(7 * DAY - 1)).toBe(0);
+    expect(discoveryWeekIndex(7 * DAY)).toBe(1);
+  });
+
+  it("reserves the top value class clamped by the coin's own ceilings", () => {
+    expect(discoveryReservationLamports(TIERS, 100, THIN)).toBe(3_010_000n);
+    const deep = {
+      ...THIN,
+      tokenReserve: 1_000_000_000_000n,
+      solReserve: 2_000_000_000_000n,
+      virtualSolReserve: 5_000_000_000_000n,
+      discoveryReserveTotal: 10_000_000_000n,
+      discoveryRemaining: 10_000_000_000n,
+      discoveryEpochBudget: 10_000_000_000n
+    };
+    expect(discoveryReservationLamports(TIERS, 100, deep)).toBe(133_333_333n);
+    expect(discoveryReservationLamports(TIERS, 100, { ...THIN, discoveryRemaining: 1n })).toBeLessThan(100n);
+    expect(
+      discoveryReservationLamports(TIERS, 100, { ...THIN, discoveryEpochSpent: THIN.discoveryEpochBudget })
+    ).toBe(0n);
+    expect(
+      discoveryReservationLamports(TIERS, 100, { ...THIN, tokenReserve: 0n, solReserve: 0n, virtualSolReserve: 0n })
+    ).toBeNull();
+  });
+
+  it("refuses a roll past either account cap", () => {
+    expect(discoveryAccountCapCheck(0n, 0n, 10n, 100n, 400n)).toBe("ok");
+    expect(discoveryAccountCapCheck(95n, 0n, 10n, 100n, 400n)).toBe("daily");
+    expect(discoveryAccountCapCheck(0n, 395n, 10n, 100n, 400n)).toBe("weekly");
+  });
+
+  it("resets a window only when it rolls", () => {
+    const rolled = discoveryWindowReset(1, 1, 5n, 6n, 2 * DAY);
+    expect(rolled.dayIndex).toBe(2);
+    expect(rolled.weekIndex).toBe(0);
+    expect(rolled.spentDayLamports).toBe(0n);
+    expect(rolled.spentWeekLamports).toBe(0n);
+    // Only the day rolls here, so only the day's spend resets.
+    const dayOnly = discoveryWindowReset(6, 1, 5n, 6n, 7 * DAY + 1);
+    expect(dayOnly.dayIndex).toBe(7);
+    expect(dayOnly.weekIndex).toBe(1);
+    expect(dayOnly.spentDayLamports).toBe(0n);
+    expect(dayOnly.spentWeekLamports).toBe(6n);
+    const same = discoveryWindowReset(2, 0, 5n, 6n, 2 * DAY);
+    expect(same.spentDayLamports).toBe(5n);
+    expect(same.spentWeekLamports).toBe(6n);
+  });
+});
+
 
 const DAY = 86_400;
 

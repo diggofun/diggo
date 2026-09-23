@@ -33,14 +33,12 @@ import {
   curveMiningRoom,
   curveMiningStateOf,
   curveSellCapacity,
+  curveBuyOut,
+  curveSellOut,
   isCurveMiningOpen,
+  type CurveMiningLedgerFields,
+  type CurveVenueReserves,
 } from "../../shared/curve";
-import {
-  bondingCurveSpotPriceLamports,
-  quoteBuy,
-  quoteSell,
-  type DecodedLaunchMarket,
-} from "../../shared/program";
 import {
   applyBlock,
   createMiningPosition,
@@ -146,22 +144,45 @@ function clusterFactor(wallets: number, config: DiggoConfig): number {
   return Math.max(cluster.minimumFactorBps / 10_000, device * network);
 }
 
-function launchMarket(): DecodedLaunchMarket {
+/**
+ * The curve fields this scenario tracks, read from the v2 mirror's own structural types: a Coin's
+ * curve side, its curve-mining ledger, and the graduation target the scenario watches.
+ */
+type CurveMarket = CurveMiningLedgerFields &
+  CurveVenueReserves & { graduationTarget: bigint; creatorFeeBps: number; platformFeeBps: number };
+
+/** The curve's buy quote, in the v2 mirror's own terms (the v4 wrapper's replacement). */
+function quoteBuy(market: CurveVenueReserves, netSol: bigint): bigint {
+  return curveBuyOut(market.tokenReserve, market.solReserve, market.virtualSolReserve, netSol);
+}
+
+/** The curve's sell quote, capped at the curve's real SOL by the mirror itself. */
+function quoteSell(market: CurveVenueReserves, tokensIn: bigint): bigint {
+  return curveSellOut(market.tokenReserve, market.solReserve, market.virtualSolReserve, tokensIn);
+}
+
+/**
+ * The curve's spot price in lamports per whole token, which is the unit the report's price column
+ * has always used. The v2 mirror publishes lamports per base unit, so the decimals conversion the
+ * scenario already knows about is applied here rather than restated as a second formula.
+ */
+function spotPriceLamportsPerWholeToken(market: CurveVenueReserves): number {
+  if (market.tokenReserve <= 0n) return 0;
+  const effective = market.solReserve + market.virtualSolReserve;
+  return Number((effective * 10n ** BigInt(DECIMALS)) / market.tokenReserve);
+}
+
+function launchMarket(): CurveMarket {
   const marketBps = 10_000 - RESERVE_BPS - DISCOVERY_BPS;
   const marketWhole = (TOTAL_SUPPLY_WHOLE * marketBps) / 10_000;
   return {
-    mine: "CurvePhaseMine111111111111111111111111111111" as DecodedLaunchMarket["mine"],
     tokenReserve: BigInt(marketWhole) * 10n ** BigInt(DECIMALS),
     solReserve: 0n,
     virtualSolReserve: 30n * 1_000_000_000n,
     graduationTarget: 85n * 1_000_000_000n,
     graduated: false,
-    creatorFeeClaimable: 0n,
-    platformFeeClaimable: 0n,
     creatorFeeBps: 50,
     platformFeeBps: 50,
-    bump: 255,
-    version: 2,
     curveMiningCap: 0n,
     curveMiningMined: 0n,
     curveMiningUnpaid: 0n,
@@ -174,7 +195,7 @@ function launchMarket(): DecodedLaunchMarket {
  * the whole economic claim of the feature, so the scenario applies it verbatim rather than
  * approximating it.
  */
-function debitCurve(market: DecodedLaunchMarket, amount: bigint): void {
+function debitCurve(market: CurveMarket, amount: bigint): void {
   if (amount <= 0n) return;
   market.tokenReserve -= amount;
   market.curveMiningMined += amount;
@@ -182,7 +203,7 @@ function debitCurve(market: DecodedLaunchMarket, amount: bigint): void {
 }
 
 interface CurveRun {
-  market: DecodedLaunchMarket;
+  market: CurveMarket;
   index: RewardIndexState;
   /** The honest population's position on this mine. */
   human: MiningPosition;
@@ -316,8 +337,8 @@ export function runCurvePhase(options: CurvePhaseOptions): CurvePhaseResult {
     }
 
     const capacity = curveSellCapacity(minedRun.market);
-    const price = bondingCurveSpotPriceLamports(minedRun.market, DECIMALS);
-    const counterfactual = bondingCurveSpotPriceLamports(controlRun.market, DECIMALS);
+    const price = spotPriceLamportsPerWholeToken(minedRun.market);
+    const counterfactual = spotPriceLamportsPerWholeToken(controlRun.market);
     const claimable = humanMined.total + botMined.total;
     rows.push({
       day,

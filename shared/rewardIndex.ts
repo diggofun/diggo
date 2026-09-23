@@ -465,6 +465,202 @@ export function rewardReductionSchedule(
   return schedule;
 }
 
+// ---- v2: the two-tranche reward index (design 3.2 amendment, 8.2) ------------------------
+//
+// Mirrors programs/diggo-protocol/src/math/index.rs. A v2 Coin is its own market, so the
+// walk reads the emission phase out of one account, and the two tranche powers and one
+// cumulative index it carries are what split a block.
+//
+// The starter tranche's index is *derived* from the bonded one, exactly as the frozen
+// contract prescribes, because the Coin layout has room for one cumulative index:
+//
+//     starterIndex = rewardIndex * starterEfficiencyBps * starterTrancheBps / BPS^2
+//
+// That derivation makes the starter's share of a block a function of the two powers alone,
+// so the 10% cap holds exactly when the powers satisfy starterTrancheIsCapped. When they do
+// not, no split can satisfy the cap with a single index and the block assigns nothing at all
+// and stays in the Mining Reserve. See docs/CONTRACT_CHANGE_REQUESTS.md.
+
+export interface V2TrancheConfig {
+  readonly starterEfficiencyBps: number;
+  readonly starterTrancheBps: number;
+}
+
+/** Fixed-point scale of the cumulative index, matching INDEX_SCALE in constants.rs. */
+export const V2_INDEX_SCALE = 1_000_000_000_000n;
+
+/** Basis points. */
+export const V2_BPS = 10_000n;
+
+export function starterIndexNumerator(config: V2TrancheConfig): bigint {
+  return BigInt(config.starterEfficiencyBps) * BigInt(config.starterTrancheBps);
+}
+
+export function starterIndexDenominator(): bigint {
+  return V2_BPS * V2_BPS;
+}
+
+/** The starter tranche's cumulative index, derived from the bonded one. */
+export function starterIndex(bondedIndex: bigint, config: V2TrancheConfig): bigint {
+  return (bondedIndex * starterIndexNumerator(config)) / starterIndexDenominator();
+}
+
+/**
+ * True while the derived index keeps the starter tranche inside starterTrancheBps of one
+ * block. False means the block assigns nothing: clamping the starter's share would mean
+ * advancing its index more slowly than the derivation, which a position's stored reference
+ * cannot represent.
+ */
+export function starterTrancheIsCapped(
+  bondedPower: bigint,
+  starterPower: bigint,
+  config: V2TrancheConfig
+): boolean {
+  if (starterPower === 0n) return true;
+  if (bondedPower === 0n) return false;
+  const left =
+    starterPower * BigInt(config.starterEfficiencyBps) * (V2_BPS - BigInt(config.starterTrancheBps));
+  const right = bondedPower * V2_BPS * V2_BPS;
+  return left <= right;
+}
+
+export interface TrancheSplit {
+  readonly bonded: bigint;
+  readonly starter: bigint;
+  readonly assigned: bigint;
+}
+
+/** One block's (or one segment's) reward, split between the tranches. Rounds down. */
+export function splitBlockReward(
+  reward: bigint,
+  bondedPower: bigint,
+  starterPower: bigint,
+  config: V2TrancheConfig
+): TrancheSplit {
+  if (reward <= 0n || bondedPower === 0n) {
+    return { bonded: 0n, starter: 0n, assigned: 0n };
+  }
+  if (starterPower === 0n) {
+    return { bonded: reward, starter: 0n, assigned: reward };
+  }
+  if (!starterTrancheIsCapped(bondedPower, starterPower, config)) {
+    return { bonded: 0n, starter: 0n, assigned: 0n };
+  }
+  const weight =
+    starterPower * BigInt(config.starterEfficiencyBps) * BigInt(config.starterTrancheBps);
+  const denominator = bondedPower * starterIndexDenominator() + weight;
+  const starter = (reward * weight) / denominator;
+  const bonded = reward - starter;
+  return { bonded, starter, assigned: bonded + starter };
+}
+
+/** What a cumulative index owes a tranche's whole power, in base units. */
+export function trancheIndexOwed(index: bigint, power: bigint): bigint {
+  return (index * power) / V2_INDEX_SCALE;
+}
+
+export const V2_TRANCHE_BONDED = 0;
+export const V2_TRANCHE_STARTER = 1;
+
+/** The index a freshly created position starts from. */
+export function positionInitialIndex(
+  bondedIndex: bigint,
+  tranche: number,
+  config: V2TrancheConfig
+): bigint {
+  return tranche === V2_TRANCHE_STARTER ? starterIndex(bondedIndex, config) : bondedIndex;
+}
+
+export interface V2Position {
+  readonly assignedPower: bigint;
+  readonly lastRewardIndex: bigint;
+  readonly pendingReward: bigint;
+  readonly tranche: number;
+}
+
+export interface V2PositionSettlement {
+  readonly earned: bigint;
+  readonly pendingReward: bigint;
+  readonly lastRewardIndex: bigint;
+}
+
+/** Settles one position against its tranche's index. Idempotent at the same index. */
+export function settleCoinPosition(
+  position: V2Position,
+  bondedIndex: bigint,
+  config: V2TrancheConfig
+): V2PositionSettlement {
+  const index = positionInitialIndex(bondedIndex, position.tranche, config);
+  if (position.assignedPower === 0n) {
+    return { earned: 0n, pendingReward: position.pendingReward, lastRewardIndex: index };
+  }
+  const delta = index - position.lastRewardIndex;
+  const earned = (position.assignedPower * delta) / V2_INDEX_SCALE;
+  return {
+    earned,
+    pendingReward: position.pendingReward + earned,
+    lastRewardIndex: index
+  };
+}
+
+export interface V2ReserveWalkInput {
+  readonly bondedPower: bigint;
+  readonly starterPower: bigint;
+  readonly blockReward: bigint;
+  readonly blocks: bigint;
+  readonly reserveRemaining: bigint;
+  readonly rewardIndex?: bigint;
+  readonly cumulativeDistributed?: bigint;
+  readonly outstandingClaims?: bigint;
+}
+
+export interface V2ReserveWalkOutcome {
+  readonly rewardIndex: bigint;
+  readonly reserveRemaining: bigint;
+  readonly cumulativeDistributed: bigint;
+  readonly outstandingClaims: bigint;
+}
+
+/**
+ * The post-graduation half of the ledger walk: a stretch of blocks paid out of the Mining
+ * Reserve, folded into the two indexes.
+ *
+ * The reserve is debited by exactly what the indexes credit - the difference between what
+ * each index owes its tranche's whole power before and after - so
+ * reserveRemaining + cumulativeDistributed + outstandingClaims is conserved, and what the
+ * indexes cannot assign stays in the reserve.
+ */
+export function walkGraduatedCoinBlocks(
+  input: V2ReserveWalkInput,
+  config: V2TrancheConfig
+): V2ReserveWalkOutcome {
+  const rewardIndex = input.rewardIndex ?? 0n;
+  const cumulativeDistributed = input.cumulativeDistributed ?? 0n;
+  const outstandingClaims = input.outstandingClaims ?? 0n;
+  const budget = input.blockReward * input.blocks;
+  const requested = budget < input.reserveRemaining ? budget : input.reserveRemaining;
+  const split = splitBlockReward(requested, input.bondedPower, input.starterPower, config);
+  const delta =
+    input.bondedPower > 0n && split.bonded > 0n
+      ? (split.bonded * V2_INDEX_SCALE) / input.bondedPower
+      : 0n;
+  const nextIndex = rewardIndex + delta;
+  const owedBonded =
+    trancheIndexOwed(nextIndex, input.bondedPower) -
+    trancheIndexOwed(rewardIndex, input.bondedPower);
+  const owedStarter =
+    trancheIndexOwed(starterIndex(nextIndex, config), input.starterPower) -
+    trancheIndexOwed(starterIndex(rewardIndex, config), input.starterPower);
+  const assigned = owedBonded + owedStarter;
+  return {
+    rewardIndex: nextIndex,
+    reserveRemaining: input.reserveRemaining - assigned,
+    cumulativeDistributed: cumulativeDistributed + assigned,
+    outstandingClaims: outstandingClaims + assigned
+  };
+}
+
+
 export function clampRewardToReserve(reward: number, reserve: number): number {
   return Math.max(0, Math.min(reward, reserve));
 }

@@ -14,6 +14,7 @@ pub mod player_bond;
 pub mod player_crew;
 pub mod player_mine;
 pub mod player_ore;
+pub mod referral;
 pub mod sponsor;
 pub mod token;
 pub mod trade;
@@ -30,7 +31,7 @@ pub use player_bond::*;
 pub use player_crew::*;
 pub use player_mine::*;
 pub use player_ore::*;
+pub use referral::*;
 pub use sponsor::*;
 pub use token::*;
 pub use trade::*;
-

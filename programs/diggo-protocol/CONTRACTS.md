@@ -18,12 +18,16 @@ Build and test happen in WSL, never on the Windows tree, and never in `/home/jur
 (another flow owns that directory):
 
 ```bash
-rsync -a --delete /mnt/c/Users/Jurek/Documents/Diggo_Fun_v2/programs/ /home/jurek/diggo-build-v2/programs/
-cp /mnt/c/Users/Jurek/Documents/Diggo_Fun_v2/{Anchor.toml,Cargo.toml,Cargo.lock} /home/jurek/diggo-build-v2/
-cd /home/jurek/diggo-build-v2 && anchor build && cargo test --workspace
+rsync -a --delete /mnt/c/Users/Jurek/Documents/Diggo_Fun_v2/programs/ /home/jurek/diggo-build-v2-I1/programs/
+cp /mnt/c/Users/Jurek/Documents/Diggo_Fun_v2/{Anchor.toml,Cargo.toml,Cargo.lock} /home/jurek/diggo-build-v2-I1/
+cd /home/jurek/diggo-build-v2-I1 && anchor build && cargo test --workspace
 ```
 
 State at the spine commit: `anchor build` green, 45 unit tests green, `.so` 582,368 bytes.
+
+State after the integration (this file's amendments applied): `anchor build` green, 163 unit tests,
+7 contract tests, 15 flows and 3 vector tests green, and the release profile below measures the
+`.so` at both optimisation levels.
 
 ## Accounts
 
@@ -35,7 +39,7 @@ against the literal number in the table below.
 | --- | --- | --- | --- | --- | --- |
 | `ProtocolConfig` | `state/protocol.rs` | `[b"protocol"]` | 426 | 434 | 3,911,400 |
 | `CurveTable` | `state/protocol.rs` | `[b"curve-table"]` | 2402 | 2410 | 17,662,800 |
-| `Coin` | `state/coin.rs` | `[b"coin", mint]` | 400 | 408 | 3,729,600 |
+| `Coin` | `state/coin.rs` | `[b"coin", mint]` | 456 | 464 | 4,120,320 |
 | coin vault (token account) | `state/coin.rs` | `[b"vault", mint]` | 165 | 165 | 2,039,280 |
 | `PlayerAccount` | `state/player.rs` | `[b"player", owner]` | 208 | 216 | 2,394,240 |
 | `MiningPosition` | `state/player.rs` | `[b"position", coin, owner]` | 43 | 51 | 1,246,440 |
@@ -47,13 +51,50 @@ against the literal number in the table below.
 | `SponsorVault` | `state/sponsor.rs` | `[b"sponsor-vault", sponsor_owner]` | 62 | 70 | 1,377,360 |
 | `SponsorEvent` | `state/sponsor.rs` | `[b"sponsor-event", vault, event_id u32 le]` | 84 | 92 | 1,531,200 |
 | `SponsorGrant` | `state/sponsor.rs` | `[b"sponsor-grant", event, subject]` | 34 | 42 | 1,183,200 |
+| `ReferralCredit` | `state/protocol.rs` | `[b"referral", referrer, referee]` | 9 | 17 | 1,009,200 |
+| `ReferralWeek` | `state/protocol.rs` | `[b"referral_week", referrer]` | 10 | 18 | 1,016,160 |
 | treasury PDA | `state/protocol.rs` | `[b"treasury"]` | 0 | 0 | rent floor only |
 | crank-tip pool PDA | `state/protocol.rs` | `[b"crank-pool"]` | 0 | 0 | rent floor only |
-| `mint` | `instructions/launch.rs` | `[b"mint", creator, nonce u8]` | 359 | 359 | 3,389,520 |
+| `mint` | `instructions/launch.rs` | `[b"mint", creator, nonce u8]` | 355 | 355 | 3,361,680 |
 
 `subject` in the `SponsorGrant` seeds is the coin for the launch-rent and trade-fee-waiver
 kinds, and the player's wallet for the account and bond subsidies. That is what lets one grant
 shape enforce both the per-coin and the per-wallet limit.
+
+### The discovery window index, pinned (CCR-F1)
+
+`DiscoveryOpportunity` is seeded on `[b"opportunity", coin, owner, window_index u16 le]`, and the
+value the seed uses is **`player.roll_window` as it stands before the handler runs**. The
+`CreateDiscoveryRoll` accounts struct derives the PDA from that field, the body copies the same
+value into `opportunity.window_index`, and only afterwards does it increment `player.roll_window`
+(`instructions/discovery.rs`). So:
+
+- the opportunity a wallet holds is always the window **one below** its current `roll_window`;
+- `roll_window == 0` means the wallet has never rolled, and there is no opportunity to find;
+- a client deriving the PDA for a *new* roll uses `player.roll_window` unchanged, and a client
+  reading a *pending* one uses `player.roll_window - 1` (or the stored `window_index`).
+
+There is no second candidate and no probe. `settle_discovery` and `expire_opportunity` re-derive
+the PDA from `opportunity.window_index`, so the recorded value and the seed can never disagree.
+
+### The fee order of operations, pinned (CCR-F2)
+
+`Coin` snapshots exactly two fee rates (`creator_fee_bps`, `platform_fee_bps`), and a trade pays
+exactly those two:
+
+```
+creator_fee  = mul_bps(gross, coin.creator_fee_bps)
+platform_fee = mul_bps(gross, coin.platform_fee_bps)
+net          = gross - creator_fee - platform_fee     // what the curve or the pool receives
+```
+
+`ProtocolConfig.crank_pool_fee_bps` is **not** a third fee on the trade. It is a share of the
+protocol's own bucket, applied at sweep time: `split_platform_bucket(platform_fee,
+crank_pool_fee_bps)` gives the crank-pool PDA its part and the treasury the remainder, and the two
+always add up to the bucket (`math/fees.rs`). A crank tip is paid from that same bucket
+(`CRANK_TIP_BPS` of it), never from the creator's share, a reserve, the curve's SOL or the locked
+pool. A client that charges the crank-pool share to the trader over-states the fee and under-states
+the floor it sends.
 
 ### Frozen field layouts
 
@@ -82,7 +123,7 @@ Every handler lives in the file below and is a thin delegation from the `#[progr
 | `set_rarity_table` | `tiers: Vec<RarityTier>` | governance | WS-B |
 | `set_curve_table` | `power: Vec<u32>, upgrade_ore_cost: Vec<Vec<u32>>` | governance | WS-B |
 | `schedule_pause` | `flag: u8, paused_until: i64` | governance | WS-B |
-| `unpause` | `flag: u8` | anyone | WS-B |
+| `unpause` | `flag: u8` | governance | WS-B |
 | `launch_token` | `args: LaunchTokenArgs` | creator | WS-B |
 | `buy` / `sell` | `amount_in: u64, min_out: u64` | trader | WS-B |
 | `pool_buy` / `pool_sell` | `sol_in/tokens_in: u64, min_out: u64` | trader | WS-B |
@@ -97,23 +138,36 @@ Every handler lives in the file below and is a thin delegation from the `#[progr
 | `initialize_player` | none | owner | WS-A |
 | `activate` | none | owner | WS-A |
 | `collect_ore` | none | owner | WS-A |
+| `credit_referral_ore` | `referee: Pubkey, amount: u64` | `ProtocolConfig.crank_pool` | WS-A |
 | `upgrade_crew` | `component: u8` | owner | WS-A |
 | `assign_power` / `remove_power` / `switch_mine` | none | owner | WS-A |
 | `claim_rewards` | none | owner | WS-A |
-| `post_bond` / `request_unbond` / `withdraw_bond` | none | owner | WS-A |
+| `request_unbond` / `withdraw_bond` | none | owner | WS-A |
 | `advance_mine` | none | anyone | WS-C |
-| `commit_epoch_seed` | none (`Sysvar<SlotHashes>`) | anyone | WS-C |
+| `commit_epoch_seed` | none (canonical SlotHashes sysvar account) | anyone | WS-C |
 | `create_discovery_roll` | none | owner | WS-C |
 | `settle_discovery` / `expire_opportunity` | none | anyone | WS-C |
 
 Notes that are contract, not advice:
 
+- The bond has no post path: the deposit bought nothing once mining power and discovery stopped
+  reading it, so the instruction that collected it is gone. `request_unbond` and `withdraw_bond`
+  stay live so lamports already parked in a `PlayerAccount` can still be released, and the
+  `PlayerAccount` bond block, `BOND_LAMPORTS`, `BOND_COOLDOWN_SECONDS` and `BondRetired` stay
+  published so a bond posted before the change is still readable and withdrawable.
 - `assign_power` takes **no power argument**. Power is derived in-program, so no caller can
   assert it.
+- `credit_referral_ore` credits only the referrer's `PlayerAccount`; `referee` is an identity seed,
+  not a destination. The automated keeper in `ProtocolConfig.crank_pool` signs and pays rent. The
+  marker `[b"referral", referrer, referee]` is initialized exactly once, and the weekly counter is
+  `[b"referral_week", referrer]`, with 25 credits per `unix_ts / 604800` week. Amounts must be in
+  `1..=MAX_REFERRAL_ORE_PER_CREDIT` (250). `settle_ore` runs before the full-capacity check, and a
+  credit that does not fit is rejected atomically. The fixed `[b"crank-pool"]` fee PDA is separate.
 - No instruction anywhere takes a destination argument: fee destinations are `ProtocolConfig`
   fields.
-- `commit_epoch_seed` takes the sysvar as `Sysvar<'info, SlotHashes>`, never as an unchecked
-  account.
+- `commit_epoch_seed` checks the canonical SlotHashes sysvar address and owner, then reads the
+  account through the runtime syscall because Solana forbids deserializing this large sysvar
+  from an `AccountInfo` inside a program.
 - `launch_token` takes the mint as an `UncheckedAccount` **only** because a Token-2022 mint with
   the metadata pointer and the token-metadata extension has to be created by hand at its
   computed size. It carries a `seeds` constraint, so the PDA is proven before anything exists,
@@ -128,14 +182,16 @@ All 40 events are declared in `src/events.rs`; Phase 1 only emits them. The v2 s
 `CrewUpgraded`, `BondPosted`, `UnbondRequested`, `BondWithdrawn`, `PowerAssigned`,
 `PowerRemoved`, `MineSwitched`, `RewardsClaimed`, `DiscoveryRollCreated`, `DiscoverySettled`,
 `DiscoveryExpired`, `MarketGraduated`, `FeesSwept`, `CrankTipPaid`, `SponsorVaultInitialized`,
-`SponsorEventCreated`, `SponsorSpend`. The other 14 are v4 events kept because the v4 data
+`SponsorEventCreated`, `SponsorSpend`, `RewardsForfeited`, and `ReferralOreCredited`, which the integration added so a
+lapsed activation window's forfeit is visible to an indexer rather than showing up as an
+unexplained cursor move. The other 14 are v4 events kept because the v4 data
 model is still in the tree; they are deleted at the integration step.
 
 ## Errors
 
 One `#[error_code] enum DiggoError` in `src/errors.rs`. The 48 v4 variants keep codes
-`6000..6047`; the 48 v2 variants are appended in the order design section 8.2 reserves them, so
-they occupy `6048..6095`:
+`6000..6047`; the 49 v2 variants are appended in the order design section 8.2 reserves them, so
+they occupy `6048..6096`:
 
 | Block | Codes | Variants |
 | --- | --- | --- |
@@ -146,11 +202,19 @@ they occupy `6048..6095`:
 | fees | 6072-6074 | `FeeSplitOverflow`, `CrankTipExceedsAccrual`, `NotCoinCreator` |
 | sponsor | 6075-6081 | `EventNotActive`, `EventBudgetExhausted`, `PerCoinLimitExceeded`, `PerWalletLimitExceeded`, `EventAlreadyClosed`, `UnspentWithdrawalOnly`, `InvalidEventKind` |
 | mining, epoch, seed | 6082-6087 | `EpochNotRolled`, `SeedTargetInFuture`, `SeedTargetNotInSysvar`, `SeedAlreadyCommitted`, `SeedNotCommitted`, `CoinNotAdvanced` |
-| discovery | 6088-6095 | `RollAlreadyExists`, `NotDiscoveryEligible`, `OpportunityExpired`, `OpportunityAlreadySettled`, `DailyCapExceeded`, `WeeklyCapExceeded`, `GlobalCapExceeded`, `EpochBudgetExhausted` |
+| discovery | 6088-6096 | `RollAlreadyExists`, `NotDiscoveryEligible`, `OpportunityExpired`, `OpportunityAlreadySettled`, `DailyCapExceeded`, `WeeklyCapExceeded`, `GlobalCapExceeded`, `EpochBudgetExhausted`, `UnclaimedRewards` |
+
+`UnclaimedRewards` (6096) was appended by the integration to give `remove_power` an error that
+names what it refuses: a position that still has an unclaimed credit. It is the last v2 variant, so
+no code above it moved.
 
 The design quotes 6040, 6100, ... for these blocks because it assumed a shorter v4 enum. The
 names and their order are the contract; the numeric ranges above are the ones the tree actually
 produces, and `v2_error_codes_are_appended_in_the_designed_order` pins them.
+
+The referral errors are appended and therefore do not renumber any existing variant:
+`ReferralAmountOutOfRange = 6098`, `ReferralWeeklyCapExceeded = 6099`, and
+`ReferralRefereeMismatch = 6100`.
 
 ## Constants
 
@@ -160,7 +224,9 @@ produces, and `v2_error_codes_are_appended_in_the_designed_order` pins them.
 `EPOCH_SEED_MAX_LATENESS_SLOTS = SLOT_HASHES_WINDOW = 512`, `CRANK_TIP_BPS = 200`,
 `MAX_PAUSE_SECONDS = 259_200`, `MAX_RARITY_TIERS = 8`, `CREW_COMPONENTS = 5`,
 `MAX_CREW_LEVEL = 100`, `MIN_CURVE_MINING_BLOCKS = 48`, the four
-`DEFAULT_DISCOVERY_*_CAP_LAMPORTS` values, `MINT_V2_SIZE = 359`, `MAX_NAME_LEN = 16`,
+`DEFAULT_DISCOVERY_*_CAP_LAMPORTS` values, `MINT_V2_SIZE = 355` (derived from the metadata caps,
+never quoted), `TWAP_WINDOW_SLOTS = 900`, `DISCOVERY_TWAP_MAX_DEVIATION_BPS = 2_000`,
+`REACTIVATION_EARLY_SECONDS = 3_600`, `MAX_NAME_LEN = 16`,
 `MAX_SYMBOL_LEN = 8`, `MAX_URI_LEN = 96`, `ACCOUNT_VERSION = 5`.
 
 All of them are `ProtocolConfig` fields at runtime, except the layout bounds (the metadata
@@ -168,6 +234,21 @@ caps, `MAX_RARITY_TIERS`, `CREW_COMPONENTS`, `MAX_CREW_LEVEL`, `MINT_V2_SIZE`) w
 compile-time. The curve tables are `&'static` constant data, never account fields;
 `CurveTable` is only the optional timelocked override, and while it is absent every
 instruction uses the constants.
+
+**How the maturity rungs are read.** `MATURITY_RAMP` is walked as `days < up_to_day`
+(`math/power.rs::maturity_ramp_bps`, mirrored by `shared/crew.ts::onchainMaturityRampBps` and
+pinned by `scripts/parity/parity.test.ts`), so the rungs are:
+
+| Age | Power and ORE maturity |
+| --- | --- |
+| under 1 day | 2,000 bps (20%) |
+| 1-2 days | 4,000 bps (40%) |
+| 3-6 days | 7,000 bps (70%) |
+| 7 days and beyond | 10,000 bps (100%) |
+
+The design's prose ("day 1 20%, day 3 40%, day 7 70%") names the rungs, not their boundaries. The
+comparison is what the chain does and the table above is what a client must reproduce; ORE uses the
+same schedule (`created_at` for ORE, `created_slot` for power, per design section 5).
 
 ## Amendment: STARTER_TRANCHE_CAP
 
@@ -177,27 +258,79 @@ reward.** A bonded player therefore always keeps at least 90% of a block, and wh
 no bonded power at all the remaining 90% is **not** handed to the starter index: it stays in
 the Mining Reserve. It is never burned and never re-assigned.
 
-Implementation shape, frozen here so WS-A and WS-C agree:
+Implementation shape, frozen here so WS-A and WS-C agree. This is the *integration* shape: the
+spine's single derived index could not hold the cap exactly, and the two-index form below is what
+replaced it (see docs/CONTRACT_CHANGE_REQUESTS.md, rows 3 and 19-27).
 
-1. `Coin` keeps two power totals, `bonded_power` and `starter_power`, and one cumulative index
-   per tranche (`reward_index` for bonded; the starter index is derived as
-   `reward_index * starter_efficiency_bps / BPS` scaled by `STARTER_TRANCHE_BPS`), or an
-   equivalent exact split that satisfies the three properties below. Either shape is allowed;
-   the properties are not negotiable.
-2. Per block, `starter_take = min(block_reward * STARTER_TRANCHE_BPS / BPS, ...)`, and the
-   bonded index receives `block_reward - starter_take`.
+1. `Coin` keeps two power totals, `bonded_power` and `starter_power`, and **two** cumulative
+   indexes, `bonded_index` and `starter_index`, each scaled by `INDEX_SCALE`. A position stores
+   the index of the tranche it accrues in and settles against that field. Nothing derives one
+   index from the other, and `tranche_index` in `math/index.rs` is the only definition of which
+   field a tranche reads.
+2. Per block (per walk segment), `starter_take = min(block_reward * starter_power / total_power,
+   block_reward * STARTER_TRANCHE_BPS / BPS)` and the bonded take is `block_reward - starter_take`
+   whenever the coin has bonded power. The clamp is the cap, and it is exact because the starter
+   index is stored rather than computed from the bonded one.
 3. `starter_power` is already scaled by `STARTER_EFFICIENCY_BPS`, so starter mode is 25% of the
    same power **and** capped at 10% of the block: both bounds apply, and neither can be traded
    for the other.
-4. The vault ledger invariant still holds: `vault.amount >= curve_tokens + reserve_remaining +
-   discovery_remaining + outstanding_claims`, and the reserve is debited only by what is
-   actually distributed. The unassigned remainder is never debited at all, which is what makes
-   it stay in the reserve.
-5. WS-G's tests must pin: a bonded position always receives at least 90% of a block; a coin
-   with zero bonded power assigns at most 10% and leaves the rest in `reserve_remaining`;
-   adding a bond strictly increases the bonded share and never decreases the starter share of
-   power; and `reserve_remaining` plus `cumulative_distributed` plus `outstanding_claims` is
-   conserved across every path.
+4. A coin with no bonded power assigns the starter tranche its cap and nothing else. The bonded
+   take has no power to divide it by, so it is never debited at all: it stays in the Mining
+   Reserve, never burned and never re-assigned to the starter index.
+5. The vault ledger invariant still holds: `vault.amount >= curve_tokens + reserve_remaining +
+   discovery_remaining + outstanding_claims`, and the emission source is debited only by what the
+   two indexes can actually pay. The unassigned remainder is never debited at all, which is what
+   makes it stay in the reserve.
+6. WS-G's tests pin: a bonded position always receives at least 90% of a block; a coin with zero
+   bonded power assigns exactly the cap and leaves the rest in `reserve_remaining`; the split is
+   exact and rounds down; and `reserve_remaining` plus `cumulative_distributed` plus
+   `outstanding_claims` is conserved across every path.
+
+## The activation gate
+
+The window is half open, exactly as the worker's `isEligibleForBlock` has it:
+`[last_activation_at, active_until)`. A position earns only while it is open, and the enforcement is
+lazy and needs no keeper:
+
+- the walk credits every armed position's share into `outstanding_claims` as the index advances,
+  because it cannot see per-position windows and must not have to;
+- `settle_position_gated` (math/index.rs) is where eligibility is enforced, at the only moment the
+  program knows who is asking. A settle that finds the window closed puts the share the index
+  credited to that position since its last settle back where the block paid it from - the curve's
+  inventory before graduation, the Mining Reserve after it - and advances the cursor, so nothing
+  after `active_until` is claimable now or later;
+- `activate` settles the position **before** it moves the window, and therefore takes the armed coin
+  and position as optional accounts. It refuses to run without them when the player holds a
+  position: a caller must not be able to skip the settle and carry the accrual into the fresh
+  window;
+- `REACTIVATION_EARLY_SECONDS` lets the legal re-activation land inside the window it closes.
+  Without it the earliest allowed re-activation was one second past `active_until`, which is exactly
+  the settle the gate forfeits.
+
+The residual, stated rather than hidden: a player who lets the window lapse forfeits the accrual of
+the whole interval since their last settle, not merely the part after `active_until`. The interval
+is bounded by how long they were away, the tokens never leave the coin, and a client that activates
+once per window never meets the forfeit. Closing the residual needs the index as of an arbitrary
+past instant, which is index history the coin does not carry; a Phase 2 ring of index observations
+is the shape that would.
+
+## The short price window
+
+The discovery payout divides a lamport value by the coin's own price, and that price is now the
+time-weighted price of the last `TWAP_WINDOW_SLOTS` (900) slots rather than a lifetime average.
+`twap_last_price`, `twap_window_slot` and `twap_window_cum` are the window's state, written by
+`observe_pool_price` on every swap and anchored by `roll_twap_window`; every slot in the window is a
+slot the program watched. The payout takes the higher of the window and the spot - the safe
+direction in both a pump and a dump - and drops the spot entirely when it deviates from the window
+by more than `DISCOVERY_TWAP_MAX_DEVIATION_BPS` (2,000), because past that bound the spot is
+evidence of a sandwich around the settlement rather than a price. No external oracle is consulted.
+
+## The release profile
+
+`[profile.release]` is `overflow-checks = true`, `lto = "fat"`, `codegen-units = 1` and
+`opt-level = "z"`. The size-first level is measured rather than assumed: the integration reports the
+`.so` size and the compute units of the heaviest instructions for both `-Oz` and `-O3` in
+docs/CONTRACT_CHANGE_REQUESTS.md, and that measurement is what decides between them.
 
 ## Deviations from the design's rent table
 
@@ -207,7 +340,7 @@ cost story by more than a rounding error.
 
 | Account | Design | Spine | Why |
 | --- | --- | --- | --- |
-| `Coin` | 384 | 408 | +16 for `bonded_power` and `starter_power`, which the starter-tranche amendment requires, and +8 for `epoch_ends_slot`, which the epoch-seed target needs |
+| `Coin` | 384 | 464 | +16 for `bonded_power` and `starter_power`, +8 for `epoch_ends_slot`, +16 for the second tranche index, and +40 for the short price window (twap_last_price, twap_window_slot, twap_window_cum) |
 | `MiningPosition` | 73 | 51 | the design's arithmetic drops only one of the two seed pubkeys (`owner` and `coin` are both seeds) |
 | `GlobalBudget` | 64 | 53 | the design's field list is not given in full; this is a complete one |
 | `LiquidityPool` | 161 | 185 | +24 for the TWAP accumulator and its slot cursor, which design 4.3 adds to the pool |
@@ -262,4 +395,3 @@ The Rust program builds and its tests pass. The TypeScript side does not, by des
   Phase 3 replaces them.
 - `npm run typecheck` and `npm test` are therefore expected to fail until D, E and F land. The
   Rust gate (`anchor build`, `cargo test`) is the one that is green.
-

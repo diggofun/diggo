@@ -199,6 +199,15 @@ pub struct OreCollected {
 }
 
 #[event]
+pub struct ReferralOreCredited {
+    pub referrer: Pubkey,
+    pub referee: Pubkey,
+    pub amount: u64,
+    pub balance: u64,
+    pub week_index: i64,
+}
+
+#[event]
 pub struct CrewUpgraded {
     pub player: Pubkey,
     pub component: u8,
@@ -253,6 +262,17 @@ pub struct MineSwitched {
 
 #[event]
 pub struct RewardsClaimed {
+    pub coin: Pubkey,
+    pub owner: Pubkey,
+    pub amount: u64,
+}
+
+/// A lapsed activation window's forfeit: the share of the index the walk had credited to a
+/// position whose owner was not eligible to earn it, returned to the emission source it came from
+/// (the curve's inventory before graduation, the Mining Reserve after it). Emitted by the settle
+/// that detected it, so an indexer sees a forfeit rather than an unexplained cursor move.
+#[event]
+pub struct RewardsForfeited {
     pub coin: Pubkey,
     pub owner: Pubkey,
     pub amount: u64,

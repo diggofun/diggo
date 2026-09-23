@@ -433,6 +433,20 @@ export interface DiggoConfig {
   risk: RiskConfig;
   /** Curve-phase mining and the windows the indexed 24h metrics are measured over. */
   curve: CurveMiningConfig;
+  referral: ReferralConfig;
+}
+
+export interface ReferralConfig {
+  /** Minimum cumulative SOL volume, in lamports, across indexed buys and sells. */
+  minimumVolumeLamports: bigint;
+  /** Fixed ORE entitlement reserved for a qualified referrer. */
+  rewardOre: number;
+  /** No welcome bonus is paid to the referred wallet. */
+  welcomeBonusOre: 0;
+  weeklyRewardCap: number;
+  renameCooldownSeconds: number;
+  referralSkinMilestone: 1;
+  pageSize: number;
 }
 
 /**
@@ -513,10 +527,14 @@ export const DIGGO_CONFIG_DEFAULTS: DiggoConfig = {
   ore: {
     baseOrePerActiveHour: 30,
     activationBonusOre: 50,
+    // The same schedule power uses (`effectivePower.maturityRamp` below, and MATURITY_RAMP in
+    // programs/diggo-protocol/src/constants.rs): ORE accrual and Mining Power mature together.
+    // Only a caller that passes a config other than DIGGO_CONFIG reaches this copy at all -
+    // `maturityBps` delegates to the on-chain mirror for the default config.
     maturityRamp: [
       { upToDay: 1, bps: 2_000 },
-      { upToDay: 3, bps: 3_500 },
-      { upToDay: 7, bps: 5_000 },
+      { upToDay: 3, bps: 4_000 },
+      { upToDay: 7, bps: 7_000 },
       { upToDay: Number.POSITIVE_INFINITY, bps: 10_000 },
     ],
     cartsEfficiencyGain: 0.35,
@@ -735,6 +753,15 @@ export const DIGGO_CONFIG_DEFAULTS: DiggoConfig = {
     changeBaselineSeconds: 82_800,
     volumeWindowSeconds: 86_400,
   },
+  referral: {
+    minimumVolumeLamports: 500_000_000n,
+    rewardOre: 250,
+    welcomeBonusOre: 0,
+    weeklyRewardCap: 25,
+    renameCooldownSeconds: 7 * 86_400,
+    referralSkinMilestone: 1,
+    pageSize: 20,
+  },
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -936,3 +963,36 @@ export const DISCOVERY_DEFAULTS: DiscoveryDefaults = Object.freeze({
   tokenDailyCapUsd: DIGGO_CONFIG.discovery.tokenDailyCapUsd,
   globalDailyCapUsd: DIGGO_CONFIG.discovery.globalDailyCapUsd,
 });
+
+// ---- v2: the on-chain parameters, as the program holds them --------------------------------
+//
+// Every value-bearing parameter of v2 is a ProtocolConfig field rather than a compile-time
+// constant, so the timelock is the only path to a change. These are the defaults a fresh
+// protocol is initialized with, exported by name for the workstreams that read them (the
+// epoch-seed delays, the discovery caps in lamports) and for the UI, which shows a dollar figure
+// converted at display time because no instruction consults one.
+//
+// There is no V2_BOND_* or V2_STARTER_* here: the bond and starter mode were removed, so a wallet
+// mines at full power from its first block and pays no deposit to do it.
+
+/** Slots between an epoch's end and the SlotHashes entry its seed is taken from. */
+export const V2_EPOCH_SEED_DELAY_SLOTS = 32n;
+/** How late a reveal may be before the seed re-arms instead of being committed. */
+export const V2_EPOCH_SEED_MAX_LATENESS_SLOTS = 512n;
+/** How many slot hashes the sysvar keeps: the window a reveal must land in. */
+export const V2_SLOT_HASHES_WINDOW = 512n;
+/** Share of a coin's protocol bucket a single crank_tip may pay out, in bps. */
+export const V2_CRANK_TIP_BPS = 200;
+/** Longest a pause flag may be set for without the timelocked governance path. */
+export const V2_MAX_PAUSE_SECONDS = 259_200;
+/** Discovery caps in lamports of SOL, never in USD (design 4.3). */
+export const V2_DISCOVERY_DAILY_CAP_LAMPORTS = 1_000_000_000n;
+export const V2_DISCOVERY_WEEKLY_CAP_LAMPORTS = 4_000_000_000n;
+export const V2_DISCOVERY_GLOBAL_DAILY_CAP_LAMPORTS = 50_000_000_000n;
+export const V2_DISCOVERY_EPOCH_BUDGET_LAMPORTS = 2_000_000_000n;
+/** The Token-2022 metadata caps, which are what keep a launch's mint rent bounded. */
+export const V2_MAX_NAME_LEN = 16;
+export const V2_MAX_SYMBOL_LEN = 8;
+export const V2_MAX_URI_LEN = 96;
+/** The layout every v2 account is stamped with. */
+export const V2_ACCOUNT_VERSION = 5;

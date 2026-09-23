@@ -21,6 +21,8 @@ import {
 } from "./model";
 import { runScenario, type SimResult } from "./engine";
 import { curvePhaseChecks, curvePhaseTable, runCurvePhase } from "./curve";
+import { runV2 } from "./v2";
+import { v2Checks, v2Section, v2Table } from "./v2report";
 import { legacyRunwayProof, runSelfChecks, runwayProof, type CheckResult } from "./selfcheck";
 import {
   discoveryCapTable,
@@ -50,6 +52,7 @@ interface Cli {
   selfcheck: boolean;
   selfcheckOnly: boolean;
   curvePhase: boolean;
+  v2: boolean;
   debugPower: boolean;
   inspect: boolean;
   list: boolean;
@@ -65,6 +68,7 @@ function parseArgs(argv: readonly string[]): Cli {
     selfcheck: true,
     selfcheckOnly: false,
     curvePhase: false,
+    v2: false,
     debugPower: false,
     inspect: false,
     list: false,
@@ -94,6 +98,7 @@ function parseArgs(argv: readonly string[]): Cli {
     else if (arg === "--list") cli.list = true;
     else if (arg === "--selfcheck-only") cli.selfcheckOnly = true;
     else if (arg === "--curve-phase") cli.curvePhase = true;
+    else if (arg === "--v2") cli.v2 = true;
     else if (arg === "--debug-power") cli.debugPower = true;
     else if (arg === "--inspect") cli.inspect = true;
     else if (arg === "--quiet") cli.quiet = true;
@@ -313,6 +318,19 @@ export async function run(argv: readonly string[]): Promise<void> {
     if (curveChecks.some((check) => !check.ok)) process.exitCode = 1;
     return;
   }
+  if (cli.v2) {
+    // The on-chain v2 rules on their own: the bond, starter mode, the tranche cap and the SOL
+    // caps. It is the section that answers what a 10k starter-mode farm captures.
+    const result = runV2();
+    const checks = v2Checks(result);
+    console.log(v2Table(result));
+    console.log("\n" + v2Section(result));
+    console.log(
+      "\n" + checks.map((check) => (check.ok ? "PASS" : "FAIL") + " - " + check.name + ": " + check.detail).join("\n"),
+    );
+    if (checks.some((check) => !check.ok)) process.exitCode = 1;
+    return;
+  }
   const modes: ("shadow" | "enforce")[] =
     cli.enforcement === "both" ? ["shadow", "enforce"] : [cli.enforcement];
   const allResults: SimResult[] = [];
@@ -352,8 +370,16 @@ export async function run(argv: readonly string[]): Promise<void> {
     reference.summary.humans,
     Math.max(10_000, reference.summary.bots),
   );
-  const allChecks = [...checks, ...curvePhase.checks];
-  const markdown = buildMarkdown(allResults, allChecks, curvePhase.markdown);
+  // The v2 rules section always runs: it is the one part of the report that describes the economy
+  // the program will actually have, rather than the v4 one it is replacing.
+  const v2Result = runV2();
+  const v2ResultChecks = v2Checks(v2Result);
+  const allChecks = [...checks, ...curvePhase.checks, ...v2ResultChecks];
+  const markdown = buildMarkdown(
+    allResults,
+    allChecks,
+    curvePhase.markdown + v2Section(v2Result),
+  );
   mkdirSync(outRoot, { recursive: true });
   writeFileSync(join(outRoot, "summary.md"), markdown + "\n", "utf8");
   writeFileSync(

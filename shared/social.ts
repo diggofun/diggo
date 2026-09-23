@@ -168,6 +168,7 @@ const tierUnlock = (tier: number): CosmeticUnlock => ({ type: "tier", tier });
 
 /** Catalog of every cosmetic: outfits, pickaxes, carts, themes, explosions, frames, titles, badges. */
 export const COSMETIC_CATALOG: readonly CosmeticItem[] = Object.freeze([
+  earnedCosmetic("outfit_referral_first", "miner_outfit", "Founding Referrer Coveralls", "Exclusive visual outfit unlocked by the first qualified referral.", null),
   earnedCosmetic("outfit_canvas", "miner_outfit", "Canvas Coveralls", "Starter workwear for your first stretch of digging.", streakUnlock(3)),
   earnedCosmetic("outfit_steel", "miner_outfit", "Steel Plate Rig", "Industrial plating for a Tier 3 crew.", tierUnlock(3)),
   earnedCosmetic("outfit_gilded", "miner_outfit", "Gilded Overalls", "Gold trimmed gear for a Mega Mining Operation.", tierUnlock(5)),
@@ -250,6 +251,9 @@ export interface CosmeticUnlockContext {
 }
 
 export function cosmeticUnlocked(item: CosmeticItem, ctx: CosmeticUnlockContext): boolean {
+  // This catalog row is a visual reward only. It must never be granted by the progression sweep;
+  // worker/referrals.ts inserts it into player_cosmetics after a qualified attribution.
+  if (item.id === "outfit_referral_first") return false;
   if (item.source === "purchasable") return false;
   if (item.unlock === null) return true;
   switch (item.unlock.type) {

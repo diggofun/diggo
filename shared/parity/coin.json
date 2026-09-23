@@ -1,0 +1,159 @@
+{
+  "generator": "WS-B: programs/diggo-protocol/src/{math/curve.rs,math/fees.rs,state/coin.rs,instructions/launch.rs}",
+  "authority": "The Rust program is authoritative. Every number here is asserted by the Rust test coin_parity_vectors_match_the_program in math/curve.rs and by shared/curve.test.ts; when a value differs, the Rust value wins and the TypeScript is the bug.",
+  "priceScale": "1000000000000",
+  "slotsPerSecond": 2,
+  "bps": 10000,
+  "supplySplit": [
+    {
+      "totalSupply": "1000000000",
+      "reserveBps": 2500,
+      "discoveryReserveBps": 500,
+      "reserve": "250000000",
+      "discovery": "50000000",
+      "curve": "700000000"
+    },
+    {
+      "totalSupply": "1001",
+      "reserveBps": 333,
+      "discoveryReserveBps": 333,
+      "reserve": "33",
+      "discovery": "33",
+      "curve": "935",
+      "note": "both reserves round down, so the curve keeps the remainder and the three always add up"
+    }
+  ],
+  "curve": [
+    {
+      "name": "buy from a fresh curve",
+      "tokenReserve": "700000000",
+      "solReserve": "0",
+      "virtualSolReserve": "29750000000",
+      "netSol": "1000000000",
+      "tokensOut": "22764227"
+    },
+    {
+      "name": "sell the same tokens straight back",
+      "tokenReserve": "677235773",
+      "solReserve": "1000000000",
+      "virtualSolReserve": "29750000000",
+      "tokensIn": "22764227",
+      "grossSol": "999999971",
+      "note": "a round trip through the curve is never profitable: the trader gets back less than they put in"
+    },
+    {
+      "name": "sell is capped by the real SOL reserve, never by the virtual one",
+      "tokenReserve": "700000000",
+      "solReserve": "1000000",
+      "virtualSolReserve": "29750000000",
+      "tokensIn": "18446744073709551615",
+      "grossSol": "1000000"
+    }
+  ],
+  "pool": [
+    {
+      "name": "pool buy",
+      "tokenReserve": "700000000",
+      "solReserve": "85000000000",
+      "netSol": "1000000000",
+      "tokensOut": "8139534"
+    },
+    {
+      "name": "pool sell the same tokens straight back",
+      "tokenReserve": "691860466",
+      "solReserve": "86000000000",
+      "tokensIn": "8139534",
+      "grossSol": "999999891"
+    }
+  ],
+  "tradeFees": [
+    {
+      "gross": "1000000000",
+      "creatorFeeBps": 50,
+      "platformFeeBps": 50,
+      "creator": "5000000",
+      "platform": "5000000",
+      "net": "990000000"
+    },
+    {
+      "gross": "1999",
+      "creatorFeeBps": 50,
+      "platformFeeBps": 50,
+      "creator": "9",
+      "platform": "9",
+      "net": "1981",
+      "note": "both shares round down, so the remainder stays in the trade and no lamport is created"
+    }
+  ],
+  "platformBucket": [
+    {
+      "platformLamports": "10000",
+      "crankPoolFeeBps": 200,
+      "crankPool": "200",
+      "treasury": "9800"
+    },
+    {
+      "platformLamports": "10000",
+      "crankPoolFeeBps": 0,
+      "crankPool": "0",
+      "treasury": "10000"
+    }
+  ],
+  "crankTip": [
+    { "platformLamports": "10000", "maxCrankTip": "200" },
+    { "platformLamports": "0", "maxCrankTip": "0" }
+  ],
+  "twap": {
+    "solReserve": "85000000000",
+    "tokenReserve": "700000000",
+    "priceLamportsPerUnit": "121428571428571",
+    "cumAfter10Slots": "1214285714285710",
+    "average20SlotsAt1xThen2x": "182142857142856",
+    "note": "ten slots at the old price and ten at twice it average to one and a half times the old one, never to the new spot"
+  },
+  "value": [
+    {
+      "direction": "unitsToLamports",
+      "priceLamportsPerUnit": "1500000000000",
+      "units": "10",
+      "lamports": "15"
+    },
+    {
+      "direction": "lamportsToUnits",
+      "priceLamportsPerUnit": "1500000000000",
+      "lamports": "15",
+      "units": "10"
+    },
+    {
+      "direction": "lamportsToUnits",
+      "priceLamportsPerUnit": "1500000000000",
+      "lamports": "14",
+      "units": "9",
+      "note": "rounding down on both sides means a payout can never exceed the value it normalised"
+    }
+  ],
+  "launchRent": {
+    "mintFundedSize": 438,
+    "mintSettledSize": 438,
+    "mintLamports": "3939360",
+    "mintSettledLamports": "3939360",
+    "coinLamports": "4120320",
+    "vaultLamports": "2039280",
+    "totalLamports": "10098960",
+    "note": "the creator funds the mint for the frozen 438-byte layout, matching the Rust program's MINT_V2_SIZE"
+  },
+  "mining": {
+    "reserveRemaining": "250000000",
+    "epochLength": 604800,
+    "blockInterval": 300,
+    "minimumReward": "100",
+    "initialBlockReward": "124007",
+    "curveTokenInventory": "700000000",
+    "curveMiningBps": 500,
+    "curveMiningCap": "35000000",
+    "curveMiningRunwayDays": 30,
+    "curveMiningRate": "4051",
+    "virtualSolBps": 3500,
+    "virtualSolReserve": "29750000000"
+  }
+}

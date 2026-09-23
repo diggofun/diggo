@@ -37,10 +37,11 @@ pub use instructions::launch::{validate_launch_args, LaunchToken, LaunchTokenArg
 pub use instructions::mining_advance::AdvanceMine;
 pub use instructions::mining_seed::CommitEpochSeed;
 pub use instructions::player_activate::{Activate, InitializePlayer};
-pub use instructions::player_bond::{PostBond, RequestUnbond, WithdrawBond};
+pub use instructions::player_bond::{RequestUnbond, WithdrawBond};
 pub use instructions::player_crew::UpgradeCrew;
 pub use instructions::player_mine::{AssignPower, ClaimRewards, RemovePower, SwitchMine};
 pub use instructions::player_ore::CollectOre;
+pub use instructions::referral::CreditReferralOre;
 pub use instructions::sponsor::{
     CloseSponsorEvent, CreateSponsorEvent, FundSponsorVault, InitSponsorVault,
     WithdrawSponsorVault,
@@ -71,8 +72,7 @@ pub(crate) use instructions::player_activate::{
     __client_accounts_activate, __client_accounts_initialize_player,
 };
 pub(crate) use instructions::player_bond::{
-    __client_accounts_post_bond, __client_accounts_request_unbond,
-    __client_accounts_withdraw_bond,
+    __client_accounts_request_unbond, __client_accounts_withdraw_bond,
 };
 pub(crate) use instructions::player_crew::__client_accounts_upgrade_crew;
 pub(crate) use instructions::player_mine::{
@@ -80,6 +80,7 @@ pub(crate) use instructions::player_mine::{
     __client_accounts_remove_power, __client_accounts_switch_mine,
 };
 pub(crate) use instructions::player_ore::__client_accounts_collect_ore;
+pub(crate) use instructions::referral::__client_accounts_credit_referral_ore;
 pub(crate) use instructions::sponsor::{
     __client_accounts_close_sponsor_event, __client_accounts_create_sponsor_event,
     __client_accounts_fund_sponsor_vault, __client_accounts_init_sponsor_vault,
@@ -253,6 +254,14 @@ pub mod diggo_protocol {
         instructions::player_ore::collect_ore(ctx)
     }
 
+    pub fn credit_referral_ore(
+        ctx: Context<CreditReferralOre>,
+        referee: Pubkey,
+        amount: u64,
+    ) -> Result<()> {
+        instructions::referral::credit_referral_ore(ctx, referee, amount)
+    }
+
     pub fn upgrade_crew(ctx: Context<UpgradeCrew>, component: u8) -> Result<()> {
         instructions::player_crew::upgrade_crew(ctx, component)
     }
@@ -273,10 +282,6 @@ pub mod diggo_protocol {
 
     pub fn claim_rewards(ctx: Context<ClaimRewards>) -> Result<()> {
         instructions::player_mine::claim_rewards(ctx)
-    }
-
-    pub fn post_bond(ctx: Context<PostBond>) -> Result<()> {
-        instructions::player_bond::post_bond(ctx)
     }
 
     pub fn request_unbond(ctx: Context<RequestUnbond>) -> Result<()> {

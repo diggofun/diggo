@@ -13,6 +13,113 @@ import {
   type PriceSample,
   type TokenEligibilityInput,
 } from "./rarity";
+import {
+  DISCOVERY_PRICE_SCALE,
+  coinPriceScaled,
+  discoveryFacts,
+  discoveryUnitsForValue,
+  planDiscoveryPayout,
+  resolveRarityTier,
+  rolledRarityTier,
+  type V2RarityTier
+} from "./rarity";
+
+describe("v2 derived discovery outcome (parity with math/rarity.rs)", () => {
+  const TIERS: readonly V2RarityTier[] = [
+    { cumulativeChanceBps: 7_000, valueLamports: 333_333n, minEligibilityScore: 0, minLiquidityLamports: 0n, minVolumeLamports: 0n },
+    { cumulativeChanceBps: 9_000, valueLamports: 1_000_000n, minEligibilityScore: 20, minLiquidityLamports: 15_000_000_000n, minVolumeLamports: 3_000_000_000n },
+    { cumulativeChanceBps: 9_700, valueLamports: 3_333_333n, minEligibilityScore: 40, minLiquidityLamports: 60_000_000_000n, minVolumeLamports: 15_000_000_000n },
+    { cumulativeChanceBps: 9_950, valueLamports: 10_000_000n, minEligibilityScore: 60, minLiquidityLamports: 300_000_000_000n, minVolumeLamports: 60_000_000_000n },
+    { cumulativeChanceBps: 9_995, valueLamports: 33_333_333n, minEligibilityScore: 80, minLiquidityLamports: 1_500_000_000_000n, minVolumeLamports: 300_000_000_000n },
+    { cumulativeChanceBps: 10_000, valueLamports: 133_333_333n, minEligibilityScore: 92, minLiquidityLamports: 6_000_000_000_000n, minVolumeLamports: 1_200_000_000_000n }
+  ];
+
+  const THIN = {
+    tokenReserve: 1_000_000_000n,
+    solReserve: 100_000_000n,
+    virtualSolReserve: 30_000_000_000n,
+    graduationTarget: 100_000_000_000n,
+    discoveryReserveTotal: 10_000_000n,
+    discoveryRemaining: 10_000_000n,
+    discoveryEpochBudget: 1_000_000n,
+    discoveryEpochSpent: 0n
+  };
+
+  const RICH = {
+    ...THIN,
+    tokenReserve: 1_000_000_000_000n,
+    solReserve: 2_000_000_000_000n,
+    virtualSolReserve: 5_000_000_000_000n,
+    graduationTarget: 1_000_000_000_000n,
+    discoveryReserveTotal: 1_000_000_000n,
+    discoveryRemaining: 1_000_000_000n,
+    discoveryEpochBudget: 100_000_000n
+  };
+
+  it("matches the Rust tier-selection vectors", () => {
+    const VECTORS = [
+      { rollBps: 0, tier: 0 },
+      { rollBps: 6_999, tier: 0 },
+      { rollBps: 7_000, tier: 1 },
+      { rollBps: 8_999, tier: 1 },
+      { rollBps: 9_000, tier: 2 },
+      { rollBps: 9_999, tier: 5 }
+    ];
+    for (const vector of VECTORS) {
+      expect(rolledRarityTier(TIERS, vector.rollBps)).toBe(vector.tier);
+    }
+    expect(rolledRarityTier([{ ...TIERS[0], cumulativeChanceBps: 5_000 }], 5_000)).toBeNull();
+  });
+
+  it("downgrades an illiquid coin rather than refusing it", () => {
+    const facts = discoveryFacts(THIN);
+    expect(facts.eligibilityScore).toBeLessThan(60);
+    expect(resolveRarityTier(TIERS, 5, facts)).toBe(0);
+    const rich = discoveryFacts(RICH);
+    expect(rich.eligibilityScore).toBe(100);
+    expect(resolveRarityTier(TIERS, 5, rich)).toBe(5);
+  });
+
+  it("reads its price from the coin's own market and never below the average", () => {
+    expect(coinPriceScaled(THIN)).toBe((30_100_000_000n * DISCOVERY_PRICE_SCALE) / 1_000_000_000n);
+    // A crashed marginal price does not lower the price the payout is priced at.
+    const crashed = {
+      ...THIN,
+      twapLastUpdateSlot: 1_000_000n,
+      twapCumPriceLamportsPerUnit: 1_000n * DISCOVERY_PRICE_SCALE * 1_000_000n,
+      solReserve: 1n,
+      virtualSolReserve: 1n
+    };
+    expect(coinPriceScaled(crashed)).toBe(1_000n * DISCOVERY_PRICE_SCALE);
+    expect(coinPriceScaled({ ...THIN, tokenReserve: 0n, solReserve: 0n, virtualSolReserve: 0n })).toBeNull();
+  });
+
+  it("rounds units down and never pays more than the value class", () => {
+    expect(discoveryUnitsForValue(THIN, 333_333n)).toBe(11_074n);
+    const price = coinPriceScaled(THIN)!;
+    expect(11_074n * price).toBeLessThanOrEqual(333_333n * DISCOVERY_PRICE_SCALE);
+    expect(discoveryUnitsForValue(THIN, 0n)).toBe(0n);
+  });
+
+  it("clamps a payout to the reserve, the per-call ceiling and the epoch budget", () => {
+    const digest = new Uint8Array(32);
+    const payout = planDiscoveryPayout({ tiers: TIERS, discoveryMaxBps: 100, coin: RICH, digest });
+    expect(payout.units).toBeGreaterThan(0n);
+    expect(payout.units).toBeLessThanOrEqual(RICH.discoveryRemaining);
+    expect(payout.units).toBeLessThanOrEqual(RICH.discoveryEpochBudget);
+    expect(payout.valueLamports).toBeGreaterThan(0n);
+
+    const spent = planDiscoveryPayout({
+      tiers: TIERS,
+      discoveryMaxBps: 100,
+      coin: { ...RICH, discoveryEpochSpent: RICH.discoveryEpochBudget },
+      digest
+    });
+    expect(spent.units).toBe(0n);
+    expect(spent.valueLamports).toBe(0n);
+  });
+});
+
 
 const NOW = 1_700_000_000;
 const healthy = { mintAuthorityRevoked: true, freezeAuthorityRevoked: true, liquidityLocked: true, tradingEnabled: true };

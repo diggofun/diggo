@@ -25,6 +25,19 @@ import {
   type MiningPosition,
   type RewardIndexState,
 } from "./rewardIndex";
+import {
+  V2_BPS,
+  V2_INDEX_SCALE,
+  V2_TRANCHE_BONDED,
+  V2_TRANCHE_STARTER,
+  positionInitialIndex,
+  settleCoinPosition,
+  splitBlockReward,
+  starterIndex,
+  starterTrancheIsCapped,
+  trancheIndexOwed,
+  walkGraduatedCoinBlocks
+} from "./rewardIndex";
 
 function settleAll(state: RewardIndexState, positions: MiningPosition[]) {
   let next = state;
@@ -482,5 +495,146 @@ describe("reserve audit with forfeits (spec 17, 19, 21)", () => {
     expect(incomplete.conserved).toBe(false);
     // The missing position's whole entitlement shows up as released-but-unattributed.
     expect(incomplete.unattributedScaled).toBe(5_000n * rewardIndexScale());
+  });
+});
+
+describe("v2 two-tranche index (parity with math/index.rs)", () => {
+  const CONFIG = { starterEfficiencyBps: 2_500, starterTrancheBps: 1_000 };
+  const SCALE = V2_INDEX_SCALE;
+
+  it("matches the Rust tranche split vectors", () => {
+    const VECTORS = [
+      { bondedPower: 1_000n, starterPower: 0n, reward: 10_000n, capped: true, bonded: 10_000n, starter: 0n },
+      { bondedPower: 1_000n, starterPower: 250n, reward: 10_000n, capped: true, bonded: 9_938n, starter: 62n },
+      { bondedPower: 1_000n, starterPower: 4_444n, reward: 10_000n, capped: true, bonded: 9_001n, starter: 999n },
+      { bondedPower: 1_000n, starterPower: 4_445n, reward: 10_000n, capped: false, bonded: 0n, starter: 0n },
+      { bondedPower: 7n, starterPower: 3n, reward: 9_999n, capped: true, bonded: 9_894n, starter: 105n },
+      { bondedPower: 0n, starterPower: 1_000n, reward: 10_000n, capped: false, bonded: 0n, starter: 0n }
+    ];
+    for (const vector of VECTORS) {
+      expect(starterTrancheIsCapped(vector.bondedPower, vector.starterPower, CONFIG)).toBe(
+        vector.capped
+      );
+      const split = splitBlockReward(
+        vector.reward,
+        vector.bondedPower,
+        vector.starterPower,
+        CONFIG
+      );
+      expect(split.bonded).toBe(vector.bonded);
+      expect(split.starter).toBe(vector.starter);
+      expect(split.assigned).toBe(vector.bonded + vector.starter);
+    }
+  });
+
+  it("matches the Rust starter index vectors", () => {
+    const VECTORS = [
+      { bondedIndex: 0n, starterIndex: 0n },
+      { bondedIndex: 1n, starterIndex: 0n },
+      { bondedIndex: 1_000_000_000_000n, starterIndex: 25_000_000_000n },
+      { bondedIndex: 7_000_000_000_000n, starterIndex: 175_000_000_000n },
+      { bondedIndex: 1_000_000_000_000_000_000n, starterIndex: 25_000_000_000_000_000n }
+    ];
+    for (const vector of VECTORS) {
+      expect(starterIndex(vector.bondedIndex, CONFIG)).toBe(vector.starterIndex);
+    }
+  });
+
+  it("matches the Rust owed vectors", () => {
+    const VECTORS = [
+      { index: SCALE, power: 1_000n, owed: 1_000n },
+      { index: SCALE / 2n, power: 1_000n, owed: 500n },
+      { index: 0n, power: 1_000n, owed: 0n },
+      { index: 3n * SCALE + 7n, power: 333n, owed: 999n }
+    ];
+    for (const vector of VECTORS) {
+      expect(trancheIndexOwed(vector.index, vector.power)).toBe(vector.owed);
+    }
+  });
+
+  it("matches the Rust walk vectors", () => {
+    const VECTORS = [
+      {
+        bondedPower: 1_000n,
+        starterPower: 250n,
+        blockReward: 10_000n,
+        blocks: 1n,
+        rewardIndex: 9_938_000_000_000n,
+        reserveRemaining: 999_990_000n,
+        cumulativeDistributed: 10_000n,
+        outstandingClaims: 10_000n
+      },
+      {
+        bondedPower: 1_000n,
+        starterPower: 0n,
+        blockReward: 10_000n,
+        blocks: 4n,
+        rewardIndex: 40_000_000_000_000n,
+        reserveRemaining: 999_960_000n,
+        cumulativeDistributed: 40_000n,
+        outstandingClaims: 40_000n
+      },
+      {
+        bondedPower: 500n,
+        starterPower: 2_000n,
+        blockReward: 9_999n,
+        blocks: 1n,
+        rewardIndex: 18_180_000_000_000n,
+        reserveRemaining: 999_990_001n,
+        cumulativeDistributed: 9_999n,
+        outstandingClaims: 9_999n
+      }
+    ];
+    for (const vector of VECTORS) {
+      const outcome = walkGraduatedCoinBlocks(
+        {
+          bondedPower: vector.bondedPower,
+          starterPower: vector.starterPower,
+          blockReward: vector.blockReward,
+          blocks: vector.blocks,
+          reserveRemaining: 1_000_000_000n
+        },
+        CONFIG
+      );
+      expect(outcome.rewardIndex).toBe(vector.rewardIndex);
+      expect(outcome.reserveRemaining).toBe(vector.reserveRemaining);
+      expect(outcome.cumulativeDistributed).toBe(vector.cumulativeDistributed);
+      expect(outcome.outstandingClaims).toBe(vector.outstandingClaims);
+    }
+  });
+
+  it("keeps a bonded tranche at ninety percent of every assigned block", () => {
+    for (const bonded of [1n, 7n, 100n, 1_000n, 50_000n]) {
+      for (const starter of [0n, 1n, 25n, 1_000n, 250_000n]) {
+        const split = splitBlockReward(100_000n, bonded, starter, CONFIG);
+        if (split.assigned === 0n) continue;
+        expect(split.bonded * V2_BPS).toBeGreaterThanOrEqual(split.assigned * 9_000n);
+      }
+    }
+  });
+
+  it("assigns nothing when the starter tranche outweighs the bonded one", () => {
+    const split = splitBlockReward(10_000n, 100n, 10_000n, CONFIG);
+    expect(split).toEqual({ bonded: 0n, starter: 0n, assigned: 0n });
+  });
+
+  it("settles a position exactly and idempotently", () => {
+    const index = 10n * SCALE;
+    const position = {
+      assignedPower: 1_000n,
+      lastRewardIndex: index,
+      pendingReward: 0n,
+      tranche: V2_TRANCHE_BONDED
+    };
+    const settled = settleCoinPosition(position, index, CONFIG);
+    expect(settled.earned).toBe(0n);
+    // A starter position settles against the derived index, not the bonded one.
+    const starter = settleCoinPosition(
+      { ...position, tranche: V2_TRANCHE_STARTER },
+      index,
+      CONFIG
+    );
+    expect(starter.lastRewardIndex).toBe(starterIndex(index, CONFIG));
+    expect(positionInitialIndex(index, V2_TRANCHE_BONDED, CONFIG)).toBe(index);
   });
 });
