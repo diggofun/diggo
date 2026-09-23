@@ -7,9 +7,14 @@
  * belongs to it. The UI renders the event; it never picks a rarity, a token or an amount, and
  * there is no client-side randomness anywhere in this file (spec 55).
  */
+import { useEffect, useRef } from "react";
 import { Coins, Compass, Hammer, Repeat2, Sparkles, X } from "lucide-react";
 import type { DiscoveryVisualEvent, MiningReport } from "../../shared/types";
 import { duration, oreAmount, tokenAmount } from "../format";
+import { discoveryRarityOf, playSound, useReducedMotion } from "../sound";
+import { CountUp } from "./CountUp";
+import { DiscoveryArt, GameArt } from "./MineScene";
+import { useDialog } from "./useDialog";
 
 export interface MiningReportModalProps {
   report: MiningReport;
@@ -47,11 +52,31 @@ export function MiningReportModal({
   const byRarity = report.discoveries ? Object.entries(report.discoveries.byRarity) : [];
   const rewards = report.blockRewards ?? [];
   const mineLabel = mineSymbol ? dollar(mineSymbol) : "the mine";
+  const dialogRef = useDialog<HTMLElement>(onClose);
+  const reducedMotion = useReducedMotion();
+
+  // The discovery cue announces what the server rolled; the collect cue marks the player's own
+  // confirmation. Neither reads anything back into the report.
+  const discoveryId = report.discovery?.id ?? "";
+  const announced = useRef("");
+  useEffect(() => {
+    if (discoveryId && discoveryId !== announced.current) {
+      announced.current = discoveryId;
+      playSound("discovery", { rarity: discoveryRarityOf(report.discovery?.rarity) });
+    }
+  }, [discoveryId, report.discovery]);
+
+  const wasCollected = useRef(collected);
+  useEffect(() => {
+    if (collected && !wasCollected.current) playSound("collect");
+    wasCollected.current = collected;
+  }, [collected]);
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section
-        className="report-modal"
+        ref={dialogRef}
+        className={"report-modal" + (collected ? " is-collected" : "")}
         role="dialog"
         aria-modal="true"
         aria-labelledby="report-title"
@@ -71,9 +96,13 @@ export function MiningReportModal({
         {mineSymbol && <p className="report-mine">Mine: {mineLabel}</p>}
 
         <div className="report-grid">
-          <div>
+          <div className="report-ore">
             <span>ORE MINED</span>
-            <strong>+{oreAmount(report.oreGained)}</strong>
+            <GameArt name="cart" alt="" width={768} height={768} className="report-ore-art" />
+            <strong>
+              +<CountUp value={report.oreGained} format={oreAmount} />
+            </strong>
+            <small>game progression · spend it on crew upgrades</small>
           </div>
           <div>
             <span>STREAK</span>
@@ -123,6 +152,7 @@ export function MiningReportModal({
               <i />
               <i />
             </div>
+            <DiscoveryArt rarity={discovery.rarity} className="discovery-event-art" />
             <div className="discovery-event-copy">
               <span className={"rarity-tag rarity-" + discovery.rarity}>
                 {discovery.rarity.toUpperCase()} · {discovery.visualEvent.toUpperCase()}
@@ -172,13 +202,18 @@ export function MiningReportModal({
         {error && <p className="form-message">{error}</p>}
 
         <div className="report-actions">
+          {collected && !reducedMotion && (
+            <div className="collect-burst" aria-hidden="true">
+              <i /><i /><i /><i /><i /><i /><i /><i />
+            </div>
+          )}
           <button className="outline-button" onClick={onManageCrew}>
             Manage crew <Hammer size={15} />
           </button>
           <button className="outline-button" onClick={onSwitchMine}>
             Switch mine <Repeat2 size={15} />
           </button>
-          <button className="primary-button" disabled={collecting || collected} onClick={onCollect}>
+          <button className="primary-button" disabled={collecting || collected} onClick={onCollect} data-autofocus>
             {collected ? (
               <>
                 <Compass size={16} /> Collected

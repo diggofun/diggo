@@ -5,8 +5,10 @@ import {
   DISCOVERY_DEFAULTS,
   GAMEPLAY_DEFAULTS,
   clampDiscoveryTunables,
+  clampHeldBudgetTunables,
   configFromEnv,
   createDiggoConfig,
+  DISCOVERY_HELD_TUNABLE_BOUNDS,
 } from "./config";
 import { activationWindow, isEligibleForBlock } from "./streak";
 import { crewPower, upgradeOreCost } from "./crew";
@@ -55,7 +57,8 @@ describe("central Diggo config", () => {
     expect(activationWindow(0, tuned).graceUntil).toBe(4_200);
     expect(isEligibleForBlock(activationWindow(0, tuned).activeUntil, 3_600, 0)).toBe(false);
     expect(maturityBps(30 * 86_400, tuned)).toBe(1_000);
-    expect(oreForActiveSeconds(3_600, 30 * 86_400, undefined, tuned)).toBe(2);
+    // One hour at the base rate, scaled by the 1,000 bps maturity ramp this config carries.
+    expect(oreForActiveSeconds(3_600, 30 * 86_400, undefined, tuned)).toBe(3);
     expect(upgradeOreCost("miners", 1, undefined, tuned)).toBe(7);
   });
 
@@ -136,5 +139,29 @@ describe("central Diggo config", () => {
       windowSeconds: 60,
       rollChanceBps: 250,
     });
+  });
+
+  it("ships a held-grant budget ceiling and review window, and clamps their overrides", () => {
+    // Held grants may reserve a fifth of each cap, and an uncleared hold expires after a day.
+    expect(DIGGO_CONFIG.discovery.heldBudgetShareBps).toBe(2_000);
+    expect(DIGGO_CONFIG.discovery.heldGrantReviewSeconds).toBe(86_400);
+
+    const tuned = configFromEnv({
+      DISCOVERY_HELD_BUDGET_SHARE_BPS: "500",
+      DISCOVERY_HELD_REVIEW_SECONDS: "7200",
+    });
+    expect(tuned.discovery.heldBudgetShareBps).toBe(500);
+    expect(tuned.discovery.heldGrantReviewSeconds).toBe(7_200);
+
+    // Out-of-range and mistyped values fall back into the bounds, never outside them.
+    expect(clampHeldBudgetTunables({ heldBudgetShareBps: 50_000 }).heldBudgetShareBps).toBe(10_000);
+    expect(clampHeldBudgetTunables({ heldBudgetShareBps: -1 }).heldBudgetShareBps).toBe(0);
+    expect(clampHeldBudgetTunables({ heldGrantReviewSeconds: 1 }).heldGrantReviewSeconds).toBe(
+      DISCOVERY_HELD_TUNABLE_BOUNDS.heldGrantReviewSeconds.min,
+    );
+    expect(clampHeldBudgetTunables({ heldGrantReviewSeconds: "nonsense" }).heldGrantReviewSeconds).toBe(
+      DIGGO_CONFIG.discovery.heldGrantReviewSeconds,
+    );
+    expect(configFromEnv({ DISCOVERY_HELD_REVIEW_SECONDS: "abc" })).toBe(DIGGO_CONFIG);
   });
 });

@@ -11,23 +11,50 @@ import {
   type SolanaRpcApi,
 } from "@solana/kit";
 import {
-  decodeLaunchMarket,
   decodeMine,
   deriveMineAddresses,
   bondingCurveSpotPriceLamports,
+  poolSpotPriceLamports,
   type DecodedMine,
   type DecodedLaunchMarket,
 } from "../shared/program";
+// keeperReadVenue lives next to the keeper because the keeper is what graduates a market, and it
+// is the one place that knows a market can have two venues. keeper.ts imports getChainRpc from
+// this module, so the two form an import cycle — safe here because neither module calls the other
+// at module scope, only from inside the functions below.
+import { keeperReadVenue, type MarketVenue } from "./keeper";
 import type { TokenStatus, TokenSummary } from "../shared/types";
+import type { RuntimeEnv } from "./env";
+import { getSolUsd, ILLUSTRATIVE_DEVNET_SOL_USD } from "./oracle";
 
 export const DEFAULT_DEVNET_RPC = "https://api.devnet.solana.com";
 
 /**
- * Illustrative-only SOL/USD conversion for display. Devnet SOL has no real value and this
- * project has no live price oracle wired up yet — see docs/ARCHITECTURE.md. Never treat
- * priceUsd as authoritative; priceSol (read straight from the bonding curve) is the real value.
+ * The SOL/USD rate used for the display-only USD columns of a synced token.
+ *
+ * It comes from the oracle's cached observations (worker/oracle.ts), which cron keeps warm from
+ * Pyth Hermes and Jupiter. When no source is fresh the oracle itself answers with
+ * ILLUSTRATIVE_DEVNET_SOL_USD and says so, so an unconfigured deployment keeps the old behaviour
+ * instead of breaking the sync. Never treat priceUsd as authoritative: priceSol, read straight
+ * from the bonding curve, is the real value, and settlement never reads the USD columns at all.
  */
-export const ILLUSTRATIVE_DEVNET_SOL_USD = 150;
+async function displaySolUsd(env: RuntimeEnv): Promise<number> {
+  try {
+    const quote = await getSolUsd(env);
+    if (!quote.fromOracle) {
+      // Labelled, not hidden: the USD columns are a display conversion and this says out loud
+      // that no oracle source was fresh, so nothing downstream can mistake it for a real rate.
+      console.warn(
+        JSON.stringify({ event: "chain.sol_usd_fallback", source: quote.source, priceUsd: quote.priceUsd }),
+      );
+    }
+    return quote.priceUsd;
+  } catch (error) {
+    // A display conversion must never fail a chain sync that has already read the accounts.
+    console.error(JSON.stringify({ event: "chain.sol_usd_unavailable", error: String(error) }));
+    return ILLUSTRATIVE_DEVNET_SOL_USD;
+  }
+}
 
 let cachedRpc: Rpc<SolanaRpcApi> | null = null;
 let cachedRpcUrl: string | null = null;
@@ -113,8 +140,17 @@ export interface ChainSyncedToken {
   discoveryEpochEndsAt: number;
   /** The program's own per-mine discovery circuit breaker (spec 65). */
   discoveryPaused: boolean;
-  /** Program-controlled liquidity backing the price, in USD at the illustrative SOL rate. */
+  /** Program-controlled liquidity backing the price, in USD at the oracle's SOL/USD rate. */
   liquidityUsd: number;
+  /** Which venue the price came from: the bonding curve, or the locked pool. */
+  venue: MarketVenueName;
+  /** Real SOL backing the price in that venue, in lamports. */
+  liquidityLamports: bigint;
+  /**
+   * True when the market has genuinely reached its graduation target and still has no pool, i.e.
+   * the one state where calling graduate_market can do anything at all (spec 36).
+   */
+  graduationReady: boolean;
   mintAuthorityRevoked: boolean;
   freezeAuthorityRevoked: boolean;
   /**
@@ -125,64 +161,164 @@ export interface ChainSyncedToken {
 }
 
 /**
- * Fetches a mine's Mine + LaunchMarket accounts (and its mint's decimals) directly from the
- * chain and returns the fields diggo's `tokens` cache needs. Throws if the mine has not
- * actually been launched on-chain — callers should not silently fall back to fabricated data.
+ * Which venue a market trades on. Before graduation that is its bonding curve; after
+ * `graduate_market` moved the curve's whole liquidity into the program-owned constant-product
+ * pool, it is the pool, and the market's own curve reserves are zero by design (spec 36).
+ */
+export type MarketVenueName = "curve" | "pool";
+
+/**
+ * The reserves that actually back a market's price.
+ *
+ * A graduated market's `token_reserve` and `sol_reserve` are both zero — the liquidity lives in
+ * the pool — so pricing a graduated mine from its market account alone would index it at zero.
+ * Reads the pool whenever the market is graduated, whether or not the pool account came back
+ * this time: a zero is the honest answer to "the venue I must price from is unreadable", and it
+ * is visibly wrong rather than plausibly wrong.
+ */
+export function venueSpotPriceLamports(venue: MarketVenue, decimals: number): number {
+  if (venue.graduated) {
+    return venue.pool ? poolSpotPriceLamports(venue.pool, decimals) : 0;
+  }
+  return bondingCurveSpotPriceLamports(venue.market, decimals);
+}
+
+/** Real SOL backing the price, in lamports, read from whichever venue holds it. */
+export function venueLiquidityLamports(venue: MarketVenue): bigint {
+  return venue.graduated && venue.pool ? venue.pool.solReserve : venue.market.solReserve;
+}
+
+/**
+ * True only when the indexing loop should ask the keeper to graduate this market: the curve has
+ * reached its target, the market is not graduated yet, and no pool exists. This mirrors
+ * keeperGraduateMarket's own no-op conditions, so the loop does not spend a keeper call (and a
+ * fee-payer's SOL) on a market that has nothing to do. A zero target is not a graduation target
+ * and never triggers one.
+ */
+export function needsGraduation(venue: MarketVenue): boolean {
+  return (
+    !venue.graduated &&
+    venue.pool === null &&
+    venue.market.graduationTarget > 0n &&
+    venue.market.solReserve >= venue.market.graduationTarget
+  );
+}
+
+export interface SyncedTokenInput {
+  mintAddress: string;
+  mine: DecodedMine;
+  venue: MarketVenue;
+  mintInfo: MintInfo;
+  decimals: number;
+  /** SOL/USD for the display-only USD columns; see displaySolUsd. */
+  solUsd: number;
+}
+
+/**
+ * Assembles the `tokens` cache fields from already-decoded accounts. Kept pure and separate from
+ * the RPC reads so the venue arithmetic — price, liquidity, market cap — can be exercised
+ * directly, including the post-graduation case where reading the market alone yields zero.
+ */
+export function buildSyncedToken(input: SyncedTokenInput): ChainSyncedToken {
+  const { mine, venue, decimals, solUsd } = input;
+  const scale = 10 ** decimals;
+  const priceSol = venueSpotPriceLamports(venue, decimals) / 1_000_000_000;
+  const priceUsd = priceSol * solUsd;
+  const totalSupplyWhole = Number(mine.totalSupply) / scale;
+  const liquidityLamports = venueLiquidityLamports(venue);
+  return {
+    mint: input.mintAddress,
+    name: mine.name,
+    symbol: mine.symbol,
+    creator: mine.creator,
+    status: mineStatusToTokenStatus(mine, venue.market),
+    priceSol,
+    priceUsd,
+    marketCapUsd: priceUsd * totalSupplyWhole,
+    reserveRemaining: Number(mine.remainingReserve) / scale,
+    reserveTotal: Number(mine.remainingReserve + mine.cumulativeDistributed) / scale,
+    rewardPerBlock: Number(mine.currentBlockReward) / scale,
+    networkPower: Number(mine.totalPower),
+    nextBlockAt: Number(mine.nextBlockAt),
+    nextEpochAt: Number(mine.epochEndsAt),
+    decimals,
+    discoveryReserveRemaining: Number(mine.remainingDiscoveryReserve) / scale,
+    discoveryReserveTotal: Number(mine.discoveryReserveTotal) / scale,
+    discoveryEpochBudget: Number(mine.discoveryEpochBudget) / scale,
+    discoveryEpochSpent: Number(mine.discoveryEpochSpent) / scale,
+    discoveryEpochEndsAt: Number(mine.discoveryEpochEndsAt),
+    discoveryPaused: mine.discoveryPaused,
+    liquidityUsd: (Number(liquidityLamports) / 1_000_000_000) * solUsd,
+    venue: venue.graduated ? "pool" : "curve",
+    liquidityLamports,
+    graduationReady: needsGraduation(venue),
+    mintAuthorityRevoked: input.mintInfo.mintAuthorityRevoked,
+    freezeAuthorityRevoked: input.mintInfo.freezeAuthorityRevoked,
+    liquidityLocked: true,
+  };
+}
+
+/**
+ * Fetches a mine's Mine + LaunchMarket accounts (plus its pool once it has graduated, and its
+ * mint's decimals) directly from the chain and returns the fields diggo's `tokens` cache needs.
+ * Throws if the mine has not actually been launched on-chain — callers should not silently fall
+ * back to fabricated data.
+ *
+ * The venue read is what keeps a graduated mine priced: after graduation the market's own
+ * reserves are zero and only the pool has liquidity.
  */
 export async function readTokenFromChain(
-  env: { DIGGO_RPC_URL?: string; DIGGO_PROGRAM_ID: string },
+  env: RuntimeEnv,
   mintAddress: string,
 ): Promise<ChainSyncedToken> {
   const rpc = getChainRpc(env);
   const programAddress = address(env.DIGGO_PROGRAM_ID);
   const mint = address(mintAddress);
-  const { mine, market } = await deriveMineAddresses(programAddress, mint);
+  const { mine } = await deriveMineAddresses(programAddress, mint);
 
-  const [mineInfo, marketInfo, mintInfo] = await Promise.all([
+  const [mineInfo, mintInfo, venueRead] = await Promise.all([
     rpc.getAccountInfo(mine, { commitment: "confirmed", encoding: "base64" }).send(),
-    rpc.getAccountInfo(market, { commitment: "confirmed", encoding: "base64" }).send(),
     readMintInfo(rpc, mint),
+    keeperReadVenue(env, mintAddress),
   ]);
   if (!mineInfo.value) throw new Error(`Mine account not found on-chain for mint ${mintAddress}`);
-  if (!marketInfo.value) throw new Error(`Market account not found on-chain for mint ${mintAddress}`);
+  if (!venueRead) throw new Error(`Market account not found on-chain for mint ${mintAddress}`);
 
-  const decodedMine = decodeMine(base64ToBytes(mineInfo.value.data[0]));
-  const decodedMarket = decodeLaunchMarket(base64ToBytes(marketInfo.value.data[0]));
-  const decimals = mintInfo.decimals;
-  const scale = 10 ** decimals;
+  const venue = await settledVenue(env, mintAddress, venueRead);
+  const solUsd = await displaySolUsd(env);
+  return buildSyncedToken({
+    mintAddress,
+    mine: decodeMine(base64ToBytes(mineInfo.value.data[0])),
+    venue,
+    mintInfo,
+    decimals: mintInfo.decimals,
+    solUsd,
+  });
+}
 
-  const priceSol = bondingCurveSpotPriceLamports(decodedMarket, decimals) / 1_000_000_000;
-  const priceUsd = priceSol * ILLUSTRATIVE_DEVNET_SOL_USD;
-  const totalSupplyWhole = Number(decodedMine.totalSupply) / scale;
-  const reserveTotal = Number(decodedMine.remainingReserve + decodedMine.cumulativeDistributed) / scale;
-
-  return {
-    mint: mintAddress,
-    name: decodedMine.name,
-    symbol: decodedMine.symbol,
-    creator: decodedMine.creator,
-    status: mineStatusToTokenStatus(decodedMine, decodedMarket),
-    priceSol,
-    priceUsd,
-    marketCapUsd: priceUsd * totalSupplyWhole,
-    reserveRemaining: Number(decodedMine.remainingReserve) / scale,
-    reserveTotal,
-    rewardPerBlock: Number(decodedMine.currentBlockReward) / scale,
-    networkPower: Number(decodedMine.totalPower),
-    nextBlockAt: Number(decodedMine.nextBlockAt),
-    nextEpochAt: Number(decodedMine.epochEndsAt),
-    decimals,
-    discoveryReserveRemaining: Number(decodedMine.remainingDiscoveryReserve) / scale,
-    discoveryReserveTotal: Number(decodedMine.discoveryReserveTotal) / scale,
-    discoveryEpochBudget: Number(decodedMine.discoveryEpochBudget) / scale,
-    discoveryEpochSpent: Number(decodedMine.discoveryEpochSpent) / scale,
-    discoveryEpochEndsAt: Number(decodedMine.discoveryEpochEndsAt),
-    discoveryPaused: decodedMine.discoveryPaused,
-    liquidityUsd: (Number(decodedMarket.solReserve) / 1_000_000_000) * ILLUSTRATIVE_DEVNET_SOL_USD,
-    mintAuthorityRevoked: mintInfo.mintAuthorityRevoked,
-    freezeAuthorityRevoked: mintInfo.freezeAuthorityRevoked,
-    liquidityLocked: true,
-  };
+/**
+ * graduation creates the flag and the pool in a single instruction, so a graduated market always
+ * has a pool and one unreadable pool account means this RPC had not caught up yet. Re-reading
+ * once turns that transient miss into the right price; a second miss is logged and left to be
+ * corrected by the next sync pass rather than papered over with a made-up price.
+ */
+async function settledVenue(
+  env: RuntimeEnv,
+  mintAddress: string,
+  first: MarketVenue,
+): Promise<MarketVenue> {
+  if (!first.graduated || first.pool) return first;
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const second = await keeperReadVenue(env, mintAddress);
+  if (second?.pool) return second;
+  console.warn(
+    JSON.stringify({
+      event: "chain.pool_unreadable",
+      mint: mintAddress,
+      solReserve: first.market.solReserve.toString(),
+    }),
+  );
+  return second ?? first;
 }
 
 function slugify(symbol: string, mint: string): string {
@@ -191,15 +327,16 @@ function slugify(symbol: string, mint: string): string {
 }
 
 /**
- * Re-reads a mine from chain and upserts D1's cache row. `imageKey`/`description` are only
- * ever used to fill in display metadata the chain doesn't store — every numeric/status field
- * always comes from the fresh on-chain read, never from the caller.
+ * Re-reads a mine from chain and upserts D1's cache row, returning both the row the API serves and
+ * the chain facts D1 does not store — the venue the price came from and whether the market still
+ * needs graduating. One read answers both questions, so the indexing loop does not pay for a
+ * second pass over the same accounts.
  */
-export async function syncTokenToD1(
-  env: { DB: D1Database; DIGGO_RPC_URL?: string; DIGGO_PROGRAM_ID: string },
+export async function syncTokenWithVenue(
+  env: RuntimeEnv,
   mintAddress: string,
   metadata?: { description?: string; imageKey?: string | null },
-): Promise<TokenSummary> {
+): Promise<{ token: TokenSummary; chain: ChainSyncedToken }> {
   const chain = await readTokenFromChain(env, mintAddress);
   const existing = await env.DB.prepare("SELECT slug, description, image_key, created_at FROM tokens WHERE mint = ?1")
     .bind(mintAddress)
@@ -263,7 +400,7 @@ export async function syncTokenToD1(
     )
     .run();
 
-  return {
+  const token: TokenSummary = {
     mint: mintAddress,
     slug,
     name: chain.name,
@@ -285,4 +422,18 @@ export async function syncTokenToD1(
     createdAt,
     decimals: chain.decimals,
   };
+  return { token, chain };
+}
+
+/**
+ * Re-reads a mine from chain and upserts D1's cache row. `imageKey`/`description` are only
+ * ever used to fill in display metadata the chain doesn't store — every numeric/status field
+ * always comes from the fresh on-chain read, never from the caller.
+ */
+export async function syncTokenToD1(
+  env: RuntimeEnv,
+  mintAddress: string,
+  metadata?: { description?: string; imageKey?: string | null },
+): Promise<TokenSummary> {
+  return (await syncTokenWithVenue(env, mintAddress, metadata)).token;
 }

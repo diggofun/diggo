@@ -10,8 +10,21 @@ import type { GatedActionKey } from "../shared/riskOps";
 import type { RuntimeEnv } from "./env";
 import { SESSION_COOKIE, textEncoder } from "./http";
 
-/** Recorded outcome of a gated action. Anything but "ok" is friction the metrics watch. */
-export type ActivityOutcome = "ok" | "rejected" | "replay" | "rate_limited" | "failed_challenge";
+/**
+ * Recorded outcome of a gated action. Anything but "ok" is friction the metrics watch.
+ *
+ * "shadow_would_block" is the shadow-mode observation (spec 63): the gate reached a refusal and
+ * the account was let through anyway, so the row says what would have happened had the decision
+ * been enforced. It is deliberately distinct from "rejected", which means the action really was
+ * stopped.
+ */
+export type ActivityOutcome =
+  | "ok"
+  | "rejected"
+  | "replay"
+  | "rate_limited"
+  | "failed_challenge"
+  | "shadow_would_block";
 
 /**
  * Client-provided, privacy-conscious device hint. It is a hint, never an identity: a normal
@@ -213,4 +226,3 @@ export async function clearRestriction(env: RuntimeEnv, wallet: string, kind: Re
     .run();
   return result.meta.changes > 0;
 }
-

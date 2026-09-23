@@ -1,4 +1,11 @@
-import { BPS_DENOMINATOR, DIGGO_CONFIG, type CrewLevels, type DiggoConfig, type OreSource } from "./config";
+import {
+  BPS_DENOMINATOR,
+  DIGGO_CONFIG,
+  rampBps,
+  type CrewLevels,
+  type DiggoConfig,
+  type OreSource,
+} from "./config";
 import { assertCrewLevel } from "./crew";
 
 /**
@@ -19,11 +26,7 @@ export const ORE_SOURCES: readonly OreSource[] = [
 /** Account maturity ramp (spec 40, 42): young accounts are throttled, not paywalled. */
 export function maturityBps(accountAgeSeconds: number, config: DiggoConfig = DIGGO_CONFIG): number {
   if (!Number.isFinite(accountAgeSeconds) || accountAgeSeconds < 0) return 0;
-  const days = accountAgeSeconds / config.time.secondsPerDay;
-  for (const point of config.ore.maturityRamp) {
-    if (days < point.upToDay) return point.bps;
-  }
-  return config.ore.maturityRamp[config.ore.maturityRamp.length - 1].bps;
+  return rampBps(config.ore.maturityRamp, accountAgeSeconds / config.time.secondsPerDay);
 }
 
 function saturating(level: number, gain: number, scale: number, config: DiggoConfig): number {
@@ -183,4 +186,3 @@ export function storeOre(
     capacity: safeCapacity,
   };
 }
-

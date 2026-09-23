@@ -5,13 +5,21 @@
  */
 import { crewPower } from "../shared/economics";
 import { normalizeHeliusEvent } from "../shared/helius";
-import type { IndexingEvent } from "../shared/types";
-import { syncTokenToD1 } from "./chain";
+import type { IndexingEvent, MarketTrade } from "../shared/types";
+import { isBreakerOpen } from "./breakers";
+import { readTokenFromChain, syncTokenWithVenue, type ChainSyncedToken } from "./chain";
 import { recordPriceSample, recoverEligibleDiscovery } from "./discovery";
 import type { RuntimeEnv } from "./env";
 import { apiError, json, readJson, sameSecret } from "./http";
-import { keeperClaimDiscovery, keeperDiscoveryReceiptExists, keeperSyncCrewPower } from "./keeper";
+import {
+  keeperAdvanceMine,
+  keeperClaimDiscovery,
+  keeperDiscoveryReceiptExists,
+  keeperGraduateMarket,
+  keeperSyncCrewPower,
+} from "./keeper";
 import { settleRewardClaim } from "./mining";
+import { getSolUsd, refreshExternalQuotesSafely } from "./oracle";
 import { crewLevelsOf, type PlayerRow } from "./player";
 import { metric } from "./telemetry";
 import { TOKEN_CACHE_KEY } from "./tokens";
@@ -36,7 +44,11 @@ export async function heliusWebhook(request: Request, env: RuntimeEnv): Promise<
 
 export async function processQueueEvent(event: IndexingEvent, env: RuntimeEnv): Promise<void> {
   if (event.type === "trade") {
-    const { trade, mint } = event;
+    const { mint } = event;
+    // Index the fill at the price its own venue reports, not the price the event carried. A market
+    // that graduated between the trade and this job has zero curve reserves, so a curve-derived
+    // price would index a real fill at nothing; the pool's reserves are the price after graduation.
+    const trade = priceTrade(event.trade, await readVenuePrice(env, mint));
     await env.DB.batch([
       env.DB.prepare(
         "INSERT OR IGNORE INTO trades (signature, mint, side, price_usd, price_sol, amount, block_time) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -71,11 +83,48 @@ export async function processQueueEvent(event: IndexingEvent, env: RuntimeEnv): 
     // price/reserve/status honest between real trade events (which require a Helius webhook
     // that is not wired up yet; see docs/ARCHITECTURE.md "Not yet wired").
     try {
-      const token = await syncTokenToD1(env, event.mint);
+      // Catch the mine's ledger up first, so the read below sees the state the program is actually
+      // in. advance_mine is permissionless and walks a bounded 64 segments per call, and a mine more
+      // than that far behind refuses claim_rewards/assign_power with SyncBehind until someone calls
+      // it - so this tick is what keeps a player's own claim from being blocked by an idle mine.
+      // Bounded per tick on purpose: the rest of a long catch-up waits for the next tick.
+      try {
+        const advance = await keeperAdvanceMine(env, event.mint);
+        if (advance.signatures.length > 0 || !advance.caughtUp) {
+          await metric(env, "keeper.mine_advanced", advance.signatures.length, { mint: event.mint });
+          console.log(JSON.stringify({ event: "keeper.mine_advanced", ...advance }));
+        }
+      } catch (error) {
+        console.error(
+          JSON.stringify({ event: "keeper.mine_advance_failed", mint: event.mint, error: String(error) }),
+        );
+      }
+      // One read of the mine's accounts answers both questions this branch has: the price to index
+      // (from whichever venue holds the liquidity) and whether the market still needs graduating.
+      const { token, chain: chainToken } = await syncTokenWithVenue(env, event.mint);
       // Every successful chain read is one more independent price observation for robustPrice()
       // (spec 27): a discovery amount is only ever normalized from a sequence of real prices, never
       // from the single cached spot value a small pool could move.
-      await recordPriceSample(env, event.mint, token.priceUsd, await hourlyVolumeUsd(env, event.mint));
+      //
+      // The chain's own priceUsd is converted at the oracle's SOL/USD rate and only falls back to
+      // the labelled illustrative constant when no source is fresh (worker/chain.ts). This sample
+      // is what the roll path reads, so when the oracle is reachable the conversion is re-done here
+      // against the rate that quote itself returned rather than against whatever the sync used.
+      const sol = await getSolUsd(env);
+      const priceUsd = sol.fromOracle ? token.priceSol * sol.priceUsd : token.priceUsd;
+      await recordPriceSample(env, event.mint, priceUsd, await hourlyVolumeUsd(env, event.mint));
+      // External evidence (Jupiter for a graduated mine, Pyth for SOL/USD) is refreshed on the same
+      // cadence, so getRobustPrice() has an independent source to corroborate the history with
+      // rather than having to trust it alone. Never throws: an aggregator outage must not fail a
+      // chain sync.
+      await refreshExternalQuotesSafely(env, event.mint, {
+        graduated: token.status !== "LAUNCHING",
+        fetch: typeof fetch === "function" ? fetch : null,
+      });
+      // Graduation last, so nothing about it can cost this pass its price sample: a market whose
+      // curve has reached its target is moved into its locked pool here, and the next pass retries
+      // if that fails.
+      await maybeGraduateMarket(env, event.mint, chainToken);
     } catch (error) {
       console.error(JSON.stringify({ event: "epoch.sync_failed", mint: event.mint, error: String(error) }));
     }
@@ -111,7 +160,86 @@ export async function processQueueEvent(event: IndexingEvent, env: RuntimeEnv): 
   }
 }
 
-/** Traded value in the last hour for one mint, used to weight a fresh price observation. */
+/**
+ * The price the venue that backs a mint reports right now — the bonding curve before graduation,
+ * the locked pool after it. Null when the accounts could not be read, or when the venue has no
+ * price at all, so the caller falls back explicitly instead of being handed a number nobody read.
+ */
+async function readVenuePrice(
+  env: RuntimeEnv,
+  mint: string,
+): Promise<{ priceSol: number; priceUsd: number; venue: ChainSyncedToken["venue"] } | null> {
+  try {
+    const token = await readTokenFromChain(env, mint);
+    if (!(token.priceSol > 0)) return null;
+    if (token.venue === "pool") {
+      console.log(JSON.stringify({ event: "indexing.pool_venue_read", mint }));
+    }
+    return { priceSol: token.priceSol, priceUsd: token.priceUsd, venue: token.venue };
+  } catch (error) {
+    console.error(
+      JSON.stringify({ event: "indexing.venue_price_failed", mint, error: String(error) }),
+    );
+    return null;
+  }
+}
+
+/**
+ * One trade priced at its venue's own quote. With no fresh read the event's own price is kept: a
+ * fill that really happened still belongs in the index, and dropping it would leave a hole in the
+ * chart the market Durable Object replays.
+ */
+export function priceTrade(
+  trade: MarketTrade,
+  venuePrice: { priceSol: number; priceUsd: number } | null,
+): MarketTrade {
+  if (!venuePrice || !(venuePrice.priceSol > 0)) return trade;
+  return { ...trade, priceSol: venuePrice.priceSol, priceUsd: venuePrice.priceUsd };
+}
+
+/**
+ * Graduates a market whose bonding curve has reached its target, from the indexing loop
+ * (docs/ONCHAIN.md §6). The call is idempotent by construction — keeperGraduateMarket reads the
+ * market and returns null rather than throwing when there is no market, no pool, an already
+ * graduated market or a curve still short of its target — and this only asks when the fresh chain
+ * read says there is something to do, so a healthy graduated market costs nothing.
+ *
+ * A failure is counted and swallowed, never rethrown: the queue consumer retries the whole epoch
+ * sync on a throw, and the price sample this pass already wrote is not idempotent, so a retry
+ * would add a second identical observation to the robust-price history. The next sync (every five
+ * minutes) retries graduation naturally, and until it lands the market simply keeps trading on its
+ * curve, which the program still allows.
+ */
+async function maybeGraduateMarket(
+  env: RuntimeEnv,
+  mint: string,
+  token: ChainSyncedToken,
+): Promise<void> {
+  if (!token.graduationReady) return;
+  try {
+    const signature = await keeperGraduateMarket(env, mint);
+    if (!signature) {
+      await metric(env, "chain.graduation_noop", 1);
+      return;
+    }
+    await metric(env, "chain.market_graduated", 1);
+    console.log(
+      JSON.stringify({
+        event: "keeper.market_graduated",
+        mint,
+        signature,
+        solReserve: token.liquidityLamports.toString(),
+      }),
+    );
+  } catch (error) {
+    await metric(env, "chain.graduation_failed", 1);
+    console.error(JSON.stringify({ event: "keeper.graduation_failed", mint, error: String(error) }));
+  }
+}
+
+/**
+ * Traded value in the last hour for one mint, used to weight a fresh price observation.
+ */
 async function hourlyVolumeUsd(env: RuntimeEnv, mint: string): Promise<number> {
   const row = await env.DB.prepare(
     "SELECT COALESCE(SUM(amount * price_usd), 0) AS total FROM trades WHERE mint = ?1 AND block_time >= ?2",
@@ -130,12 +258,25 @@ interface CommittedDiscovery {
 }
 
 /**
+ * How long a discovery payout waits before the queue tries it again while its breaker is open.
+ * Long enough not to spin on a halted mine, short enough that clearing the halt is all it takes.
+ */
+export const DISCOVERY_CLAIM_RETRY_SECONDS = 300;
+
+/**
  * Pays one committed discovery from its token's own Discovery Reserve (spec 57, 70).
  *
  * Only a discovery in ELIGIBLE may be paid: that state means a wallet-signed, single-use claim won
  * the guarded PENDING -> ELIGIBLE transition, so an unauthenticated queue message can never cause a
  * payout. The row id travels to the program as `discovery_id` and seeds an on-chain receipt, so a
  * retry after a partial failure cannot pay twice.
+ *
+ * A breaker is checked before the keeper is called, for the same reason the claim endpoint checks
+ * it: `discovery_reserve` also covers the `claims` and `discoveries` scopes for that mint and
+ * scope-wide (worker/breakers.ts relevantIds), and a mine whose reserve diverged is exactly the
+ * mine a payout must not be attempted against (spec 65, 78). A halted payout is not a lost one: the
+ * row stays ELIGIBLE - the state that means "committed, unpaid" - and the job goes back on the
+ * queue with a backoff instead of being retried in a tight loop.
  *
  * On failure the discovery is put back to ELIGIBLE (guarded, so a parallel settle that already
  * succeeded is never un-claimed) and the error is rethrown so the queue retries. If the receipt
@@ -150,6 +291,18 @@ export async function settleDiscoveryClaim(env: RuntimeEnv, discoveryId: string)
   if (!discovery) return; // already gone — nothing to pay
   if (discovery.status === "CLAIMED") return; // idempotent replay
   if (discovery.status !== "ELIGIBLE") return; // not committed by a signed claim, so not payable
+
+  if (await isBreakerOpen(env, "discovery_reserve", discovery.mint)) {
+    await metric(env, "discovery.claim_deferred", 1, { reason: "breaker_open", mint: discovery.mint });
+    await env.INDEXING_QUEUE.send(
+      { type: "claim_discovery", discoveryId: discovery.id } satisfies IndexingEvent,
+      { delaySeconds: DISCOVERY_CLAIM_RETRY_SECONDS },
+    );
+    console.log(
+      JSON.stringify({ event: "keeper.discovery_claim_deferred", id: discovery.id, mint: discovery.mint }),
+    );
+    return;
+  }
 
   const token = await env.DB.prepare("SELECT decimals FROM tokens WHERE mint = ?1")
     .bind(discovery.mint)

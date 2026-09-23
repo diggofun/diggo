@@ -20,14 +20,25 @@
  *   or withdrawal code anywhere in the anti-abuse layer.
  */
 import { DIGGO_CONFIG, type RewardState, type RiskLevel } from "../shared/config";
-import { assessRisk, mineTrust, publicRiskView, type RiskSignals } from "../shared/risk";
+import {
+  assessRisk,
+  mineTrust,
+  publicRiskView,
+  scoreRefusal,
+  type RiskSignals,
+  type ScoreRefusal,
+} from "../shared/risk";
 import {
   type AlertMetricSnapshot,
   type ClusterCounts,
+  type GateRefusalKind,
   RISK_OPS,
   type RiskOpsConfig,
   activationIntervals,
   buildRiskSignals,
+  claimHoldState,
+  enforcementDecision,
+  enforcedRewardState,
   rateLimitDimensions,
 } from "../shared/riskOps";
 import type { PublicRiskView } from "../shared/types";
@@ -95,7 +106,29 @@ export interface GateResult {
   /** Neutral copy only (spec 62). Never a score, weight, signal name or threshold. */
   publicMessage?: string;
   retryAfterSec?: number;
+  /**
+   * Internal only. While enforcement is shadowed the score still reaches a verdict, and this
+   * carries it so an operator can see what would have happened. It is never a reason to refuse
+   * anything, and callers must not report it to a player.
+   */
+  shadowState?: RewardState;
 }
+
+/** Per-call overrides, so tests and staging can run a tuned config without touching RISK_OPS. */
+export interface GateOptions {
+  config?: RiskOpsConfig;
+  now?: number;
+}
+
+/**
+ * The score-derived refusal in the gate's own vocabulary. A shadow decision is recorded with the
+ * kind, so the observation says *what* would have happened, not just that something would.
+ */
+const SCORE_REFUSAL_KINDS: Readonly<Record<Exclude<ScoreRefusal, "none">, GateRefusalKind>> = {
+  block: "score_block",
+  hold: "score_hold",
+  challenge: "score_challenge",
+};
 
 const STATE_RANK: Readonly<Record<RewardState, number>> = {
   NORMAL: 0,
@@ -120,13 +153,21 @@ export interface AccountRiskFlags {
   weak: string[];
   response: string;
   source: "request" | "cron" | "admin";
+  /**
+   * True when the score reached a refusal that the enforcement mode did not apply. Recorded so a
+   * reviewer can see, from the risk record alone, why computed_state and reward_state differ.
+   */
+  shadowed: boolean;
 }
 
 export interface AccountRiskRecord {
   wallet: string;
   score: number;
   level: RiskLevel;
+  /** The state actually in force: what gameplay and the public risk view read. */
   rewardState: RewardState;
+  /** The state the score alone asked for, before the enforcement mode was applied. */
+  computedState: RewardState;
   trust: number;
   flags: AccountRiskFlags;
   updatedAt: number;
@@ -137,6 +178,7 @@ interface AccountRiskRow {
   score: number;
   level: RiskLevel;
   reward_state: RewardState;
+  computed_state: RewardState | null;
   trust: number;
   flags: string;
   updated_at: number;
@@ -151,15 +193,17 @@ function parseFlags(raw: string): AccountRiskFlags {
       weak: parsed.weak ?? [],
       response: parsed.response ?? "observe",
       source: parsed.source ?? "request",
+      shadowed: parsed.shadowed === true,
     };
   } catch {
-    return { signals: {}, strong: [], weak: [], response: "observe", source: "request" };
+    return { signals: {}, strong: [], weak: [], response: "observe", source: "request", shadowed: false };
   }
 }
 
 export async function getAccountRisk(env: RuntimeEnv, wallet: string): Promise<AccountRiskRecord | null> {
   const row = await env.DB.prepare(
-    "SELECT wallet, score, level, reward_state, trust, flags, updated_at FROM account_risk WHERE wallet = ?1",
+    "SELECT wallet, score, level, reward_state, computed_state, trust, flags, updated_at " +
+      "FROM account_risk WHERE wallet = ?1",
   )
     .bind(wallet)
     .first<AccountRiskRow>();
@@ -169,6 +213,8 @@ export async function getAccountRisk(env: RuntimeEnv, wallet: string): Promise<A
     score: row.score,
     level: row.level,
     rewardState: row.reward_state,
+    // Rows written before 0014 have no computed state; the enforced state is the best answer.
+    computedState: row.computed_state ?? row.reward_state,
     trust: row.trust,
     flags: parseFlags(row.flags),
     updatedAt: row.updated_at,
@@ -278,6 +324,43 @@ async function readSignalCounts(
   };
 }
 
+/**
+ * Device and network cluster sizes for one wallet (spec 61). These are the same two counters the
+ * risk score reads, so mining weight and risk can never disagree about how big a cluster is. A
+ * missing device or network key reports zero, which means “no cluster”: an absent header can
+ * never damp a real player (spec 50, 63).
+ */
+export async function miningClusterCounts(
+  env: RuntimeEnv,
+  wallet: string,
+  now: number,
+  config: RiskOpsConfig = RISK_OPS,
+): Promise<{ walletsOnDevice: number; walletsOnNetwork: number }> {
+  const fingerprint = await latestFingerprint(env, wallet);
+  const clusterFrom = now - config.clusterWindowSeconds;
+  const device = fingerprint.deviceHash;
+  const network = fingerprint.networkHash;
+  const [onDevice, onNetwork] = await Promise.all([
+    device ? countClusterWallets(env, "device_hash", device, clusterFrom) : Promise.resolve(0),
+    network ? countClusterWallets(env, "network_hash", network, clusterFrom) : Promise.resolve(0),
+  ]);
+  return { walletsOnDevice: onDevice, walletsOnNetwork: onNetwork };
+}
+
+async function countClusterWallets(
+  env: RuntimeEnv,
+  column: "device_hash" | "network_hash",
+  value: string,
+  from: number,
+): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT COUNT(DISTINCT wallet) AS n FROM account_signals WHERE ${column} = ?1 AND ts >= ?2`,
+  )
+    .bind(value, from)
+    .first<{ n: number | null }>();
+  return asNumber(row?.n);
+}
+
 export interface RefreshRiskOptions {
   now?: number;
   fingerprint?: RequestFingerprint;
@@ -314,33 +397,52 @@ export async function refreshAccountRisk(
     validClaims: counts.claimedDiscoveries,
     abuseFlags: counts.clusterHardFlaggedWallets + restrictions.length,
   });
-  const rewardState = worstState(assessment.rewardState, restrictionRewardState(restrictions, now));
+  // The score's verdict is always computed and recorded; whether it is *applied* is a separate
+  // decision (spec 63). In shadow mode the enforced state stays NORMAL, so no gameplay module
+  // that reads players.risk_state can quietly enforce a decision the operator has not reviewed.
+  const enforced = enforcedRewardState(assessment.rewardState, config);
+  const rewardState = worstState(enforced.state, restrictionRewardState(restrictions, now));
   const flags: AccountRiskFlags = {
     signals,
     strong: assessment.strongSignals,
     weak: assessment.weakSignals,
     response: assessment.response,
     source: options.source ?? "request",
+    shadowed: enforced.shadowed,
   };
   await env.DB.batch([
     env.DB.prepare(
-      "INSERT INTO account_risk (wallet, score, level, reward_state, trust, flags, updated_at) " +
-        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT(wallet) DO UPDATE SET score = excluded.score, " +
-        "level = excluded.level, reward_state = excluded.reward_state, trust = excluded.trust, " +
+      "INSERT INTO account_risk (wallet, score, level, reward_state, computed_state, trust, flags, updated_at) " +
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(wallet) DO UPDATE SET score = excluded.score, " +
+        "level = excluded.level, reward_state = excluded.reward_state, " +
+        "computed_state = excluded.computed_state, trust = excluded.trust, " +
         "flags = excluded.flags, updated_at = excluded.updated_at",
-    ).bind(wallet, assessment.score, assessment.level, rewardState, trust, JSON.stringify(flags), now),
+    ).bind(
+      wallet,
+      assessment.score,
+      assessment.level,
+      rewardState,
+      assessment.rewardState,
+      trust,
+      JSON.stringify(flags),
+      now,
+    ),
     env.DB.prepare("UPDATE players SET risk_state = ?1, risk_score = ?2 WHERE wallet = ?3").bind(
       rewardState,
       assessment.score,
       wallet,
     ),
   ]);
-  await metric(env, METRIC.riskRefresh, 1, { level: assessment.level });
+  await metric(env, METRIC.riskRefresh, 1, {
+    level: assessment.level,
+    enforcement: config.enforcement.mode,
+  });
   return {
     wallet,
     score: assessment.score,
     level: assessment.level,
     rewardState,
+    computedState: assessment.rewardState,
     trust,
     flags,
     updatedAt: now,
@@ -371,8 +473,9 @@ export async function loadOrRefreshRisk(
         score: 0,
         level: "LOW",
         rewardState: "NORMAL",
+        computedState: "NORMAL",
         trust: 0,
-        flags: { signals: {}, strong: [], weak: [], response: "observe", source: "request" },
+        flags: { signals: {}, strong: [], weak: [], response: "observe", source: "request", shadowed: false },
         updatedAt: now,
       }
     );
@@ -478,6 +581,34 @@ async function cachedRewardState(env: RuntimeEnv, wallet: string): Promise<Rewar
   return (await getAccountRisk(env, wallet).catch(() => null))?.rewardState ?? "NORMAL";
 }
 
+/**
+ * Both states that matter for a wallet, from two reads and no signal aggregation: the state
+ * actually in force (the persisted risk state combined with whatever operator restrictions are
+ * live right now) and the state the score computed for it. The cheap way for a front-door decision
+ * (an appeal, a status view) to ask what an account is under without paying for a recomputation.
+ *
+ * They differ exactly while a score-derived decision is shadowed. A caller that needs to know
+ * whether the player is actually experiencing friction wants the enforced state; a caller asking
+ * whether the score has something to say about the account wants both.
+ */
+export interface WalletRiskStates {
+  enforced: RewardState;
+  computed: RewardState;
+}
+
+export async function walletRiskStates(
+  env: RuntimeEnv,
+  wallet: string,
+  now = Math.floor(Date.now() / 1_000),
+): Promise<WalletRiskStates> {
+  const [risk, restrictions] = await Promise.all([
+    getAccountRisk(env, wallet).catch(() => null),
+    activeRestrictions(env, wallet, now),
+  ]);
+  const enforced = worstState(risk?.rewardState ?? "NORMAL", restrictionRewardState(restrictions, now));
+  return { enforced, computed: risk?.computedState ?? enforced };
+}
+
 // --- challenge state ---------------------------------------------------------------------
 
 export function challengeClearKey(wallet: string, action: GatedAction): string {
@@ -561,9 +692,10 @@ export async function recordActivity(
 export async function gateAction(
   env: RuntimeEnv,
   ctx: { wallet: string; request: Request; action: GatedAction },
+  options: GateOptions = {},
 ): Promise<GateResult> {
-  const config = RISK_OPS;
-  const now = Math.floor(Date.now() / 1_000);
+  const config = options.config ?? RISK_OPS;
+  const now = options.now ?? Math.floor(Date.now() / 1_000);
   const fingerprint = await fingerprintRequest(env, ctx.request);
   const mint = new URL(ctx.request.url).searchParams.get("mint");
   const sensitive = config.challenge.gatedActions.includes(ctx.action);
@@ -639,29 +771,83 @@ export async function gateAction(
 
   // Only a request that got this far is worth a risk recomputation.
   const risk = await loadOrRefreshRisk(env, ctx.wallet, { now, fingerprint, config, source: "request" });
-  const rewardState = risk.rewardState;
 
-  if (rewardState === "BLOCKED") {
-    await recordActivityRow(env, { wallet: ctx.wallet, action: ctx.action, outcome: "rejected", fingerprint, ts: now });
-    return { allowed: false, challengeRequired: false, rewardState, publicMessage: statusMessage("BLOCKED") };
-  }
-
-  if (rewardState === "HELD" && sensitive && !config.challenge.heldActions.includes(ctx.action)) {
-    await recordActivityRow(env, { wallet: ctx.wallet, action: ctx.action, outcome: "rejected", fingerprint, ts: now });
-    return { allowed: false, challengeRequired: false, rewardState, publicMessage: statusMessage("HELD") };
-  }
-
-  if (rewardState === "UNDER_REVIEW" && sensitive && !(await challengeCleared(env, ctx.wallet, ctx.action))) {
-    await recordActivityRow(env, { wallet: ctx.wallet, action: ctx.action, outcome: "rejected", fingerprint, ts: now });
+  // Everything below this line is the *score's* opinion, read from the computed state rather than
+  // the enforced one, so a per-action override can enforce an action the global mode shadows (and
+  // the other way round). The operator's own restrictions were already settled above and always
+  // keep their full weight.
+  //
+  // Reward holds are the exception: they are applied whatever the enforcement mode says (spec 53,
+  // 63). A hold destroys nothing - mining accounting keeps running and the tokens stay in the
+  // mine's Mining Reserve until the hold is lifted - so it is safe to apply on a score alone, and
+  // it is what stops an account the score is unsure about from draining real tokens before an
+  // operator has looked at it (spec 64). Friction, challenges, discovery parameters and bans below
+  // stay governed by the mode.
+  const held = claimHoldState(risk.computedState, ctx.action, config);
+  if (held !== null) {
+    await recordActivityRow(env, {
+      wallet: ctx.wallet,
+      action: ctx.action,
+      outcome: "rejected",
+      fingerprint,
+      ts: now,
+    });
+    await metric(env, "risk.claim_held", 1, { action: ctx.action, state: held });
     return {
       allowed: false,
-      challengeRequired: true,
-      rewardState,
-      publicMessage: config.challenge.publicMessage,
+      challengeRequired: false,
+      rewardState: worstState(risk.rewardState, held),
+      publicMessage: statusMessage(held),
+    };
+  }
+  const refusal = scoreRefusal(risk.computedState);
+  let wouldRefuse = refusal === "block";
+  let wouldChallenge = false;
+  if (refusal === "hold") {
+    // A hold stops claims and discoveries but never mining accounting (spec 53).
+    wouldRefuse = sensitive && !config.challenge.heldActions.includes(ctx.action);
+  } else if (refusal === "challenge") {
+    wouldChallenge = sensitive && !(await challengeCleared(env, ctx.wallet, ctx.action));
+    wouldRefuse = wouldChallenge;
+  }
+
+  if (!wouldRefuse) {
+    return { allowed: true, challengeRequired: false, rewardState: risk.rewardState };
+  }
+
+  const decision = enforcementDecision(SCORE_REFUSAL_KINDS[refusal as Exclude<ScoreRefusal, "none">], ctx.action, config);
+  const effectiveState = worstState(risk.rewardState, risk.computedState);
+  if (!decision.enforced) {
+    // Shadow mode (spec 63): the decision is recorded and nothing else happens. The action is let
+    // through, and the state reported to the caller stays the enforced one, so no downstream
+    // module can act on a decision the operator has not adopted yet.
+    await recordActivityRow(env, {
+      wallet: ctx.wallet,
+      action: ctx.action,
+      outcome: "shadow_would_block",
+      fingerprint,
+      ts: now,
+    });
+    await metric(env, METRIC.shadowWouldBlock, 1, { action: ctx.action, kind: decision.kind });
+    return {
+      allowed: true,
+      challengeRequired: false,
+      rewardState: risk.rewardState,
+      shadowState: risk.computedState,
     };
   }
 
-  return { allowed: true, challengeRequired: false, rewardState };
+  await recordActivityRow(env, { wallet: ctx.wallet, action: ctx.action, outcome: "rejected", fingerprint, ts: now });
+  if (wouldChallenge) {
+    return {
+      allowed: false,
+      challengeRequired: true,
+      rewardState: effectiveState,
+      publicMessage: config.challenge.publicMessage,
+    };
+  }
+  const state: RewardState = refusal === "block" ? "BLOCKED" : "HELD";
+  return { allowed: false, challengeRequired: false, rewardState: effectiveState, publicMessage: statusMessage(state) };
 }
 
 // --- progressive friction endpoint -------------------------------------------------------

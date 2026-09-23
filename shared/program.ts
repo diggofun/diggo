@@ -55,10 +55,35 @@ const DISCRIMINATOR = {
   rotateGuardian: [71, 22, 223, 22, 230, 118, 101, 114],
   updatePowerBounds: [50, 202, 219, 213, 8, 191, 131, 216],
   updateFeeConfig: [104, 184, 103, 242, 88, 151, 107, 20],
-  updateDiscoveryLimits: [16, 214, 96, 49, 233, 139, 101, 121],
+  // Corrected against the generated IDL: sha256("global:update_discovery_limits")[..8].
+  // The previous value here did not match the program, so every update_discovery_limits
+  // transaction built by this client failed with InstructionFallbackNotFound.
+  updateDiscoveryLimits: [53, 37, 162, 152, 210, 168, 44, 6],
   claimCreatorFees: [0, 23, 125, 234, 156, 118, 134, 89],
   claimPlatformFees: [159, 129, 37, 35, 170, 99, 163, 16],
+  // spec 36 locked liquidity + account versioning: graduation into a program-owned
+  // constant-product pool, its two swap instructions, and the guarded layout migration.
+  graduateMarket: [202, 28, 33, 115, 186, 96, 1, 90],
+  poolBuy: [32, 177, 250, 138, 152, 160, 125, 9],
+  poolSell: [27, 220, 151, 88, 147, 213, 57, 42],
+  migrateAccount: [177, 228, 60, 125, 13, 116, 44, 84],
 } as const satisfies Record<string, number[]>;
+
+/**
+ * Appended layout version stamped into ProtocolConfig, Mine and LaunchMarket. It is the
+ * last field of each of those structs, so an account written before it existed still
+ * decodes for every other field and reads back as version 0.
+ */
+export const ACCOUNT_VERSION = 1;
+
+/** Account kinds accepted by migrate_account (mirrors ACCOUNT_KIND_* in lib.rs). */
+export const MIGRATABLE_ACCOUNT_KIND = {
+  protocol: 0,
+  mine: 1,
+  market: 2,
+} as const;
+
+export type MigratableAccountKind = (typeof MIGRATABLE_ACCOUNT_KIND)[keyof typeof MIGRATABLE_ACCOUNT_KIND];
 
 // --- byte-level (Borsh-compatible) encoding helpers -------------------------------------
 
@@ -178,6 +203,36 @@ export async function deriveDiscoveryVaultPda(programAddress: Address, mint: Add
   return pda;
 }
 
+/**
+ * The graduated market's liquidity pool PDA. It mints no LP token and its two vaults are
+ * owned by this PDA, so its liquidity is permanently program-controlled (spec 35, 36).
+ */
+export async function deriveLiquidityPoolPda(programAddress: Address, mint: Address): Promise<Address> {
+  const [pda] = await getProgramDerivedAddress({
+    programAddress,
+    seeds: [constSeed("pool"), accountSeed(mint)],
+  });
+  return pda;
+}
+
+/** The pool's token vault; the pool PDA is its only authority. */
+export async function derivePoolTokenVaultPda(programAddress: Address, mint: Address): Promise<Address> {
+  const [pda] = await getProgramDerivedAddress({
+    programAddress,
+    seeds: [constSeed("pool-vault"), accountSeed(mint)],
+  });
+  return pda;
+}
+
+/** The pool's SOL vault; lamports = rent floor + pool.sol_reserve, and nothing else. */
+export async function derivePoolSolVaultPda(programAddress: Address, mint: Address): Promise<Address> {
+  const [pda] = await getProgramDerivedAddress({
+    programAddress,
+    seeds: [constSeed("pool-sol"), accountSeed(mint)],
+  });
+  return pda;
+}
+
 /** Idempotency receipt PDA for one (mine, discovery_id) discovery payout. */
 export async function deriveDiscoveryReceiptPda(
   programAddress: Address,
@@ -231,6 +286,28 @@ export async function deriveMineAddresses(programAddress: Address, mint: Address
     deriveDiscoveryVaultPda(programAddress, mint),
   ]);
   return { mint, mine, market, marketVault, reserveVault, discoveryVault };
+}
+
+/** Every derived address needed to trade on a graduated market's pool. */
+export interface PoolAddresses {
+  mint: Address;
+  pool: Address;
+  poolTokenVault: Address;
+  poolSolVault: Address;
+}
+
+/**
+ * Pool addresses for one mint, kept out of deriveMineAddresses on purpose: those three
+ * PDAs only exist after graduation, and every pre-graduation caller should not pay for
+ * deriving them.
+ */
+export async function derivePoolAddresses(programAddress: Address, mint: Address): Promise<PoolAddresses> {
+  const [pool, poolTokenVault, poolSolVault] = await Promise.all([
+    deriveLiquidityPoolPda(programAddress, mint),
+    derivePoolTokenVaultPda(programAddress, mint),
+    derivePoolSolVaultPda(programAddress, mint),
+  ]);
+  return { mint, pool, poolTokenVault, poolSolVault };
 }
 
 // --- account meta helpers -------------------------------------------------------------------
@@ -448,6 +525,29 @@ export function buildClaimRewardsInstruction(params: {
   };
 }
 
+/**
+ * Permissionless catch-up for one mine's on-chain ledger (`advance_mine`).
+ *
+ * The program walks at most MAX_SYNC_SEGMENTS segments per call and refuses with SyncBehind when a
+ * mine is further behind than that, which is what leaves claim_rewards and assign_power blocked for
+ * a mine that sat idle. Nobody signs for this instruction beyond the fee payer, so any caller can
+ * unblock any mine - which is exactly why the keeper runs it on the indexing tick instead of waiting
+ * for a player to hit SyncBehind.
+ *
+ * Accounts, in order, exactly as `AdvanceMine` in programs/diggo-protocol declares them: the mine,
+ * writable, and nothing else.
+ */
+export function buildAdvanceMineInstruction(params: {
+  programAddress: Address;
+  mine: Address;
+}): IInstruction {
+  return {
+    programAddress: params.programAddress,
+    accounts: [w(params.mine)],
+    data: Uint8Array.from(DISCRIMINATOR.advanceMine),
+  };
+}
+
 /** Keeper-only: pushes an off-chain, ORE-funded Crew power value on-chain. */
 export function buildSyncCrewPowerInstruction(params: {
   programAddress: Address;
@@ -484,6 +584,8 @@ export const ACCOUNT_DISCRIMINATOR = {
   player: [205, 222, 112, 7, 165, 155, 206, 218],
   miningPosition: [132, 97, 97, 74, 238, 187, 109, 140],
   discoveryReceipt: [168, 19, 166, 49, 77, 198, 78, 101],
+  liquidityPool: [66, 38, 17, 64, 188, 80, 68, 129],
+  poolSolVault: [238, 236, 17, 30, 251, 22, 52, 199],
 } as const satisfies Record<string, number[]>;
 
 function base58FromBytes(bytes: Uint8Array): string {
@@ -559,6 +661,14 @@ class ByteReader {
     this.offset += len;
     return new TextDecoder().decode(bytes);
   }
+  /**
+   * A trailing optional byte, for fields an upgrade appended. Accounts written before the
+   * field existed simply run out of data and read back as null instead of throwing.
+   */
+  tryU8(): number | null {
+    if (this.offset + 1 > this.data.length) return null;
+    return this.u8();
+  }
   skipDiscriminator(): void {
     this.offset += 8;
   }
@@ -597,6 +707,8 @@ export interface DecodedMine {
   discoveryEpochEndsAt: bigint;
   discoveryPaused: boolean;
   bump: number;
+  /** 0 on an account written before the version byte existed; see migrate_account. */
+  version: number;
 }
 
 export function decodeMine(data: Uint8Array): DecodedMine {
@@ -633,12 +745,13 @@ export function decodeMine(data: Uint8Array): DecodedMine {
   const discoveryEpochEndsAt = r.i64();
   const discoveryPaused = r.bool();
   const bump = r.u8();
+  const version = r.tryU8() ?? 0;
   return {
     mint, creator, reserveVault, discoveryVault, marketVault, feeVault, totalSupply, remainingReserve,
     remainingDiscoveryReserve, cumulativeDistributed, totalPower, rewardIndex, currentBlockReward,
     blockInterval, nextBlockAt, epoch, epochLength, epochEndsAt, reductionBps, minimumReward, status,
     name, symbol, uri, discoveryReserveTotal, discoveryEpochBudget, discoveryEpochSpent,
-    discoveryEpochEndsAt, discoveryPaused, bump,
+    discoveryEpochEndsAt, discoveryPaused, bump, version,
   };
 }
 
@@ -654,6 +767,8 @@ export interface DecodedLaunchMarket {
   creatorFeeBps: number;
   platformFeeBps: number;
   bump: number;
+  /** 0 on an account written before the version byte existed; see migrate_account. */
+  version: number;
 }
 
 export function decodeLaunchMarket(data: Uint8Array): DecodedLaunchMarket {
@@ -671,6 +786,7 @@ export function decodeLaunchMarket(data: Uint8Array): DecodedLaunchMarket {
     creatorFeeBps: r.u16(),
     platformFeeBps: r.u16(),
     bump: r.u8(),
+    version: r.tryU8() ?? 0,
   };
 }
 
@@ -691,6 +807,8 @@ export interface DecodedProtocolConfig {
   discoveryPayoutsPaused: boolean;
   rewardClaimsPaused: boolean;
   bump: number;
+  /** 0 on an account written before the version byte existed; see migrate_account. */
+  version: number;
 }
 
 export function decodeProtocolConfig(data: Uint8Array): DecodedProtocolConfig {
@@ -711,6 +829,7 @@ export function decodeProtocolConfig(data: Uint8Array): DecodedProtocolConfig {
     discoveryPayoutsPaused: r.bool(),
     rewardClaimsPaused: r.bool(),
     bump: r.u8(),
+    version: r.tryU8() ?? 0,
   };
 }
 
@@ -772,6 +891,48 @@ export function decodeDiscoveryReceipt(data: Uint8Array): DecodedDiscoveryReceip
   };
 }
 
+export interface DecodedLiquidityPool {
+  mine: Address;
+  mint: Address;
+  tokenVault: Address;
+  solVault: Address;
+  tokenReserve: bigint;
+  solReserve: bigint;
+  graduatedAt: bigint;
+  bump: number;
+}
+
+/**
+ * A graduated market's locked liquidity. There is no LP mint and no LP token: the pool's
+ * token vault is owned by the pool PDA and its SOL sits in a PDA vault, so no creator,
+ * admin, guardian or keeper instruction can withdraw from it (spec 35, 36).
+ */
+export function decodeLiquidityPool(data: Uint8Array): DecodedLiquidityPool {
+  const r = new ByteReader(data);
+  r.skipDiscriminator();
+  return {
+    mine: r.pubkey(),
+    mint: r.pubkey(),
+    tokenVault: r.pubkey(),
+    solVault: r.pubkey(),
+    tokenReserve: r.u64(),
+    solReserve: r.u64(),
+    graduatedAt: r.i64(),
+    bump: r.u8(),
+  };
+}
+
+export interface DecodedPoolSolVault {
+  pool: Address;
+  bump: number;
+}
+
+export function decodePoolSolVault(data: Uint8Array): DecodedPoolSolVault {
+  const r = new ByteReader(data);
+  r.skipDiscriminator();
+  return { pool: r.pubkey(), bump: r.u8() };
+}
+
 /**
  * Constant-product spot price of the bonding curve, in lamports per whole token unit
  * (i.e. already adjusted for `decimals`). Matches the on-chain quote_buy/quote_sell curve.
@@ -801,6 +962,57 @@ export function quoteSell(market: DecodedLaunchMarket, tokensIn: bigint): bigint
   return raw < market.solReserve ? raw : market.solReserve;
 }
 
+// --- post-graduation pool math (mirrors lib.rs) -----------------------------------------
+
+/** Mirrors the Rust pool_invariant: k = sol_reserve * token_reserve. */
+export function poolInvariant(pool: { solReserve: bigint; tokenReserve: bigint }): bigint {
+  return pool.solReserve * pool.tokenReserve;
+}
+
+/**
+ * Mirrors the Rust pool_quote_buy exactly (integer division, same operand order). The
+ * input is the net amount after the explicit fees, exactly as the program computes it.
+ */
+export function poolQuoteBuy(
+  pool: { solReserve: bigint; tokenReserve: bigint },
+  netSolIn: bigint,
+): bigint {
+  if (netSolIn <= 0n || pool.solReserve <= 0n || pool.tokenReserve <= 0n) return 0n;
+  return (pool.tokenReserve * netSolIn) / (pool.solReserve + netSolIn);
+}
+
+/** Mirrors the Rust pool_quote_sell exactly, including the SOL-reserve cap. */
+export function poolQuoteSell(
+  pool: { solReserve: bigint; tokenReserve: bigint },
+  tokensIn: bigint,
+): bigint {
+  if (tokensIn <= 0n || pool.solReserve <= 0n || pool.tokenReserve <= 0n) return 0n;
+  const raw = (pool.solReserve * tokensIn) / (pool.tokenReserve + tokensIn);
+  return raw < pool.solReserve ? raw : pool.solReserve;
+}
+
+/**
+ * Mirrors the program's net_after_fees: the explicit creator and platform fees come off
+ * the top of the gross amount, and the curve or pool only ever sees the net. Both fees
+ * are capped at MAX_TRADING_FEE_BPS on-chain, so this can never consume the whole trade.
+ */
+export function netAfterFees(
+  amount: bigint,
+  creatorFeeBps: number,
+  platformFeeBps: number,
+): { net: bigint; creatorFee: bigint; platformFee: bigint } {
+  const creatorFee = (amount * BigInt(creatorFeeBps)) / 10_000n;
+  const platformFee = (amount * BigInt(platformFeeBps)) / 10_000n;
+  return { net: amount - creatorFee - platformFee, creatorFee, platformFee };
+}
+
+/** Spot price of the graduated pool, in lamports per whole token unit. */
+export function poolSpotPriceLamports(pool: DecodedLiquidityPool, decimals: number): number {
+  const tokenReserveWhole = Number(pool.tokenReserve) / 10 ** decimals;
+  if (tokenReserveWhole <= 0) return 0;
+  return Number(pool.solReserve) / tokenReserveWhole;
+}
+
 /** Keeper-only: pays a server-approved Discovery out of the token's own Discovery Reserve. */
 export function buildClaimDiscoveryInstruction(params: {
   programAddress: Address;
@@ -820,7 +1032,10 @@ export function buildClaimDiscoveryInstruction(params: {
   return {
     programAddress: params.programAddress,
     accounts: [
-      rs(params.keeper),
+      // The keeper pays for the receipt and the recipient's associated token account, so the
+      // program declares it mutable. It was previously built as a read-only signer here, which
+      // the program rejects with AccountNotMutable, so no discovery payout could succeed.
+      ws(params.keeper),
       r(params.protocol),
       w(params.mine),
       r(params.mint),
@@ -991,5 +1206,148 @@ export function buildClaimPlatformFeesInstruction(params: {
       w(params.market),
     ],
     data: Uint8Array.from(DISCRIMINATOR.claimPlatformFees),
+  };
+}
+
+// --- graduation, the locked pool, and account migration (spec 35, 36) ---------------
+
+/**
+ * Permissionless graduation (spec 36): moves the market's entire curve liquidity into a
+ * freshly created program-owned constant-product pool. The caller only pays the pool's
+ * rent. Once this lands, the market's own curve reserves are zero and buy/sell are closed
+ * — trade through poolBuy/poolSell instead.
+ */
+export function buildGraduateMarketInstruction(params: {
+  programAddress: Address;
+  payer: Address;
+  mint: Address;
+  mine: Address;
+  market: Address;
+  marketVault: Address;
+  pool: Address;
+  poolTokenVault: Address;
+  poolSolVault: Address;
+}): IInstruction {
+  return {
+    programAddress: params.programAddress,
+    accounts: [
+      ws(params.payer),
+      w(params.mine),
+      w(params.market),
+      r(params.mint),
+      w(params.marketVault),
+      w(params.pool),
+      w(params.poolTokenVault),
+      w(params.poolSolVault),
+      r(TOKEN_PROGRAM_ADDRESS),
+      r(SYSTEM_PROGRAM_ADDRESS),
+    ],
+    data: Uint8Array.from(DISCRIMINATOR.graduateMarket),
+  };
+}
+
+/** Post-graduation buy against the locked pool. minTokensOut is enforced on-chain. */
+export function buildPoolBuyInstruction(params: {
+  programAddress: Address;
+  buyer: Address;
+  buyerTokens: Address;
+  mine: Address;
+  market: Address;
+  mint: Address;
+  pool: Address;
+  tokenVault: Address;
+  solVault: Address;
+  solIn: bigint;
+  minTokensOut: bigint;
+}): IInstruction {
+  return {
+    programAddress: params.programAddress,
+    accounts: [
+      ws(params.buyer),
+      r(params.mine),
+      w(params.market),
+      r(params.mint),
+      w(params.pool),
+      w(params.tokenVault),
+      w(params.solVault),
+      w(params.buyerTokens),
+      r(TOKEN_PROGRAM_ADDRESS),
+      r(ASSOCIATED_TOKEN_PROGRAM_ADDRESS),
+      r(SYSTEM_PROGRAM_ADDRESS),
+    ],
+    data: concatBytes(
+      Uint8Array.from(DISCRIMINATOR.poolBuy),
+      u64(params.solIn),
+      u64(params.minTokensOut),
+    ),
+  };
+}
+
+/** Post-graduation sell against the locked pool. minSolOut is enforced on-chain. */
+export function buildPoolSellInstruction(params: {
+  programAddress: Address;
+  seller: Address;
+  sellerTokens: Address;
+  mine: Address;
+  market: Address;
+  mint: Address;
+  pool: Address;
+  tokenVault: Address;
+  solVault: Address;
+  tokensIn: bigint;
+  minSolOut: bigint;
+}): IInstruction {
+  return {
+    programAddress: params.programAddress,
+    accounts: [
+      ws(params.seller),
+      r(params.mine),
+      w(params.market),
+      r(params.mint),
+      w(params.pool),
+      w(params.tokenVault),
+      w(params.solVault),
+      w(params.sellerTokens),
+      r(TOKEN_PROGRAM_ADDRESS),
+    ],
+    data: concatBytes(
+      Uint8Array.from(DISCRIMINATOR.poolSell),
+      u64(params.tokensIn),
+      u64(params.minSolOut),
+    ),
+  };
+}
+
+/**
+ * Guardian-only layout upgrade for one protocol, mine or market account. It reallocates
+ * the account to the current size and stamps the version byte; every byte that already
+ * existed is preserved, so no balance or reserve can move. The account must already hold
+ * its new rent-exempt minimum — fund it with a plain system transfer first.
+ */
+export function buildMigrateAccountInstruction(params: {
+  programAddress: Address;
+  guardian: Address;
+  protocol: Address;
+  target: Address;
+  kind: MigratableAccountKind;
+}): IInstruction {
+  return {
+    programAddress: params.programAddress,
+    accounts: [rs(params.guardian), r(params.protocol), w(params.target)],
+    data: concatBytes(Uint8Array.from(DISCRIMINATOR.migrateAccount), u8(params.kind)),
+  };
+}
+
+/** Current keeper hands the role to another key. The keeper can move nothing else. */
+export function buildRotateKeeperInstruction(params: {
+  programAddress: Address;
+  keeper: Address;
+  protocol: Address;
+  newKeeper: Address;
+}): IInstruction {
+  return {
+    programAddress: params.programAddress,
+    accounts: [rs(params.keeper), w(params.protocol)],
+    data: concatBytes(Uint8Array.from(DISCRIMINATOR.rotateKeeper), pubkeyBytes(params.newKeeper)),
   };
 }

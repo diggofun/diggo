@@ -13,6 +13,7 @@ import type { RewardClaimView } from "../api";
 import { DIGGO_CONFIG, crewTier } from "../../shared/economics";
 import { CREW_COMPONENTS } from "../crewLabels";
 import { money, oreAmount, tokenAmount } from "../format";
+import { needsOnChainCollection, useRewardCollection, type CollectionState } from "../rewardsClaim";
 
 export interface EconomyPanelsProps {
   player: PlayerProfile | null;
@@ -24,6 +25,29 @@ export interface EconomyPanelsProps {
   claimError: string;
   onClaim(claim: RewardClaimView): void;
   onOpenToken(mint: string): void;
+  /** Optional: called after a reward's on-chain payout is confirmed, so the ledger can refresh. */
+  onCollected?(claim: RewardClaimView): void;
+}
+
+/**
+ * The badge shown while a reward is being collected on chain. Reuses the existing status classes
+ * rather than inventing new ones: pending reads as neutral, confirmed as good, failed as a problem.
+ */
+function collectionBadge(state: CollectionState): { className: string; label: string } {
+  if (state === "pending") return { className: "status-claimed", label: "PENDING" };
+  if (state === "confirmed") return { className: "status-eligible", label: "CONFIRMED" };
+  if (state === "failed") return { className: "status-held", label: "FAILED" };
+  return { className: "status-claimed", label: "READY" };
+}
+
+/**
+ * What the ledger says about a claim. CLAIMED means the accounting settled, which is not the same
+ * as the tokens having moved: they only leave the mine's reserve once the player collects on chain.
+ */
+function ledgerStatusLabel(claim: RewardClaimView): string {
+  if (claim.txSignature) return "COLLECTED";
+  if (needsOnChainCollection(claim)) return "SETTLED";
+  return claim.status;
 }
 
 function symbolOf(tokens: TokenSummary[], mint: string): string {
@@ -44,8 +68,13 @@ export function EconomyPanels({
   claimError,
   onClaim,
   onOpenToken,
+  onCollected,
 }: EconomyPanelsProps) {
+  const collection = useRewardCollection(onCollected);
   const claimable = claims.filter((claim) => claim.status === "ELIGIBLE");
+  // Settled rewards whose tokens are still sitting in the mine's program-controlled reserve: the
+  // player's own wallet has to submit claim_rewards before anything moves (spec 57).
+  const collectable = claims.filter(needsOnChainCollection);
   const claimableUsd = claimable.reduce((sum, claim) => sum + claim.amount * priceOf(tokens, claim.mint), 0);
   // Per-token totals, so the panel reads as balances first and a claim queue second (spec 74).
   const balances = new Map<string, { claimable: number; settled: number }>();
@@ -72,7 +101,8 @@ export function EconomyPanels({
           <p>
             Block rewards your crew actually earned, settled per token. Claiming one signs a
             single-use message; the payout itself is settled from the mine's reserve, never invented
-            and never guaranteed to keep paying the same amount.
+            and never guaranteed to keep paying the same amount. A settled reward then appears in
+            your collect list, where your own wallet signs the payout out of that mine's reserve.
           </p>
         </header>
 
@@ -91,7 +121,7 @@ export function EconomyPanels({
             <ul>
               {[...balances.entries()].map(([mint, total]) => (
                 <li key={mint}>
-                  <button className="ledger-token" onClick={() => onOpenToken(mint)}>
+                  <button className="badge ledger-token" onClick={() => onOpenToken(mint)}>
                     {symbolOf(tokens, mint)} <ExternalLink size={11} />
                   </button>
                   <span>{tokenAmount(total.claimable)} ready</span>
@@ -128,6 +158,43 @@ export function EconomyPanels({
           </div>
         )}
 
+        {collectable.length > 0 && (
+          <div className="claim-block">
+            <div className="claim-block-head">
+              <span>COLLECT ON-CHAIN</span>
+              <strong>
+                {tokenAmount(collectable.reduce((sum, claim) => sum + claim.amount, 0))} tokens
+              </strong>
+            </div>
+            <ul>
+              {collectable.map((claim) => {
+                const status = collection.statusOf(claim.id);
+                const badge = collectionBadge(status.state);
+                const busy = status.state === "pending";
+                return (
+                  <li key={claim.id}>
+                    <div>
+                      <strong>
+                        {tokenAmount(claim.amount)} {symbolOf(tokens, claim.mint)}
+                      </strong>
+                      <small>
+                        <em className={"reward-status " + badge.className}>{badge.label}</em>{" "}
+                        {status.message || "Settled. Your wallet signs the payout from the mine's reserve."}
+                      </small>
+                    </div>
+                    <button
+                      disabled={busy || status.state === "confirmed"}
+                      onClick={() => void collection.collect(claim)}
+                    >
+                      {busy ? "Collecting…" : status.state === "confirmed" ? "Collected" : "Collect"}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
         {claims.filter((claim) => claim.status !== "ELIGIBLE").length > 0 && (
           <div className="claim-history">
             <span className="claim-block-head-label">LEDGER</span>
@@ -137,11 +204,13 @@ export function EconomyPanels({
                 .slice(0, 12)
                 .map((claim) => (
                   <li key={claim.id}>
-                    <button className="ledger-token" onClick={() => onOpenToken(claim.mint)}>
+                    <button className="badge ledger-token" onClick={() => onOpenToken(claim.mint)}>
                       {symbolOf(tokens, claim.mint)} <ExternalLink size={11} />
                     </button>
                     <strong>{tokenAmount(claim.amount)}</strong>
-                    <em className={"reward-status status-" + claim.status.toLowerCase()}>{claim.status}</em>
+                    <em className={"reward-status status-" + claim.status.toLowerCase()}>
+                      {ledgerStatusLabel(claim)}
+                    </em>
                   </li>
                 ))}
             </ul>

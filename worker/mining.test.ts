@@ -5,23 +5,41 @@
  * CHECK/UNIQUE constraints and the conditional-UPDATE semantics the Worker depends on are real.
  * Time is driven with vi.setSystemTime, which is the only clock the mining code reads.
  */
+import bs58 from "bs58";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MineInfo, MiningReport, PlayerProfile } from "../shared/types";
 import { crewUpgrade } from "./crew";
+import { crewPower, upgradeOreCost } from "../shared/crew";
+import { oreCapacity } from "../shared/ore";
+import { DIGGO_CONFIG } from "../shared/config";
+import { launchRunwayReward } from "../shared/rewardIndex";
 import {
   activateChallenge,
   activateMine,
+  advanceMineTo,
+  armPosition,
   claimReward,
   claimRewardChallenge,
   collectMiningReport,
   mineInfo,
+  reconcileArmedPosition,
+  releaseArmedPositions,
+  rowToMineState,
+  settlePositionAt,
   settleRewardClaim,
   simulateAdvance,
+  toRewardIndexState,
+  MAX_EPOCHS_PER_ADVANCE,
   switchMine,
   type MineState,
+  type ClaimTransactionReader,
   type PositionSettlement,
+  type PositionRow,
+  type RawClaimTransaction,
   type PositionSnapshot,
 } from "./mining";
+import { activationStateOf, crewLevelsOf } from "./player";
+import { auditReserve, type MiningPosition } from "../shared/rewardIndex";
 import {
   createHarness,
   getRequest,
@@ -67,6 +85,19 @@ interface ClaimBody {
 
 function at(seconds: number): void {
   vi.setSystemTime((START + seconds) * 1_000);
+}
+
+/**
+ * Reads one telemetry counter through the real table (migration 0010) rather than a helper, so this
+ * suite asserts the counter the cron and the dashboards read.
+ */
+async function metricValue(env: Harness["env"], name: string): Promise<number> {
+  const row = await env.DB.prepare(
+    "SELECT COALESCE(SUM(value), 0) AS total FROM metrics_counters WHERE name = ?1",
+  )
+    .bind(name)
+    .first<{ total: number }>();
+  return Number(row?.total ?? 0);
 }
 
 async function body<T>(response: Response): Promise<T> {
@@ -123,6 +154,8 @@ function mineStateFixture(overrides: Partial<MineState> = {}): MineState {
     rewardPerBlock: 1_000n,
     committed: 0n,
     dustScaled: 0n,
+    released: 0n,
+    forfeited: 0n,
     blockInterval: 300,
     epochLength: 604_800,
     epochEndsAt: 0,
@@ -189,6 +222,61 @@ describe("block boundaries (spec 77)", () => {
     });
     expect(after.blocksAdvanced).toBe(1);
     expect(after.state.rewardIndex).toBe(10_000_000_000_000n);
+  });
+
+  it("steps a bounded number of epochs per call and resumes where it stopped", () => {
+    // One block whose arrival is far past the last epoch boundary. With a one-second epoch length
+    // this single block has to cross 130 boundaries, so an unbounded inner walk would do all of that
+    // work - and spread the whole schedule - inside one call. The per-call epoch budget splits it.
+    const base = mineStateFixture({ epochLength: 1, epochEndsAt: 1_171 });
+    const upTo = base.lastBlock + base.blockInterval;
+
+    const first = simulateAdvance({ state: base, positions: [], upTo, maxBlocks: 1 });
+    expect(first.blocksAdvanced).toBe(0);
+    expect(first.state.epoch).toBe(MAX_EPOCHS_PER_ADVANCE);
+    expect(first.state.epochEndsAt).toBe(base.epochEndsAt + MAX_EPOCHS_PER_ADVANCE);
+    // The block stays uncredited, so the reserve is untouched until the walk catches up.
+    expect(first.state.lastBlock).toBe(base.lastBlock);
+    expect(first.state.remainingReserve).toBe(base.remainingReserve);
+
+    // Resuming from what the first call persisted continues the walk instead of restarting it.
+    const second = simulateAdvance({ state: first.state, positions: [], upTo, maxBlocks: 1 });
+    expect(second.blocksAdvanced).toBe(0);
+    expect(second.state.epoch).toBe(2 * MAX_EPOCHS_PER_ADVANCE);
+
+    // Caught up at last: the next call credits the block it was waiting on.
+    const third = simulateAdvance({ state: second.state, positions: [], upTo, maxBlocks: 1 });
+    expect(third.blocksAdvanced).toBe(1);
+    expect(third.state.lastBlock).toBe(upTo);
+    expect(third.state.epoch).toBe(130);
+  });
+
+  it("never credits one instant repeatedly when the block interval cannot advance", () => {
+    // A zero block interval would make every pass credit the same timestamp, bounded only by
+    // maxBlocks - a schedule nobody described. It is refused instead of walked.
+    const state = mineStateFixture({ blockInterval: 0, epochEndsAt: 0 });
+    const outcome = simulateAdvance({
+      state,
+      positions: [positionFixture()],
+      upTo: state.lastBlock + 10_000,
+      maxBlocks: 8,
+    });
+
+    expect(outcome.blocksAdvanced).toBe(0);
+    expect(outcome.state.lastBlock).toBe(state.lastBlock);
+    expect(outcome.state.rewardIndex).toBe(state.rewardIndex);
+    expect(outcome.state.remainingReserve).toBe(state.remainingReserve);
+  });
+
+  it("never walks an epoch of zero length, however long the gap", () => {
+    // The case that used to be an unbounded synchronous loop: an epoch that never advances the
+    // boundary. Refusing it is what keeps the walk finite.
+    const state = mineStateFixture({ epochLength: 0, epochEndsAt: 1_001 });
+    const outcome = simulateAdvance({ state, positions: [], upTo: state.lastBlock + 300, maxBlocks: 1 });
+
+    expect(outcome.blocksAdvanced).toBe(0);
+    expect(outcome.state.epoch).toBe(state.epoch);
+    expect(outcome.state.epochEndsAt).toBe(state.epochEndsAt);
   });
 });
 
@@ -282,9 +370,13 @@ describe("activation and streak", () => {
     const attempt = await activate(h, wallet, MINT_A);
     expect(attempt.response.status).toBe(200);
     const payload = await body<ActivationBody>(attempt.response);
-    // 20h of work (400) + activation bonus (50) + the day-3 milestone (75).
     expect(payload.report.activeSeconds).toBe(20 * 3_600);
-    expect(payload.report.oreGained).toBe(525);
+    // 20h at the configured base rate, plus the activation bonus and the day-3 milestone.
+    expect(payload.report.oreGained).toBe(
+      20 * DIGGO_CONFIG.ore.baseOrePerActiveHour +
+        DIGGO_CONFIG.ore.activationBonusOre +
+        DIGGO_CONFIG.streak.milestones[0].ore,
+    );
     expect(payload.report.milestones?.[0]?.day).toBe(3);
     expect(payload.streakOutcome.streak).toBe(3);
 
@@ -316,22 +408,29 @@ describe("activation and streak", () => {
 
   it("reports ORE overflow instead of silently dropping it", async () => {
     const wallet = h.createWallet();
-    // Starter storage holds 800 ORE; leaving 10 free makes the window overflow.
+    // Leave 10 ORE of free starter storage, so the window overflows by design.
+    const capacity = oreCapacity({ miners: 2, drills: 1, carts: 1, foreman: 1, storage: 1 });
     await seedPlayer(h.env, wallet.address, {
       created_at: START - 30 * DAY,
       miners_level: 1,
       streak: 2,
-      ore_balance: 790,
+      ore_balance: capacity - 10,
       last_activation_at: START - 20 * 3_600,
       activation_expires_at: START + 4 * 3_600,
       ore_collected_at: START - 3_600,
     });
     const payload = await body<ActivationBody>((await activate(h, wallet, MINT_A)).response);
     expect(payload.report.oreGained).toBe(10);
-    expect(payload.report.oreOverflow).toBe(135);
+    // Everything the window earned that the last 10 ORE of storage could not take is reported, not
+    // dropped: 1h at the base rate, the activation bonus, and the day-3 milestone.
+    const earnedOre =
+      DIGGO_CONFIG.ore.baseOrePerActiveHour +
+      DIGGO_CONFIG.ore.activationBonusOre +
+      DIGGO_CONFIG.streak.milestones[0].ore;
+    expect(payload.report.oreOverflow).toBe(earnedOre - 10);
     const player = await readPlayer(h.env, wallet.address);
-    expect(player.ore_balance).toBe(800);
-    expect(player.ore_overflow).toBe(135);
+    expect(player.ore_balance).toBe(capacity);
+    expect(player.ore_overflow).toBe(earnedOre - 10);
   });
 
   it("arms the mining position on activation and keeps the activation rate limit", async () => {
@@ -394,9 +493,9 @@ describe("paused mines", () => {
     expect(response.status).toBe(200);
     const payload = await body<{ report: MiningReport }>(response);
     expect(payload.report.activeSeconds).toBe(DAY);
-    expect(payload.report.oreGained).toBe(480);
+    expect(payload.report.oreGained).toBe(24 * DIGGO_CONFIG.ore.baseOrePerActiveHour);
     const player = await readPlayer(h.env, wallet.address);
-    expect(player.ore_balance).toBe(480);
+    expect(player.ore_balance).toBe(24 * DIGGO_CONFIG.ore.baseOrePerActiveHour);
   });
 
   it("earns no block rewards at or after active_until", async () => {
@@ -561,7 +660,7 @@ describe("reward claims (spec 53, 57)", () => {
     expect(claims[0].status).toBe("CLAIMED");
   });
 
-  it("refuses a replayed claim nonce", async () => {
+  it("refuses a replayed claim nonce, in the authoritative nonce table", async () => {
     const { wallet, headers } = await seedClaimWallet();
     const challenge = await body<{ nonce: string; message: string }>(
       await claimRewardChallenge(
@@ -575,7 +674,14 @@ describe("reward claims (spec 53, 57)", () => {
       signature: h.sign(wallet, challenge.message),
     };
     expect((await claimReward(jsonRequest("/api/rewards/claim", request, headers), h.env)).status).toBe(200);
-    expect((await claimReward(jsonRequest("/api/rewards/claim", request, headers), h.env)).status).toBe(401);
+    // The nonce is spent by a conditional UPDATE against challenge_nonces, so it is spent in every
+    // colo rather than only in the KV cache the first request happened to land in (spec 47).
+    const spent = await h.db
+      .prepare("SELECT consumed_at FROM challenge_nonces WHERE nonce = ?1")
+      .bind(challenge.nonce)
+      .first<{ consumed_at: number | null }>();
+    expect(spent?.consumed_at).not.toBeNull();
+    expect((await claimReward(jsonRequest("/api/rewards/claim", request, headers), h.env)).status).toBe(409);
   });
 
   it("refuses a claim once its eligibility window has passed", async () => {
@@ -643,6 +749,23 @@ describe("reward claims (spec 53, 57)", () => {
     expect((await body<ClaimBody>(released)).claimed).toBe(true);
     claims = await readClaims(h.env, wallet.address);
     expect(claims[0].status).toBe("CLAIMED");
+  });
+
+  it("does not let a hold outlive the claim's own eligibility window", async () => {
+    const { wallet } = await seedClaimWallet();
+    await seedRestriction(h.env, wallet.address, "CLAIM_HOLD");
+    // The hold starts an hour into the claim's window...
+    at(3_600);
+    expect((await claimOnce(h, wallet, "claim:test:1", await h.sessionFor(wallet.address))).status).toBe(403);
+
+    // ...and nobody lifts it for a day and a half, so the window would have lapsed while the hold -
+    // not the player - was the reason the claim could not be made. The window stops running while
+    // the claim is parked, so lifting the hold still leaves a claimable reward.
+    at(36 * 3_600);
+    await clearRestriction(h.env, wallet.address, "CLAIM_HOLD");
+    const released = await claimOnce(h, wallet, "claim:test:1", await h.sessionFor(wallet.address));
+    expect(released.status).toBe(200);
+    expect((await body<ClaimBody>(released)).claimed).toBe(true);
   });
 
   it("answers 403 VERIFICATION_REQUIRED when the gate wants a challenge", async () => {
@@ -713,7 +836,7 @@ describe("mining report and mine information", () => {
     );
     expect(first.idempotent).toBe(false);
     expect(first.report.activeSeconds).toBe(600);
-    expect(first.report.oreGained).toBe(3);
+    expect(first.report.oreGained).toBe(Math.floor(DIGGO_CONFIG.ore.baseOrePerActiveHour / 6));
     expect(first.report.blockRewards?.[0]?.amount).toBe(2_000);
     expect(first.report.blockRewards?.[0]?.claimId).not.toBeNull();
     expect(first.report.discoveries?.total).toBe(0);
@@ -725,7 +848,10 @@ describe("mining report and mine information", () => {
     expect(second.report).toEqual(first.report);
 
     const player = await readPlayer(h.env, wallet.address);
-    expect(player.ore_balance).toBe(53);
+    // The activation bonus plus ten minutes at the base rate, credited exactly once.
+    expect(player.ore_balance).toBe(
+      DIGGO_CONFIG.ore.activationBonusOre + Math.floor(DIGGO_CONFIG.ore.baseOrePerActiveHour / 6),
+    );
     expect(player.last_report_at).toBe(START + 600);
   });
 
@@ -747,8 +873,16 @@ describe("mining report and mine information", () => {
     expect(mine.estimatedShare).toBe(0.5);
     expect(mine.estimatedRewardPerBlock).toBe(500);
     expect(mine.estimateLabel).toBe("Estimate based on current conditions.");
-    expect(mine.reductionSchedule[0]).toBe(1_000);
-    expect(mine.reductionSchedule[1]).toBe(750);
+    // The mine is on the reserve-runway schedule (spec 21): the next epochs pay what is left of the
+    // reserve spread over the blocks left of the target lifetime, never more than the launch reward.
+    const firstScheduledReward = launchRunwayReward(1_000_000n, 604_800, 300);
+    // Rounded up: an epoch has to be able to finish the reserve it is holding.
+    expect(firstScheduledReward).toBe(10n);
+    expect(mine.reductionSchedule[0]).toBe(Number(firstScheduledReward));
+    for (let index = 1; index < mine.reductionSchedule.length; index += 1) {
+      expect(mine.reductionSchedule[index]).toBeLessThanOrEqual(mine.reductionSchedule[index - 1]);
+      expect(mine.reductionSchedule[index]).toBeLessThanOrEqual(mine.blockReward);
+    }
     expect(mine.remainingReserve).toBe(1_000_000);
     expect(mine.fullyMinedProgress).toBe(0);
     expect(mine.accounting.source).toBe("OFFCHAIN");
@@ -793,6 +927,7 @@ describe("mining report and mine information", () => {
     await activate(h, wallet, MINT_A);
     at(300);
     const headers = await h.sessionFor(wallet.address);
+    const beforeUpgrade = await readPlayer(h.env, wallet.address);
     const response = await crewUpgrade(jsonRequest("/api/crew/upgrade", { component: "miners" }, headers), h.env);
     expect(response.status).toBe(200);
 
@@ -806,8 +941,8 @@ describe("mining report and mine information", () => {
     expect(mine.totalEligiblePower).toBe(153n);
     const player = await readPlayer(h.env, wallet.address);
     expect(player.miners_level).toBe(2);
-    // Cost of miners level 1 -> 2 with no Foreman discount is 120 ORE.
-    expect(player.ore_balance).toBe(880);
+    // Cost of miners level 1 -> 2 with no Foreman discount, straight from the cost curve.
+    expect(player.ore_balance).toBe(beforeUpgrade.ore_balance - upgradeOreCost("miners", 1));
   });
 
   it("keeps a claim recoverable after an expiry check on a HELD row", async () => {
@@ -826,6 +961,32 @@ describe("mining report and mine information", () => {
     const response = await claimOnce(h, wallet, "claim:test:9", headers);
     expect(response.status).toBe(200);
     expect((await body<ClaimBody>(response)).claimed).toBe(true);
+  });
+
+  it("refuses to walk a mine whose stored schedule cannot advance, and counts it", async () => {
+    const wallet = h.createWallet();
+    await seedPlayer(h.env, wallet.address, { created_at: START - 30 * DAY, miners_level: 1 });
+    await activate(h, wallet, MINT_A);
+    // A row nobody's schedule should follow: no block interval to step by and no epoch length to
+    // step epochs by. The fallback mapper substitutes nominal values for display, so this is the
+    // path that has to notice and refuse.
+    await h.db
+      .prepare("UPDATE mine_reward_state SET block_interval = 0, epoch_length = 0 WHERE mint = ?1")
+      .bind(MINT_A)
+      .run();
+    const before = await readMineState(h.env, MINT_A);
+
+    at(3_600);
+    const headers = await h.sessionFor(wallet.address);
+    await collectMiningReport(jsonRequest("/api/mine/report/collect", {}, headers), h.env);
+
+    const after = await readMineState(h.env, MINT_A);
+    // Fail closed: nothing credited, no reserve moved, no schedule invented.
+    expect(after.lastBlock).toBe(before.lastBlock);
+    expect(after.rewardIndex).toBe(before.rewardIndex);
+    expect(after.remainingReserve).toBe(before.remainingReserve);
+    expect(after.epoch).toBe(before.epoch);
+    expect(await metricValue(h.env, "mining.advance_schedule_invalid")).toBeGreaterThan(0);
   });
 });
 
@@ -1010,5 +1171,362 @@ describe("reward claim payout job (spec 57, 65)", () => {
       mint: MINT_A,
     });
     expect(settlement).toMatchObject({ outcome: "ignored", reason: "unknown_claim" });
+  });
+
+  it("never records a payout from a wallet-signed transaction that is not this claim's", async () => {
+    const wallet = h.createWallet();
+    await seedPlayer(h.env, wallet.address, { created_at: START - 30 * DAY, miners_level: 1 });
+    await seedClaim(h.env, {
+      id: "claim:job:5",
+      wallet: wallet.address,
+      mint: MINT_A,
+      amount: "5000",
+      eligibleUntil: START + DAY,
+      status: "CLAIMED",
+    });
+    const programId = bs58.encode(new Uint8Array(32).fill(9));
+    (h.env as unknown as { DIGGO_PROGRAM_ID?: string }).DIGGO_PROGRAM_ID = programId;
+
+    // A confirmed transaction this wallet signed that touched the Diggo program but carries no
+    // claim_rewards instruction for this reward. "Some wallet-signed program call" is not proof of a
+    // payout, so the queue path refuses it exactly like the confirm endpoint would.
+    const forged: RawClaimTransaction = {
+      blockTime: START + 120,
+      meta: {
+        err: null,
+        preTokenBalances: [],
+        postTokenBalances: [],
+        innerInstructions: [],
+      },
+      transaction: {
+        message: {
+          accountKeys: [
+            { pubkey: wallet.address, signer: true },
+            { pubkey: programId, signer: false },
+          ],
+          instructions: [
+            {
+              programId,
+              accounts: [],
+              data: bs58.encode(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])),
+            },
+          ],
+        },
+      },
+    };
+    const reader: ClaimTransactionReader = {
+      async getTransaction(): Promise<RawClaimTransaction | null> {
+        return forged;
+      },
+    };
+
+    const settlement = await settleRewardClaim(
+      h.env,
+      {
+        claimId: "claim:job:5",
+        wallet: wallet.address,
+        mint: MINT_A,
+        txSignature: bs58.encode(new Uint8Array(64).fill(3)),
+      },
+      reader,
+    );
+
+    expect(settlement).toMatchObject({ outcome: "ignored", reason: "unverified_signature" });
+    expect((await readClaims(h.env, wallet.address))[0].tx_signature).toBeNull();
+  });
+});
+
+/**
+ * A damped account's collect (spec 30, 53, 58, 78).
+ *
+ * What a position stores is the power it brings to a block *after* the maturity ramp, the cluster
+ * damping and the share cap; the crew's nominal power is a different number. The reconcile guard
+ * compared the two, so it read every damped position as "not armed for this window", re-armed it on
+ * the collect path, and reset the index cursor that stood for the accrual it had not settled yet.
+ */
+describe("a damped position keeps its accrual (spec 30, 78)", () => {
+  let h: Harness;
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    at(0);
+    h = await createHarness();
+    await seedToken(h.env, { mint: MINT_A });
+  });
+
+  afterEach(() => {
+    h.close();
+    vi.useRealTimers();
+  });
+
+  it("credits a young sole miner's whole accrual on collect", async () => {
+    const wallet = h.createWallet();
+    // Two days old, so the maturity ramp arms it with 40% of its 100 raw power. 40 !== 100 is
+    // exactly the mismatch the guard used to fire on.
+    await seedPlayer(h.env, wallet.address, { created_at: START - 2 * DAY, miners_level: 1 });
+    expect((await activate(h, wallet, MINT_A)).response.status).toBe(200);
+    expect((await readPosition(h.env, wallet.address, MINT_A))?.assigned_power).toBe("40");
+
+    // Five hours on a 300s block grid is 60 blocks, and the mine has one miner, so each block is
+    // worth the whole 1000-token block reward.
+    at(5 * 3_600);
+    const headers = await h.sessionFor(wallet.address);
+    const response = await collectMiningReport(jsonRequest("/api/mine/report/collect", {}, headers), h.env);
+    expect(response.status).toBe(200);
+
+    const claims = await readClaims(h.env, wallet.address);
+    // Every one of the 60 blocks is credited, and the collect re-armed nothing to get there.
+    expect(claims.reduce((total, claim) => total + Number(claim.amount), 0)).toBe(60 * 1_000);
+    expect(claims).toHaveLength(1);
+    expect(claims[0].amount).toBe(String(60 * 1_000));
+  });
+
+  it("keeps the mine's power total exact when two collects race an interrupted upgrade", async () => {
+    const wallet = h.createWallet();
+    await seedPlayer(h.env, wallet.address, { created_at: START - 2 * DAY, miners_level: 1 });
+    await activate(h, wallet, MINT_A);
+    expect((await readPosition(h.env, wallet.address, MINT_A))?.assigned_power).toBe("40");
+
+    // An upgrade that reached the players row but never re-armed the position, which is what an
+    // interrupted upgrade leaves behind. Two collects then race to heal it, and the reconcile path
+    // used to remove the stored power from the mine outside any compare-and-swap, so both callers
+    // could subtract it.
+    await h.db.prepare("UPDATE players SET miners_level = 2 WHERE wallet = ?1").bind(wallet.address).run();
+    at(600);
+    const row = await readPlayer(h.env, wallet.address);
+    const collect = async (): Promise<void> => {
+      await reconcileArmedPosition(h.env, row, START + 600);
+      await settlePositionAt(h.env, wallet.address, MINT_A, START + 600, { releasePower: false });
+    };
+    await Promise.all([collect(), collect()]);
+
+    const position = await readPosition(h.env, wallet.address, MINT_A);
+    const mine = await readMineState(h.env, MINT_A);
+    // 153 raw power at a 40% maturity share, and the denominator the index divides by is exactly
+    // what the mine's positions hold (spec 78).
+    expect(position?.assigned_power).toBe("61");
+    expect(mine.totalEligiblePower).toBe(61n);
+  });
+
+  it("leaves the position alone when only its effective power differs from raw", async () => {
+    const wallet = h.createWallet();
+    await seedPlayer(h.env, wallet.address, { created_at: START - 2 * DAY, miners_level: 1 });
+    await activate(h, wallet, MINT_A);
+    const armed = await readPosition(h.env, wallet.address, MINT_A);
+
+    at(600);
+    const row = await readPlayer(h.env, wallet.address);
+    expect(await reconcileArmedPosition(h.env, row, START + 600)).toBe(false);
+
+    // A reconcile that decides there is nothing to heal must not move the cursor it would have
+    // reset: that cursor is the accrual the next settlement pays out.
+    const after = await readPosition(h.env, wallet.address, MINT_A);
+    expect(after?.last_reward_index).toBe(armed?.last_reward_index);
+    expect(after?.activated_at).toBe(armed?.activated_at);
+    expect(after?.assigned_power).toBe("40");
+  });
+});
+
+/** Deterministic PRNG, so a failure names the seed that reproduces it. */
+function mulberry32(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+
+/**
+ * The accounting's own invariant, over random play (spec 17, 19, 78).
+ *
+ * Whatever sequence of activation, collection, mine switching, crew upgrades, claims and window
+ * expiries a wallet plays, every token that left a mine's Mining Reserve is either sitting in a
+ * claim, still owed to a position, forfeited back into the reserve, or rounding dust - and no mine
+ * ever hands out more than its reserve.
+ *
+ * This drives the accounting functions the request handlers call rather than the handlers
+ * themselves: the handlers layer per-wallet rate limits on top, which would turn a long random
+ * sequence into refusals, and the invariant under test lives below them. The wallets span the whole
+ * maturity ramp, and half of them sit inside a device cluster large enough to be damped.
+ */
+describe("reserve conservation under random play (spec 17, 19, 78)", () => {
+  const MINES = [MINT_A, MINT_B, MINT_C];
+  const SEEDS = 6;
+  const STEPS = 30;
+  /** One wallet per step of the maturity ramp, from minutes old to fully mature. */
+  const AGES = [0, 12 * 3_600, 2 * DAY, 6 * DAY, 30 * DAY];
+
+  interface RandomWallet {
+    wallet: TestWallet;
+    /** Shares a device hash with the cluster mates, so its power is damped (spec 61). */
+    damped: boolean;
+  }
+
+  it("conserves every mine's reserve and never over-distributes", async () => {
+    const h = await createHarness();
+    vi.useFakeTimers();
+    at(0);
+    try {
+      for (const mint of MINES) {
+        await seedToken(h.env, {
+          mint,
+          reserveTotal: 5_000_000,
+          reserveRemaining: 5_000_000,
+          rewardPerBlock: 1_000,
+        });
+      }
+
+      for (let seed = 0; seed < SEEDS; seed += 1) {
+        const rng = mulberry32(seed * 7_919 + 13);
+        const wallets: RandomWallet[] = [];
+        for (let index = 0; index < AGES.length; index += 1) {
+          const wallet = h.createWallet();
+          await seedPlayer(h.env, wallet.address, { created_at: START - AGES[index], miners_level: 1 });
+          wallets.push({ wallet, damped: index % 2 === 0 });
+        }
+        const deviceHash = "device-shared-" + seed;
+        // Enough wallets on that one device hash to be past the configured allowance, so the
+        // damped half really is armed with less than its raw power.
+        const clusterMates = Array.from({ length: 8 }, (_, index) => "cluster-mate-" + seed + "-" + index);
+
+        let now = START;
+        const recordSignals = async (): Promise<void> => {
+          for (const entry of wallets) {
+            await h.db
+              .prepare(
+                "INSERT INTO account_signals (wallet, ts, action, device_hash, outcome) VALUES (?1, ?2, 'activate', ?3, 'ok')",
+              )
+              .bind(entry.wallet.address, now, entry.damped ? deviceHash : null)
+              .run();
+          }
+          for (const mate of clusterMates) {
+            await h.db
+              .prepare(
+                "INSERT INTO account_signals (wallet, ts, action, device_hash, outcome) VALUES (?1, ?2, 'activate', ?3, 'ok')",
+              )
+              .bind(mate, now, deviceHash)
+              .run();
+          }
+        };
+
+        const arm = async (entry: RandomWallet, mint: string, activatedAt: number, activeUntil: number): Promise<void> => {
+          const levels = crewLevelsOf(await readPlayer(h.env, entry.wallet.address));
+          await armPosition(h.env, entry.wallet.address, mint, BigInt(crewPower(levels)), activatedAt, activeUntil, now);
+        };
+
+        const activateOp = async (entry: RandomWallet): Promise<void> => {
+          const mint = MINES[Math.floor(rng() * MINES.length)];
+          await releaseArmedPositions(h.env, entry.wallet.address, now);
+          await h.db
+            .prepare(
+              "UPDATE players SET active_mint = ?1, activated_at = ?2, last_activation_at = ?2, activation_expires_at = ?3 WHERE wallet = ?4",
+            )
+            .bind(mint, now, now + DAY, entry.wallet.address)
+            .run();
+          await arm(entry, mint, now, now + DAY);
+        };
+
+        const collectOp = async (entry: RandomWallet): Promise<void> => {
+          const row = await readPlayer(h.env, entry.wallet.address);
+          if (activationStateOf(row, now) !== "ACTIVE" || !row.active_mint) return;
+          await reconcileArmedPosition(h.env, row, now);
+          await settlePositionAt(h.env, entry.wallet.address, row.active_mint, now, { releasePower: false });
+          // The player's own claim: marking a settled claim paid out moves no reserve tokens
+          // off-chain (the payout is the player's own transaction), so the audit must not move.
+          await h.db
+            .prepare("UPDATE reward_claims SET status = 'CLAIMED', claimed_at = ?1 WHERE wallet = ?2 AND status = 'ELIGIBLE'")
+            .bind(now, entry.wallet.address)
+            .run();
+        };
+
+        const switchOp = async (entry: RandomWallet): Promise<void> => {
+          const row = await readPlayer(h.env, entry.wallet.address);
+          if (activationStateOf(row, now) !== "ACTIVE" || !row.active_mint) return;
+          const target = MINES[Math.floor(rng() * MINES.length)];
+          if (target === row.active_mint) return;
+          await releaseArmedPositions(h.env, entry.wallet.address, now);
+          await h.db.prepare("UPDATE players SET active_mint = ?1 WHERE wallet = ?2").bind(target, entry.wallet.address).run();
+          await arm(entry, target, row.activated_at ?? now, row.activation_expires_at ?? now);
+        };
+
+        const upgradeOp = async (entry: RandomWallet): Promise<void> => {
+          const row = await readPlayer(h.env, entry.wallet.address);
+          if (row.miners_level >= 8) return;
+          // An upgrade settles before the power moves, exactly like the crew handler does (spec 30).
+          await releaseArmedPositions(h.env, entry.wallet.address, now);
+          await h.db.prepare("UPDATE players SET miners_level = miners_level + 1 WHERE wallet = ?1").bind(entry.wallet.address).run();
+          if (activationStateOf(row, now) === "ACTIVE" && row.active_mint) {
+            await arm(entry, row.active_mint, row.activated_at ?? now, row.activation_expires_at ?? now);
+          }
+        };
+
+        for (let step = 0; step < STEPS; step += 1) {
+          now += 300 * (1 + Math.floor(rng() * 12));
+          await recordSignals();
+          const entry = wallets[Math.floor(rng() * wallets.length)];
+          const roll = rng();
+          if (roll < 0.22) await activateOp(entry);
+          else if (roll < 0.5) await collectOp(entry);
+          else if (roll < 0.68) await switchOp(entry);
+          else if (roll < 0.84) await upgradeOp(entry);
+          else for (const mint of MINES) await advanceMineTo(h.env, mint, now);
+
+          // The denominator every block share is measured against is exactly the power the mine's
+          // positions hold, at every step of the sequence (spec 78).
+          for (const mint of MINES) {
+            const state = await h.db
+              .prepare("SELECT total_eligible_power FROM mine_reward_state WHERE mint = ?1")
+              .bind(mint)
+              .first<{ total_eligible_power: string }>();
+            if (!state) continue; // a mine nobody has touched has no accounting row yet
+            const held = await h.db
+              .prepare("SELECT COALESCE(SUM(CAST(assigned_power AS INTEGER)), 0) AS total FROM mining_positions WHERE mint = ?1")
+              .bind(mint)
+              .first<{ total: number }>();
+            expect(BigInt(state.total_eligible_power), "seed " + seed + " step " + step).toBe(
+              BigInt(held?.total ?? 0),
+            );
+          }
+        }
+
+        // Close the books, so the audit sees a settled ledger, and check the two conservation
+        // identities for every mine this sequence touched.
+        for (const entry of wallets) await releaseArmedPositions(h.env, entry.wallet.address, now);
+        for (const mint of MINES) await advanceMineTo(h.env, mint, now);
+
+        for (const mint of MINES) {
+          const state = await h.db
+            .prepare("SELECT * FROM mine_reward_state WHERE mint = ?1")
+            .bind(mint)
+            .first<Parameters<typeof rowToMineState>[0]>();
+          if (!state) continue; // a mine nobody has touched has no accounting row yet
+          const mine = rowToMineState(state);
+          const rows = await h.db.prepare("SELECT * FROM mining_positions WHERE mint = ?1").bind(mint).all<PositionRow>();
+          const positions: MiningPosition[] = rows.results.map((row) => ({
+            mineId: mint,
+            assignedPower: BigInt(row.assigned_power),
+            lastRewardIndex: BigInt(row.last_reward_index),
+            pendingReward: BigInt(row.pending_reward),
+            paused: row.paused === 1,
+          }));
+          const claimed = await h.db
+            .prepare("SELECT COALESCE(SUM(CAST(amount AS INTEGER)), 0) AS total FROM reward_claims WHERE mint = ?1")
+            .bind(mint)
+            .first<{ total: number }>();
+          const audit = auditReserve(toRewardIndexState(mine), mine.initialReserve, positions, BigInt(claimed?.total ?? 0));
+          const where = "seed " + seed + " mint " + mint;
+          expect(audit.unattributedScaled, where).toBe(0n);
+          expect(audit.conserved, where).toBe(true);
+          // Never over-distribute: what left the reserve is bounded by the reserve itself.
+          expect(audit.drained, where).toBeLessThanOrEqual(mine.initialReserve);
+        }
+      }
+    } finally {
+      h.close();
+      vi.useRealTimers();
+    }
   });
 });

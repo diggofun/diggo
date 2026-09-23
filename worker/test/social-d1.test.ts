@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { ACHIEVEMENT_ORE_TOTAL_CAP, COSMETIC_CATALOG } from "../../shared/social";
+import { oreCapacity } from "../../shared/ore";
 import { equipCosmetic, getCosmetics, syncAchievements, unequipCosmetic } from "../cosmetics";
 import { leaderboardCandidatesSql, rankCandidates, rowToCandidate, type LeaderboardRow } from "../leaderboard";
 import { generateNotifications, listNotifications, markNotificationsRead } from "../notifications";
@@ -188,10 +189,13 @@ describe("achievements over D1", () => {
     expect((await playerRow(harness, "a1"))?.ore_balance).toBe(175);
     expect(countRows(harness.db, "player_achievements", "WHERE wallet = 'a1'")).toBe(2);
 
-    seedPlayer(harness.db, { wallet: "a2", activeDays: 1, oreBalance: 795 });
+    // Leave 20 ORE of free storage, so the 25 ORE achievement is clamped to the capacity.
+    const capacity = oreCapacity({ miners: 1, drills: 1, carts: 1, foreman: 1, storage: 1 });
+    seedPlayer(harness.db, { wallet: "a2", activeDays: 1, oreBalance: capacity - 20 });
     const clamped = await syncAchievements(harness.env, "a2", NOW);
+    // The achievement is worth 25 ORE, but only the 20 that fit in storage are credited.
     expect(clamped.oreGranted).toBe(25);
-    expect((await playerRow(harness, "a2"))?.ore_balance).toBe(800);
+    expect((await playerRow(harness, "a2"))?.ore_balance).toBe(capacity);
   });
 
   it("stops granting ORE once the achievement cap is reached", async () => {

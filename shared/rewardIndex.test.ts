@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { DIGGO_CONFIG } from "./config";
+import { DIGGO_CONFIG, createDiggoConfig } from "./config";
 import {
   applyBlock,
   auditReserve,
   claimPosition,
   clampRewardToReserve,
+  blocksPerEpoch,
   createMiningPosition,
   createRewardIndexState,
+  emissionSchedulePreview,
+  epochReward,
+  epochsInLifetime,
   isFullyMined,
   pausePosition,
   proportionalReward,
@@ -275,5 +279,208 @@ describe("reward reductions and FULLY_MINED economics", () => {
     expect(proportionalReward(10_000, 4_000, 2_000_000)).toBe(20);
     expect(clampRewardToReserve(10_000, 2_500)).toBe(2_500);
     expect(proportionalReward(10_000, 4_000, 0)).toBe(0);
+  });
+});
+
+describe("emission schedule (spec 20, 21)", () => {
+  const blockInterval = 300;
+  const epochLength = 604_800;
+  const blocksPerEpochCount = 2_016;
+
+  /** Runs the schedule the way a mine does: one epoch at a time, capped by the reserve. */
+  function drain(reserve: number, launchReward: number, lifetimeDays: number, config = DIGGO_CONFIG) {
+    let remaining = BigInt(reserve);
+    let reward = BigInt(launchReward);
+    let epoch = 0;
+    let distributed = 0n;
+    for (let guard = 0; guard < 20_000 && remaining > 0n; guard += 1) {
+      const budget = epochReward({
+        reserveRemaining: remaining,
+        previousRewardPerBlock: reward,
+        epoch,
+        epochLengthSeconds: epochLength,
+        blockIntervalSeconds: blockInterval,
+        targetLifetimeDays: lifetimeDays,
+        config,
+      });
+      const spent = budget * BigInt(blocksPerEpochCount);
+      const capped = spent > remaining ? remaining : spent;
+      distributed += capped;
+      remaining -= capped;
+      reward = budget;
+      epoch += 1;
+    }
+    return { remaining, distributed, epochs: epoch };
+  }
+
+  it("distributes a whole reserve whatever the launch reward is", () => {
+    for (const launchReward of [1_200, 1_900, 3_000, 7_500]) {
+      const drained = drain(50_000_000, launchReward, 365);
+      expect(drained.remaining).toBe(0n);
+      expect(drained.distributed).toBe(50_000_000n);
+      // 365 days is 53 whole epochs of 7 days, and the schedule finishes inside the last one.
+      expect(drained.epochs).toBeLessThanOrEqual(53);
+    }
+  });
+
+  it("keeps the target lifetime configurable and proportional to it", () => {
+    expect(drain(50_000_000, 7_500, 30).epochs).toBeLessThanOrEqual(5);
+    expect(drain(50_000_000, 7_500, 180).epochs).toBeLessThanOrEqual(26);
+    expect(drain(200_000_000, 40_000, 730).remaining).toBe(0n);
+    // A twelve-month default is what a launch gets when it says nothing.
+    expect(DIGGO_CONFIG.economy.emission.targetLifetimeDays).toBe(365);
+    expect(DIGGO_CONFIG.economy.emission.schedule).toBe("reserve_runway");
+  });
+
+  it("never raises a reward and never pays more than the reserve holds", () => {
+    let reward = 7_500n;
+    let remaining = 50_000_000n;
+    for (let epoch = 1; epoch <= 60 && remaining > 0n; epoch += 1) {
+      const next = epochReward({
+        reserveRemaining: remaining,
+        previousRewardPerBlock: reward,
+        epoch,
+        epochLengthSeconds: epochLength,
+        blockIntervalSeconds: blockInterval,
+        targetLifetimeDays: 365,
+      });
+      expect(next).toBeLessThanOrEqual(reward);
+      if (next * BigInt(blocksPerEpochCount) > remaining) expect(next).toBeGreaterThan(0n);
+      remaining -= next * BigInt(blocksPerEpochCount) > remaining ? remaining : next * BigInt(blocksPerEpochCount);
+      reward = next;
+    }
+  });
+
+  it("keeps paying at the floor until the reserve is empty, then stops", () => {
+    const tiny = epochReward({
+      reserveRemaining: 3n,
+      previousRewardPerBlock: 1n,
+      epoch: 50,
+      epochLengthSeconds: epochLength,
+      blockIntervalSeconds: blockInterval,
+      targetLifetimeDays: 365,
+    });
+    expect(tiny).toBe(BigInt(DIGGO_CONFIG.economy.emission.minimumRewardPerBlock));
+    expect(
+      epochReward({
+        reserveRemaining: 0n,
+        previousRewardPerBlock: 100n,
+        epoch: 0,
+        epochLengthSeconds: epochLength,
+        blockIntervalSeconds: blockInterval,
+      }),
+    ).toBe(0n);
+    // A reserve smaller than one block's budget cannot be overpaid.
+    const state = createRewardIndexState(3n, 1_000n);
+    const block = applyBlock(state, 1_000n, 10n);
+    expect(block.capped).toBe(3n);
+    expect(block.state.reserveRemaining).toBe(0n);
+  });
+
+  it("still offers the legacy geometric step when a mine asks for it", () => {
+    const legacy = createDiggoConfig({ economy: { emission: { schedule: "epoch_reduction" } } });
+    expect(
+      epochReward({
+        reserveRemaining: 1_000_000n,
+        previousRewardPerBlock: 10_000n,
+        epoch: 1,
+        epochLengthSeconds: epochLength,
+        blockIntervalSeconds: blockInterval,
+        config: legacy,
+      }),
+    ).toBe(7_500n);
+  });
+
+  it("describes the runway a mine is actually on", () => {
+    expect(blocksPerEpoch(epochLength, blockInterval)).toBe(2_016);
+    expect(epochsInLifetime(365, epochLength)).toBe(53);
+    expect(epochsInLifetime(0, epochLength)).toBe(1);
+    const preview = emissionSchedulePreview(
+      {
+        reserveRemaining: 50_000_000n,
+        previousRewardPerBlock: 7_500n,
+        epoch: 0,
+        epochLengthSeconds: epochLength,
+        blockIntervalSeconds: blockInterval,
+        targetLifetimeDays: 365,
+      },
+      4,
+    );
+    expect(preview).toHaveLength(4);
+    for (let index = 1; index < preview.length; index += 1) {
+      expect(preview[index]).toBeLessThanOrEqual(preview[index - 1]);
+    }
+    expect(preview[0]).toBeGreaterThan(0n);
+    expect(preview[0]).toBeLessThan(7_500n);
+  });
+});
+
+describe("reserve audit with forfeits (spec 17, 19, 21)", () => {
+  it("returns a forfeited share to the reserve and still balances exactly", () => {
+    const initial = 1_000_000n;
+    let state = createRewardIndexState(initial, 10_000n);
+    const live = createMiningPosition("FROG", 1_000n);
+    const paused = createMiningPosition("FROG", 1_000n);
+
+    // Two positions share one block, but only one of them is still eligible.
+    state = applyBlock(state, 10_000n, 2_000n).state;
+    const liveSettled = settlePosition(state, live);
+    state = liveSettled.state;
+    const forfeitedSettle = settlePosition(state, { ...paused, paused: true });
+    state = forfeitedSettle.state;
+    expect(liveSettled.earned).toBe(5_000n);
+    expect(forfeitedSettle.forfeited).toBe(5_000n);
+    expect(state.forfeited).toBe(5_000n);
+    expect(state.released).toBe(10_000n);
+    // The forfeited half is back in the reserve: the mine only gave up what was really paid.
+    expect(state.reserveRemaining).toBe(initial - 5_000n);
+
+    const claimed = claimPosition(liveSettled.position);
+    const audit = auditReserve(state, initial, [claimed.position, forfeitedSettle.position], claimed.claimed);
+    expect(audit.conserved).toBe(true);
+    expect(audit.indexBalanced).toBe(true);
+    expect(audit.reserveBalanced).toBe(true);
+    expect(audit.unattributedScaled).toBe(0n);
+    expect(audit.forfeited).toBe(5_000n);
+    expect(audit.released - audit.forfeited).toBe(initial - audit.remaining);
+  });
+
+  it("leaves the forfeit term in the identity, so a gross claimed total is caught", () => {
+    const initial = 1_000_000n;
+    let state = createRewardIndexState(initial, 10_000n);
+    const paused = createMiningPosition("FROG", 1_000n);
+    state = applyBlock(state, 10_000n, 1_000n).state;
+    const forfeitedSettle = settlePosition(state, { ...paused, paused: true });
+    state = forfeitedSettle.state;
+
+    // A caller that books the whole block as "claimed" is off by exactly the forfeit ...
+    const gross = auditReserve(state, initial, [forfeitedSettle.position], 10_000n);
+    expect(gross.conserved).toBe(false);
+    expect(gross.unattributedScaled).toBe(-10_000n * rewardIndexScale());
+    // ... while the same audit without the phantom claim balances.
+    expect(auditReserve(state, initial, [forfeitedSettle.position], 0n).conserved).toBe(true);
+    // ... and a caller that passes the forfeit explicitly balances again.
+    const reconciled = auditReserve(state, initial, [forfeitedSettle.position], 0n, DIGGO_CONFIG, {
+      released: 10_000n,
+      forfeited: 10_000n,
+    });
+    expect(reconciled.conserved).toBe(true);
+  });
+
+  it("reports a position the caller forgot as unattributed instead of a tolerance", () => {
+    const initial = 1_000_000n;
+    let state = createRewardIndexState(initial, 10_000n);
+    const one = createMiningPosition("FROG", 1_000n);
+    const two = createMiningPosition("FROG", 1_000n);
+    state = applyBlock(state, 10_000n, 2_000n).state;
+    const settledOne = settlePosition(state, one);
+    const settledTwo = settlePosition(settledOne.state, two);
+
+    const complete = auditReserve(settledTwo.state, initial, [settledOne.position, settledTwo.position], 0n);
+    expect(complete.conserved).toBe(true);
+    const incomplete = auditReserve(settledTwo.state, initial, [settledOne.position], 0n);
+    expect(incomplete.conserved).toBe(false);
+    // The missing position's whole entitlement shows up as released-but-unattributed.
+    expect(incomplete.unattributedScaled).toBe(5_000n * rewardIndexScale());
   });
 });

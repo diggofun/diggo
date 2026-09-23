@@ -1,0 +1,14 @@
+{
+  "//": "Checks this directory on its own: the repo's tsc -b projects cover src/, worker/ and the config files, so 'npx tsc -p e2e/tsconfig.json' is the gate for the suite.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["node"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["."]
+}

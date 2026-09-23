@@ -113,14 +113,26 @@ purpose — it would hand a backend key the power to drain a mine. The keeper's 
 to `sync_crew_power` (bounded by `ProtocolConfig.max_crew_power` and a per-call increase cap) and
 `claim_discovery` (idempotent via an on-chain receipt per discovery id).
 
+Collecting is therefore a client-driven two-step. `src/rewardsClaim.ts` signs and submits
+`claim_rewards` from the player's own wallet, then reports the transaction to
+`POST /api/rewards/claim/confirm`; the Worker verifies it against chain before writing
+`tx_signature`. The report is idempotent, a signature already backing another reward is refused,
+and a payout the client could not confirm is still recorded later — but a settled reward with no
+recorded signature is exactly what `worker/reconcile.ts` treats as a divergence, and that halts the
+mine's mint until a human looks. Reporting the signature is part of the payout, not an optimisation.
+
 ## 8. Random memecoin Discoveries
 
 The most security-sensitive subsystem, because it hands out real value.
 
-- **Server-authoritative RNG.** Whether a discovery happens, which token, which rarity, which
-  visual event and how many units are all derived server-side from `DISCOVERY_SECRET`. The client
-  sends no seed and never computes an outcome; unset, the subsystem fails closed rather than falling
-  back to a predictable seed.
+- **Server-authoritative, commit-reveal RNG.** Whether a discovery happens, which token, which
+  rarity, which visual event and how many units are all derived server-side from a seed derived
+  from `DISCOVERY_SECRET`. The client sends no seed and never computes an outcome; unset, the
+  subsystem fails closed rather than falling back to a predictable seed. Each epoch
+  (`DISCOVERY_EPOCH_SECONDS`, bounded to `[3600, 2592000]`, a day by default) publishes only a
+  commitment to that seed through the public `GET /api/discovery/commitments`, and reveals the seed
+  once the epoch has closed, so an outcome cannot be ground out after the fact and a revealed seed
+  can be checked against the commitment anyone read earlier. It is verifiable, not yet trustless.
 - **One roll per window.** The server authors a single-use opportunity per active Crew per window
   with a deterministic event id and a server nonce, consumed by one guarded update. A second roll is
   a 409, not a reroll — no spam-until-Rare, no cancelling an unfavourable roll, no best-of-N.
@@ -133,6 +145,13 @@ The most security-sensitive subsystem, because it hands out real value.
   token health and price confidence, so an illiquid token cannot become Mythic because its unit
   price is high. The amount is then normalized from robustness-checked price samples, never the raw
   spot price of a small pool, so a cheaper token pays more units and a dearer one fewer.
+- **Price confidence is a gate, not a number.** `worker/oracle.ts` is the only module that answers
+  what a token or SOL is worth. `getRobustPrice` combines the token's own observed history, a
+  volume-weighted average of real recorded trades, Jupiter and Pyth, and returns `null` when the
+  sources disagree beyond the deviation gate or are stale — a discovery that cannot be valued pays
+  nothing rather than paying a wrong amount. `getSolUsd` replaces the old hardcoded illustrative
+  rate wherever a USD figure is shown, and falls back to that constant only as a clearly labelled
+  last resort. Cron keeps the cache warm; a player request never blocks on a third-party API.
 
 ## 9. Anti-Sybil design
 
@@ -166,9 +185,31 @@ design premise. What makes farming expensive is **time**, and what bounds the da
   average and per-account discovery value, device and network cluster sizes, failed challenges,
   replay attempts, rate-limit hits, synchronised-activity share and reserve drain velocity, with
   alert rules evaluated on a schedule.
+- **Enforcement is shadowed until a person adopts it** (spec 63). `RISK_OPS.enforcement.mode` ships
+  as `shadow`: the gate still reaches a verdict, records it as `risk.shadow_would_block` and shows
+  the operator what it would have done (`computedState` next to the state in force, `shadowed` on
+  each admin account row), while the account keeps playing. Rate limits, circuit breakers and an
+  operator restriction are enforced in either mode, and `enforcement.overrides` moves one action in
+  or out of enforcement without changing the global mode.
+- **Appeals** are the human path back: a player files one, an operator decides from a queue. Filing
+  changes nothing by itself; deciding one can only lift restrictions. Both directions are bounded
+  and the filing endpoint answers identically whether or not the account is under anything, so it
+  cannot be used to probe the risk layer.
+- **Player lock** (`worker/playerLock.ts`): a Durable Object per wallet arbitrates the reward paths,
+  so two concurrent activations or claims cannot interleave a read-modify-write. It is defence in
+  depth and fails open, loudly — a broken binding must not stop players from playing, and every
+  guarded update underneath it is still conditional in SQL. `worker/reconcile.ts` closes the other
+  half of the loop: it compares paid claims and reserves against chain on a schedule and halts the
+  affected mine's mint on divergence.
 - **Admin anti-abuse surface** (`/api/admin/*`): account risk level, age, active days, streak, crew
   level, discoveries, claimed value, flags, related accounts and current restrictions, plus
   restrictions and breaker controls. Admin actions are audited and can only restrict or halt.
+  Every mutation carries a signed, single-use **step-up** bound to that action and its exact
+  payload, so an admin session alone is never enough.
+- **Notifications** are delivered on whatever channel the player opted into: the in-app list is
+  always the record, Web Push (`worker/push.ts`, RFC 8291 + 8292) is the default, and an optional
+  Telegram bot is the fallback for browsers that cannot do either. Both are opt-in, both are
+  optional to the deployment, and a push subscription is always scoped to the signed-in wallet.
 
 ## 10. Configuration
 
@@ -179,6 +220,16 @@ Worker environment: values are clamped to declared bounds, so a mistyped variabl
 the floodgates nor stop a subsystem. Anti-abuse budgets, thresholds and alert rules live beside it
 in **`shared/riskOps.ts`** (`RISK_OPS`). Both are covered by unit tests, so the tuned values are the
 executable specification.
+
+The price oracle's bounds live in `DIGGO_CONFIG.oracle` (`shared/config.ts`) with every other
+tunable, and `worker/oracle.ts` re-exports them as `ORACLE_LIMITS` for its own callers, so one config
+object still describes the whole deployment.
+they describe how long an external reading may be trusted, not a game rule, and the oracle is the
+only module that reads them. Its environment variables — `JUPITER_PRICE_URL`,
+`JUPITER_PRICE_V2_URL`, `JUPITER_API_KEY`, `PYTH_HERMES_URL`, `PYTH_API_KEY`,
+`PYTH_SOL_USD_FEED_ID`, `ORACLE_MIN_EXTERNAL_SOURCES`, `ORACLE_SOL_USD_OVERRIDE` and
+`DISCOVERY_EPOCH_SECONDS` — are declared once in `worker/env.ts` and every one of them has a
+working default, so an unconfigured deployment still reads a real price.
 
 ## 11. Module map
 
@@ -191,10 +242,19 @@ executable specification.
 | Auth, challenges, sessions | `worker/auth.ts` |
 | Risk gate, score, holds, cron | `worker/risk.ts`, `worker/signals.ts`, `worker/breakers.ts`, `worker/telemetry.ts` |
 | Admin surface | `worker/admin.ts` |
+| Price oracle, commit-reveal RNG | `worker/oracle.ts`, `shared/commitReveal.ts` |
+| Per-wallet lock, reconciliation | `worker/playerLock.ts`, `worker/reconcile.ts` |
+| Appeals, notifications, push, Telegram | `worker/appeals.ts`, `worker/notifications.ts`, `worker/push.ts` |
 | Keeper (bounded signer) | `worker/keeper.ts` |
 | Chain sync, indexing queue | `worker/chain.ts`, `worker/indexing.ts` |
 | Cosmetics, achievements, notifications, leaderboards | `worker/cosmetics.ts`, `worker/notifications.ts`, `worker/leaderboard.ts` |
+| Legal documents, consent, web push | `src/components/legal/*`, `src/components/ConsentBanner.tsx`, `src/push.ts`, `worker/push.ts` |
 | Router, cron, queue consumer | `worker/index.ts` |
+
+The legal pages (`/terms`, `/privacy`, `/risk`, `/cookies`) are plain documents with no
+JavaScript-dependent decoration, and they are the one place a player can change or withdraw the
+analytics choice the consent banner records. Analytics is off until that choice is made, which is
+why `src/analytics.ts` starts PostHog from the stored decision rather than at boot.
 
 The Solana program stays the source of truth for token ownership, reserves and block-reward
 distribution. The Worker is authoritative for Crew/ORE/streak/discovery game state, and is never
@@ -222,16 +282,17 @@ authoritative for a player's token balance. See `docs/SECURITY.md` and `docs/CUS
 
 Stated plainly, because the difference matters:
 
-- The Worker holds no keeper key material and submits no transactions itself; the keeper code paths
-  (`sync_crew_power`, `claim_discovery`) exist and are bounded, but need a dedicated signer service
-  kept out of the request path (`docs/CUSTODY.md`).
-- There is no AMM integration or manipulation-resistant oracle policy; discovery valuation uses
-  robustness-checked internal price samples.
-- Buying/selling and the user-signed `claim_rewards` transaction are implemented in the program but
-  not yet driven from the frontend, so a settled mining reward is exposed as `ready` rather than
-  collected.
-- Discovery RNG is `crypto.getRandomValues`/HMAC in the Worker behind an abstraction that can
-  migrate to a verifiable source later; it is server-authoritative today, not trustless.
+- The keeper runs inside the Worker — queue-triggered from `worker/indexing.ts`, never on the request
+  path — and signs with `DIGGO_KEEPER_SECRET_KEY`, a Cloudflare secret (`docs/CUSTODY.md`). That is a
+  lower bar than a dedicated signer service: a leaked secret or a Worker compromise exposes
+  `sync_crew_power`, `claim_discovery` and `graduate_market` up to their on-chain bounds, which are
+  what limit the damage rather than the key's isolation.
+- There is no AMM integration, and the price oracle is a Worker-side policy rather than an on-chain
+  one: the program does not re-check a price it is handed, so a compromised Worker could still
+  value a discovery wrongly. The oracle's own refusals are what bound that today.
+- Discovery RNG is commit-reveal in the Worker. A revealed seed can be checked against its published
+  commitment, but a player still has to trust that the Worker committed before it knew the outcome;
+  it is verifiable today, not trustless.
 - The vanity-mint worker pool is not implemented.
 
 The website therefore labels itself as a devnet MVP.

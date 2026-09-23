@@ -45,13 +45,15 @@ vi.mock("../keeper", () => ({
   keeperSyncCrewPower: keeperMock.syncCrewPower,
 }));
 
-const { settleDiscoveryClaim } = await import("../indexing");
+const { settleDiscoveryClaim, DISCOVERY_CLAIM_RETRY_SECONDS } = await import("../indexing");
 
 /** A fixed clock keeps window indices, caps and NONCE TTLs deterministic. */
 const NOW_MS = 1_800_000_123_000;
 const NOW = Math.floor(NOW_MS / 1_000);
 const HEALTHY_MINT = "HeaLthyMint1111111111111111111111111111111";
 const ILLIQUID_MINT = "11111111111111111111111111111111111111111111";
+/** A second healthy mine, used to park a held farm's value away from the target mine's own caps. */
+const FARM_MINT = "FaRmMint111111111111111111111111111111111";
 
 interface TestWallet {
   wallet: string;
@@ -341,6 +343,63 @@ describe("multi-level value caps (spec 45, 64)", () => {
     // REJECTED rows never happen implicitly: a granted discovery is recorded, never silently lost.
 expect(metricTotal("discovery.granted")).toBeGreaterThan(0);
   });
+
+  it("caps how much of the daily budget a held farm may reserve", async () => {
+    const human = makeWallet().wallet;
+    seedHappyPath({ wallet: human });
+    // A farm under review, holding more than a whole day's budget on another mine. It is real
+    // granted value, so it counts - but only up to the configured share of the cap, or the held
+    // farm alone would exhaust the day and deny ordinary players their own allowance (spec 45, 64).
+    const farm = makeWallet().wallet;
+    seedPlayer(env, farm);
+    const farmMint = seedToken(env, { mint: FARM_MINT, priceUsd: 0.01 });
+    // The farm's mine is a legitimate candidate too, so this test does not depend on which of the
+    // two mines one roll happens to select.
+    for (let index = 0; index < 3; index += 1) seedPriceSample(env, farmMint, 0.01, NOW - 60 * (index + 1));
+    seedTrade(env, farmMint, 0.01, 1_000_000, NOW - 600);
+    for (let index = 0; index < 6; index += 1) {
+      seedDiscovery(env, { wallet: farm, mint: farmMint, valueUsd: 100, status: "HELD" });
+    }
+
+    const discovery = await rollDiscovery(env, human, null);
+
+    expect(discovery).not.toBeNull();
+    expect(discovery!.valueUsd).toBeLessThanOrEqual(DIGGO_CONFIG.discovery.perRequestCapUsd);
+    expect(readValue<string>(env, `SELECT status FROM discoveries WHERE wallet = '${human}'`, "status")).toBe(
+      "PENDING",
+    );
+    // The held rows are still held: the ceiling changes what they reserve, not what they are.
+    expect(countRows(env, "SELECT COUNT(*) AS total FROM discoveries WHERE status = 'HELD'")).toBe(6);
+  });
+
+  it("releases the budget of a hold nothing cleared without touching the grant", async () => {
+    const human = makeWallet().wallet;
+    seedHappyPath({ wallet: human });
+    const farm = makeWallet().wallet;
+    seedPlayer(env, farm);
+    // Held on this very mine a day and a half ago, which is past the configured review window: the
+    // hold stops reserving budget instead of blocking the week for everyone else.
+    for (let index = 0; index < 6; index += 1) {
+      seedDiscovery(env, {
+        wallet: farm,
+        mint: HEALTHY_MINT,
+        valueUsd: 100,
+        status: "HELD",
+        createdAt: NOW - 2 * DAY,
+      });
+    }
+
+    const discovery = await rollDiscovery(env, human, null);
+
+    expect(discovery).not.toBeNull();
+    // The grant itself is untouched: an unresolved hold is a real reward waiting for a human
+    // decision, not something the clock (or another player's roll) may reject on the farm's behalf.
+    expect(countRows(env, "SELECT COUNT(*) AS total FROM discoveries WHERE status = 'HELD'")).toBe(6);
+    expect(
+      countRows(env, "SELECT COUNT(*) AS total FROM discoveries WHERE failure_reason = 'hold_expired'"),
+    ).toBe(0);
+    expect(metricTotal("discovery.hold_awaiting_review")).toBeGreaterThan(0);
+  });
 });
 
 describe("single-use opportunities (spec 56, 70)", () => {
@@ -475,7 +534,16 @@ describe("claim flow (spec 46, 47, 57)", () => {
       post("/api/discovery/claim", { discoveryId, nonce: challenge.nonce, signature }, session),
       env,
     );
-    expect(replay.status).toBe(401);
+    // Reported as a replay, not merely an expired challenge: the nonce is spent in the authoritative
+    // challenge_nonces table, so this holds across colos and not only where the cache happens to be.
+    expect(replay.status).toBe(409);
+    expect(
+      readValue<number>(
+        env,
+        `SELECT consumed_at FROM challenge_nonces WHERE nonce = '${challenge.nonce}'`,
+        "consumed_at",
+      ),
+    ).not.toBeNull();
   });
 
   it("moves PENDING -> ELIGIBLE, queues exactly one keeper payout, and settles to CLAIMED", async () => {
@@ -532,6 +600,33 @@ expect(metricTotal("discovery.claimed")).toBeGreaterThan(0);
     await settleDiscoveryClaim(env, discoveryId);
     expect(keeperMock.claimDiscovery).not.toHaveBeenCalled();
     expect(readValue<string>(env, `SELECT status FROM discoveries WHERE id = '${discoveryId}'`, "status")).toBe("PENDING");
+  });
+
+  it("leaves an unresolved hold exactly as it is, however old it is", async () => {
+    const owner = makeWallet();
+    seedHappyPath({ wallet: owner.wallet });
+    const discoveryId = await rollForWallet(owner.wallet);
+    // Parked for review well past the configured review window, which used to be enough for the
+    // player's own claim attempt to have it REJECTED - irreversibly destroying a granted reward.
+    await env.DB.prepare("UPDATE discoveries SET status = 'HELD', created_at = ?1 WHERE id = ?2")
+      .bind(NOW - 3 * DAY, discoveryId)
+      .run();
+
+    const challenge = await challengeFor(owner, discoveryId);
+    const session = await authenticate(owner.wallet);
+    const response = await claimDiscovery(
+      post("/api/discovery/claim", { discoveryId, nonce: challenge.nonce, signature: owner.sign(challenge.message) }, session),
+      env,
+    );
+
+    // Refused, and the grant is untouched: only a human or the risk pipeline resolves a hold.
+    expect(response.status).toBe(403);
+    expect(readValue<string>(env, `SELECT status FROM discoveries WHERE id = '${discoveryId}'`, "status")).toBe("HELD");
+    expect(
+      readValue<string>(env, `SELECT failure_reason FROM discoveries WHERE id = '${discoveryId}'`, "failure_reason"),
+    ).toBeNull();
+    expect(harness.queue.messages).toHaveLength(0);
+    expect(metricTotal("discovery.claim_denied")).toBeGreaterThan(0);
   });
 
   it("is idempotent: an already CLAIMED discovery pays nothing more", async () => {
@@ -657,6 +752,66 @@ expect(metricTotal("discovery.claimed")).toBeGreaterThan(0);
     expect(harness.queue.messages).toHaveLength(0);
     expect(readValue<string>(env, `SELECT status FROM discoveries WHERE id = '${discoveryId}'`, "status")).toBe("PENDING");
   });
+
+  it("binds the claim challenge to the discovery it was issued for", async () => {
+    const owner = makeWallet();
+    seedHappyPath({ wallet: owner.wallet });
+    const discoveryId = await rollForWallet(owner.wallet);
+    // A second discovery of the same wallet, from another window: its own challenge would be a
+    // different nonce, so a signature over the first one's challenge must not claim it.
+    const otherId = seedDiscovery(env, { wallet: owner.wallet, mint: HEALTHY_MINT, valueUsd: 0.05 });
+    const challenge = await challengeFor(owner, discoveryId);
+    const session = await authenticate(owner.wallet);
+
+    const response = await claimDiscovery(
+      post(
+        "/api/discovery/claim",
+        { discoveryId: otherId, nonce: challenge.nonce, signature: owner.sign(challenge.message) },
+        session,
+      ),
+      env,
+    );
+
+    expect(response.status).toBe(401);
+    expect(harness.queue.messages).toHaveLength(0);
+    expect(readValue<string>(env, `SELECT status FROM discoveries WHERE id = '${otherId}'`, "status")).toBe("PENDING");
+  });
+
+  it("stops one mine's payouts when only that mine's breaker is open", async () => {
+    const owner = makeWallet();
+    seedHappyPath({ wallet: owner.wallet });
+    const discoveryId = await rollForWallet(owner.wallet);
+    const challenge = await challengeFor(owner, discoveryId);
+    // Exactly what the reconciliation cron opens when this one mine's reserve diverged.
+    await setBreaker(env, {
+      scope: "claims",
+      mint: HEALTHY_MINT,
+      open: true,
+      reason: "reserve_divergence",
+      actor: "reconcile-cron",
+    });
+    const session = await authenticate(owner.wallet);
+
+    const freshChallenge = await claimDiscoveryChallenge(
+      post("/api/discovery/claim/challenge", { discoveryId }, session),
+      env,
+    );
+    expect(freshChallenge.status).toBe(503);
+
+    const response = await claimDiscovery(
+      post(
+        "/api/discovery/claim",
+        { discoveryId, nonce: challenge.nonce, signature: owner.sign(challenge.message) },
+        session,
+      ),
+      env,
+    );
+    expect(response.status).toBe(503);
+    expect(harness.queue.messages).toHaveLength(0);
+    expect(readValue<string>(env, `SELECT status FROM discoveries WHERE id = '${discoveryId}'`, "status")).toBe(
+      "PENDING",
+    );
+  });
 });
 
 describe("keeper settlement safety (spec 57, 70)", () => {
@@ -704,6 +859,59 @@ expect(metricTotal("discovery.claim_failed")).toBeGreaterThan(0);
     await settleDiscoveryClaim(env, discoveryId);
     expect(keeperMock.claimDiscovery).toHaveBeenCalledTimes(1);
     // A second settlement of the same discovery is a no-op: CLAIMED is terminal.
+    await settleDiscoveryClaim(env, discoveryId);
+    expect(keeperMock.claimDiscovery).toHaveBeenCalledTimes(1);
+  });
+
+  it("defers a payout while the reserve breaker is open and pays exactly once after it closes", async () => {
+    const owner = makeWallet();
+    seedHappyPath({ wallet: owner.wallet });
+    const discoveryId = await committedDiscovery(owner);
+    keeperMock.claimDiscovery.mockResolvedValue("keeper-signature");
+    keeperMock.receiptExists.mockResolvedValue(false);
+
+    // The halt the reconciliation cron opens for a mine whose reserve diverged (spec 65, 78), set
+    // after the job was already on the queue.
+    await setBreaker(env, {
+      scope: "discovery_reserve",
+      mint: HEALTHY_MINT,
+      open: true,
+      reason: "reserve_diverged",
+      actor: "test",
+    });
+    await settleDiscoveryClaim(env, discoveryId);
+
+    // Nothing was paid, and nothing was destroyed: the reward is still committed (ELIGIBLE) and the
+    // job is back on the queue with a backoff.
+    expect(keeperMock.claimDiscovery).not.toHaveBeenCalled();
+    expect(readValue<string>(env, `SELECT status FROM discoveries WHERE id = '${discoveryId}'`, "status")).toBe(
+      "ELIGIBLE",
+    );
+    expect(harness.queue.messages).toEqual([{ type: "claim_discovery", discoveryId }]);
+    expect(harness.queue.delays).toEqual([DISCOVERY_CLAIM_RETRY_SECONDS]);
+    expect(metricTotal("discovery.claim_deferred")).toBeGreaterThan(0);
+
+    // The same mine, and also a scope-wide claims halt: both have to hold the payout back.
+    await setBreaker(env, { scope: "claims", open: true, reason: "halt", actor: "test" });
+    await settleDiscoveryClaim(env, discoveryId);
+    expect(keeperMock.claimDiscovery).not.toHaveBeenCalled();
+    await setBreaker(env, { scope: "claims", open: false, reason: "cleared", actor: "test" });
+
+    // Clearing the halt is all it takes: the retry pays once and the row becomes terminal.
+    await setBreaker(env, {
+      scope: "discovery_reserve",
+      mint: HEALTHY_MINT,
+      open: false,
+      reason: "reconciled",
+      actor: "test",
+    });
+    await settleDiscoveryClaim(env, discoveryId);
+    expect(keeperMock.claimDiscovery).toHaveBeenCalledTimes(1);
+    expect(readValue<string>(env, `SELECT status FROM discoveries WHERE id = '${discoveryId}'`, "status")).toBe(
+      "CLAIMED",
+    );
+
+    // Every later replay is still a no-op.
     await settleDiscoveryClaim(env, discoveryId);
     expect(keeperMock.claimDiscovery).toHaveBeenCalledTimes(1);
   });

@@ -62,13 +62,18 @@ function toState(row: BreakerRow): BreakerState {
 /**
  * Which rows have to be consulted for a scope. A discovery-reserve check is deliberately
  * conservative: a halt on new discoveries or on claims also stops reserve payouts, because a
- * payout is exactly what those halts exist to prevent.
+ * payout is exactly what those halts exist to prevent. That applies to the mint-scoped rows too: a
+ * reconciliation divergence opens `claims:<mint>`, and a payout from that one mine has to stop even
+ * though the scope-wide row is still closed (spec 65, 78).
  */
 function relevantIds(scope: BreakerScope, mint?: string | null): string[] {
   const ids: string[] = [];
   if (mint && mint.length > 0) ids.push(breakerId(scope, mint));
   ids.push(breakerId(scope, null));
   if (scope === "discovery_reserve") {
+    if (mint && mint.length > 0) {
+      ids.push(breakerId("discoveries", mint), breakerId("claims", mint));
+    }
     ids.push(breakerId("discoveries", null), breakerId("claims", null));
   }
   return ids;
@@ -178,4 +183,3 @@ export async function autoCloseBreaker(env: RuntimeEnv, scope: BreakerScope, rea
   await setBreaker(env, { scope, mint: null, open: false, reason, actor: "risk-cron" });
   return true;
 }
-

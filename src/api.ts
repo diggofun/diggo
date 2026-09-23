@@ -18,9 +18,11 @@ import type {
   MiningReport,
   NotificationsView,
   PlayerProfile,
+  RewardClaimPayout,
   TokenSummary,
 } from "../shared/types";
 import { startAnalytics } from "./analytics";
+import bs58 from "bs58";
 import { DEVICE_HEADER, deviceId } from "./device";
 
 /** An HTTP failure carrying the Worker's status and machine-readable code. */
@@ -42,10 +44,16 @@ export class ApiError extends Error {
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
-  const data = (await response.json().catch(() => null)) as (T & { error?: string; code?: string }) | null;
+  const data = (await response.json().catch(() => null)) as
+    | (T & { error?: string; message?: string; code?: string })
+    | null;
   if (!response.ok) {
+    // Two error shapes are in play: worker/http.ts's apiError() sends { error }, while the reward
+    // and claim endpoints send the more specific { code, message }. Reading both keeps the code
+    // available to callers that branch on it (src/rewardsClaim.ts) instead of collapsing every
+    // failure into "Request failed (409)".
     throw new ApiError(
-      data?.error ?? "Request failed (" + response.status + ")",
+      data?.error ?? data?.message ?? "Request failed (" + response.status + ")",
       response.status,
       data?.code ?? null,
     );
@@ -241,6 +249,13 @@ export interface RewardClaimView {
   claimedAt: number | null;
   txSignature: string | null;
   accounting: MiningAccounting;
+  /**
+   * How the settled reward reaches the wallet (spec 57). Always the user-signed claim_rewards
+   * route: `ready` means the tokens are still in the mine's reserve and the player's own wallet
+   * has to submit the transaction, `txSignature` is set once the backend has verified and
+   * recorded it.
+   */
+  payout?: RewardClaimPayout | null;
 }
 
 export interface RewardClaimChallenge {
@@ -269,6 +284,26 @@ export async function claimReward(
   signature: string,
 ): Promise<{ claimed: boolean; alreadyClaimed: boolean; claim: RewardClaimView | null }> {
   return postJson("/api/rewards/claim", { rewardId, nonce, signature });
+}
+
+/** What the backend says once it has verified a submitted claim_rewards transaction. */
+export interface RewardClaimConfirmation {
+  status: "CONFIRMED";
+  /** True when this exact signature was already recorded; confirming twice is not an error. */
+  idempotent: boolean;
+  claim: RewardClaimView | null;
+}
+
+/**
+ * Reports the transaction the player's own wallet submitted for a settled reward. The backend
+ * verifies it on chain before recording anything, so a landed payout is never lost to a slow RPC
+ * on the client side; reconciliation treats an unreported signature as a halted mint.
+ */
+export async function confirmRewardClaimPayout(
+  rewardId: string,
+  signature: string,
+): Promise<RewardClaimConfirmation> {
+  return postJson("/api/rewards/claim/confirm", { rewardId, signature });
 }
 
 /* Discoveries: the server authors the opportunity and rolls the outcome (spec 55, 56) */
@@ -479,8 +514,62 @@ export interface AdminMetrics {
 
 export interface AdminAbuseView {
   actor: string;
-  accounts: AdminAccount[];
+  /** The enforcement switch as the console should describe it: are HIGH accounts held or watched? */
+  enforcement: AdminEnforcement;
+  accounts: AdminAccountEntry[];
   count: number;
+}
+
+/** The operator's view of the risk enforcement switch (spec 63). */
+export interface AdminEnforcement {
+  /** "enforce" acts on a score-derived decision; "shadow" only records it. */
+  mode: string;
+  /** Per-action overrides, so one action can be enforced while the global mode shadows. */
+  overrides: Record<string, string>;
+  /** How many listed accounts currently differ from what the score asked for. */
+  shadowedAccounts: number;
+}
+
+/** An account row plus the shadow-mode pair: what the score asked for, and whether it was acted on. */
+export interface AdminAccountEntry extends AdminAccount {
+  computedState: string;
+  shadowed: boolean;
+}
+
+/* The appeals queue (spec 66-67). A player appeals a hold; only an admin can decide it. */
+
+export interface AdminAppeal {
+  id: string;
+  wallet: string;
+  message: string;
+  status: string;
+  /** The reward state in force when the player wrote this, for context on the decision. */
+  stateAtSubmission: string;
+  createdAt: number;
+  resolvedAt: number | null;
+  resolvedBy: string | null;
+  resolutionNote: string | null;
+  /** The neutral sentence the player sees; authored by the server, never by this console. */
+  publicMessage: string;
+}
+
+export interface AdminAppealsResponse {
+  actor: string;
+  appeals: AdminAppeal[];
+  count: number;
+  open: number;
+}
+
+/** A signed step-up proof: single use, bound to one action and one exact payload (spec 65). */
+export interface AdminStepUpProof {
+  nonce: string;
+  signature: string;
+}
+
+/** The message an admin wallet has to sign before a mutation is accepted. */
+export interface AdminStepUpChallenge {
+  nonce: string;
+  message: string;
 }
 
 export async function getAdminAbuse(
@@ -496,6 +585,70 @@ export async function getAdminAbuse(
 
 export async function getAdminMetrics(): Promise<AdminMetrics> {
   return getJson<AdminMetrics>("/api/admin/metrics");
+}
+
+/**
+ * The admin surface's own transport. It is the one place that talks to /api/admin/* without the
+ * shared request() helper, because an admin call has to keep the Worker's own { error } message
+ * and status rather than the neutral copy the player-facing calls show.
+ */
+export async function adminRequest<T>(
+  path: string,
+  options: { method?: "GET" | "POST"; body?: unknown } = {},
+): Promise<T> {
+  const headers = new Headers();
+  headers.set(DEVICE_HEADER, deviceId());
+  const hasBody = options.body !== undefined;
+  if (hasBody) headers.set("content-type", "application/json");
+  const response = await fetch(path, {
+    method: options.method ?? (hasBody ? "POST" : "GET"),
+    headers,
+    body: hasBody ? JSON.stringify(options.body) : undefined,
+    credentials: "same-origin",
+  });
+  const data = (await response.json().catch(() => null)) as (T & { error?: string; message?: string }) | null;
+  if (!response.ok) {
+    throw new ApiError(
+      data?.error ?? data?.message ?? "Request failed (" + response.status + ")",
+      response.status,
+    );
+  }
+  if (data === null) throw new ApiError("Malformed server response", response.status);
+  return data;
+}
+
+export async function getAdminAbuseView(limit = 50): Promise<AdminAbuseView> {
+  return adminRequest<AdminAbuseView>("/api/admin/abuse?limit=" + String(limit));
+}
+
+export async function getAdminAppeals(status?: string): Promise<AdminAppealsResponse> {
+  const suffix = status && status !== "ALL" ? "?status=" + encodeURIComponent(status) : "";
+  return adminRequest<AdminAppealsResponse>("/api/admin/appeals" + suffix);
+}
+
+/** Asks for the message this admin wallet has to sign to perform one exact mutation. */
+export function adminStepUpChallenge(
+  action: string,
+  payload: Record<string, unknown>,
+): Promise<AdminStepUpChallenge> {
+  return adminRequest<AdminStepUpChallenge>("/api/admin/stepup", { body: { action, payload } });
+}
+
+/**
+ * One signed admin mutation: ask for the challenge, sign it with the admin wallet, and send the
+ * proof with the payload. `signMessage` is the wallet's own signer, so this module never holds a
+ * key. Every change asks again — the proof is single use and bound to this payload.
+ */
+export async function adminSignedRequest<T>(
+  path: string,
+  action: string,
+  payload: Record<string, unknown>,
+  signMessage: (message: Uint8Array) => Promise<Uint8Array>,
+): Promise<T> {
+  const issued = await adminStepUpChallenge(action, payload);
+  const signature = bs58.encode(await signMessage(new TextEncoder().encode(issued.message)));
+  const stepUp: AdminStepUpProof = { nonce: issued.nonce, signature };
+  return adminRequest<T>(path, { body: { ...payload, stepUp } });
 }
 
 export async function setBreaker(input: {
@@ -521,7 +674,9 @@ export async function setRestriction(input: {
 
 export async function recordTrade(
   mint: string,
-  trade: { signature: string; side: "buy" | "sell"; amount: number },
+  // The amount is the exact decimal string the swap reported (see SwapExecution.recordedAmount): a
+  // raw base-unit figure above 2^53 does not survive a JS Number.
+  trade: { signature: string; side: "buy" | "sell"; amount: string },
 ): Promise<{ priceSol: number; priceUsd: number }> {
   return postJson("/api/tokens/" + encodeURIComponent(mint) + "/trades", trade);
 }

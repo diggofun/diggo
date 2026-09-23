@@ -121,6 +121,31 @@ function headroom(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
+/**
+ * How much of a cap value parked in HELD (granted, under review, not released) may reserve.
+ *
+ * Held value is a real promise, so it has to count against the budget the same way a pending grant
+ * does - otherwise a review queue is a way to spend the day's allowance twice. But an account under
+ * review can hold a large amount of it, and counting it in full lets a held farm commit every cap
+ * and deny ordinary players their own budget. The compromise is a ceiling: held value counts up to
+ * `heldBudgetShareBps` of each cap and no further, so a review backlog can never reserve more than
+ * its configured share of what the caps allow (spec 45, 64).
+ *
+ * Non-finite and negative inputs count as zero, so a corrupt row cannot inflate or deflate usage.
+ */
+export function heldUsageCountedUsd(
+  heldUsd: number,
+  capUsd: number,
+  config: DiggoConfig = DIGGO_CONFIG,
+): number {
+  const held = headroom(heldUsd);
+  const cap = headroom(capUsd);
+  if (held <= 0 || cap <= 0) return 0;
+  const share = config.discovery.heldBudgetShareBps / 10_000;
+  if (!Number.isFinite(share) || share <= 0) return 0;
+  return Math.min(held, cap * Math.min(1, share));
+}
+
 export function discoveryBudgetRemaining(
   usage: DiscoveryUsage,
   config: DiggoConfig = DIGGO_CONFIG,
@@ -175,4 +200,3 @@ export function discoveryBudgetCheck(
   }
   return { allowed: true, reason: null, maxAllowedUsd, headroom: caps };
 }
-

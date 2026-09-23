@@ -1,0 +1,150 @@
+name: CI
+
+# Two independent gates:
+#   worker  - the Cloudflare Worker + React client (types, typecheck, lint, tests, build, dry-run deploy)
+#   anchor  - the Anchor program (cargo test, then a real SBF build)
+#
+# The Rust job is the slow one, so both run in parallel and neither waits on the other.
+#
+# Every action is pinned to a commit SHA, never a mutable tag, and every download this job performs
+# is either a pinned release verified against a checksum in this file or a git checkout at a pinned
+# commit. Tags can be moved, and a `curl | sh` installer runs whatever the server returns today, so
+# neither belongs in a job that builds the program real funds settle against.
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  worker:
+    name: Worker and client
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Generates worker-configuration.d.ts from wrangler.jsonc. The file is git-ignored, so this
+      # step exists to prove the committed binding config is valid, not to compare output.
+      - name: Generate binding types
+        run: npm run types
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build client
+        run: npm run build
+
+      # Bundles the Worker for the default (production) environment. A dry run needs no
+      # credentials: it validates the config, resolves every binding and bundles the entry point.
+      - name: Wrangler dry-run (production)
+        run: npx wrangler deploy --dry-run
+
+      - name: Wrangler dry-run (staging)
+        run: npx wrangler deploy --dry-run --env staging
+
+  anchor:
+    name: Anchor program
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # Pinned to the toolchain this repo was built and tested with locally (see Anchor.toml /
+      # Cargo.lock): anchor_version = 1.2.0, Solana/Agave 4.1.2, Rust 1.98.1.
+      ANCHOR_VERSION: "1.2.0"
+      SOLANA_VERSION: "4.1.2"
+      RUST_TOOLCHAIN: "1.98.1"
+      # avm is installed from source, so the source is pinned: the commit the anchor v1.2.0 tag
+      # points at (https://github.com/coral-xyz/anchor, now redirected to otter-sec/anchor).
+      AVM_REV: "84a63f9f7112b23581816436fbcf3f6c515779f9"
+      # sha256 of solana-release-x86_64-unknown-linux-gnu.tar.bz2 for SOLANA_VERSION above, taken
+      # from the published release. These are the binaries `anchor build` compiles against.
+      SOLANA_RELEASE_SHA256: "5991d027a686eb419a709a479178b33eb83501e8a2bfbf599a81a286bfcbf770"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      # Caches ~/.cargo and target/ keyed on Cargo.lock, so a source-only change reuses the
+      # dependency build and only recompiles the program.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: anchor-${{ env.RUST_TOOLCHAIN }}
+
+      - name: Cache Solana CLI, avm and SBF platform tools
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.local/share/solana
+            ~/.avm
+            ~/.cache/solana
+          key: solana-${{ env.SOLANA_VERSION }}-anchor-${{ env.ANCHOR_VERSION }}
+
+      # The documented installer pipes curl into sh. This downloads the pinned release itself,
+      # checks it against the sha256 above, and only then extracts it.
+      - name: Install Solana CLI
+        run: |
+          set -euo pipefail
+          install_root="$HOME/.local/share/solana/install"
+          SOLANA_BIN="$install_root/active_release/bin"
+          if [ ! -x "$SOLANA_BIN/solana" ]; then
+            archive="$RUNNER_TEMP/solana-release-${SOLANA_VERSION}.tar.bz2"
+            curl -sSfL --proto '=https' --tlsv1.2 -o "$archive" "https://release.anza.xyz/v${SOLANA_VERSION}/solana-release-x86_64-unknown-linux-gnu.tar.bz2"
+            echo "${SOLANA_RELEASE_SHA256}  ${archive}" | sha256sum --check --strict
+            rm -rf "${RUNNER_TEMP:?}/solana-extract"
+            mkdir -p "$RUNNER_TEMP/solana-extract" "$install_root/releases"
+            tar -xjf "$archive" -C "$RUNNER_TEMP/solana-extract"
+            rm -rf "$install_root/releases/$SOLANA_VERSION"
+            mv "$RUNNER_TEMP/solana-extract/solana-release" "$install_root/releases/$SOLANA_VERSION"
+            ln -sfn "$install_root/releases/$SOLANA_VERSION" "$install_root/active_release"
+          fi
+          echo "$SOLANA_BIN" >> "$GITHUB_PATH"
+
+      - name: Install Anchor CLI via avm
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.avm/bin:$PATH"
+          if ! command -v anchor >/dev/null 2>&1; then
+            cargo install --git https://github.com/coral-xyz/anchor avm --locked --rev "$AVM_REV" --force
+            avm install "${ANCHOR_VERSION}"
+          fi
+          avm use "${ANCHOR_VERSION}"
+          echo "$HOME/.avm/bin" >> "$GITHUB_PATH"
+
+      - name: Toolchain versions
+        run: |
+          solana --version
+          anchor --version
+          cargo --version
+
+      - name: cargo test
+        run: cargo test --workspace --locked
+
+      - name: anchor build
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/solana"
+          if [ ! -f "$HOME/.config/solana/id.json" ]; then
+            solana-keygen new --no-bip39-passphrase --silent --force -o "$HOME/.config/solana/id.json"
+          fi
+          anchor build

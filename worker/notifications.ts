@@ -10,17 +10,25 @@
  * nudged to chase rewards (spec 53, 63).
  */
 import type { TokenStatus } from "../shared/types";
-import { NOTIFICATION_THRESHOLDS, computeNotifications, type NotificationKind } from "../shared/social";
+import {
+  NOTIFICATION_THRESHOLDS,
+  computeNotifications,
+  type GeneratedNotification,
+  type NotificationKind,
+} from "../shared/social";
 import { sessionWallet } from "./auth";
 import { recomputeSeasonalPoints, syncAchievements, syncCosmeticUnlocks } from "./cosmetics";
 import type { RuntimeEnv } from "./env";
 import { apiError, json } from "./http";
 import type { PlayerRow } from "./player";
+import { deliverNotifications, deliveryConfigured } from "./push";
 
 const NOTIFICATION_LIST_LIMIT = 50;
 const READ_BATCH_LIMIT = 100;
 const SWEEP_WALLET_LIMIT = 200;
 const SWEEP_ACTIVE_WINDOW_SECONDS = 30 * 86_400;
+/** Most alerts one generation pass hands to a push channel; anything older waits for the next one. */
+const MAX_DELIVERY_BATCH = 5;
 
 interface MineRow {
   mint: string;
@@ -43,6 +51,13 @@ interface NotificationRow {
   dedupe_key: string;
   created_at: number;
   read_at: number | null;
+}
+
+/** The columns delivery needs: what was generated, and which screen it belongs to. */
+interface DeliveryRow {
+  id: number;
+  kind: string;
+  payload: string;
 }
 
 /** Everything computeNotifications needs about one wallet. */
@@ -106,7 +121,49 @@ export async function generateNotifications(
     ),
   );
   const inserted = results.reduce((total, result) => total + (result.meta?.changes ?? 0), 0);
+  await deliverGenerated(env, wallet, generated, now);
   return { kinds: generated.map((entry) => entry.kind), inserted };
+}
+
+/**
+ * Hands the just-generated notifications to the push and Telegram channels (worker/push.ts).
+ *
+ * Generation stays exactly as it was: this runs after the INSERT OR IGNORE batch and only ever
+ * selects rows that have no delivery record yet, so a wallet with no alerts switched on costs one
+ * boolean check, and a wallet that re-opens the app does not re-push what it already received.
+ * Delivery failure is logged and swallowed - a push service having a bad day must never fail the
+ * request or the cron tick that asked for the notification.
+ */
+async function deliverGenerated(
+  env: RuntimeEnv,
+  wallet: string,
+  generated: readonly GeneratedNotification[],
+  now: number,
+): Promise<void> {
+  if (!deliveryConfigured(env)) return;
+  const placeholders = generated.map((_entry, index) => "?" + (index + 2)).join(", ");
+  const rows = await env.DB.prepare(
+    "SELECT n.id, n.kind, n.payload FROM notifications n WHERE n.wallet = ?1" +
+      " AND n.dedupe_key IN (" + placeholders + ")" +
+      " AND NOT EXISTS (SELECT 1 FROM push_deliveries d WHERE d.notification_id = n.id)" +
+      " ORDER BY n.id DESC LIMIT ?" + (generated.length + 2),
+  )
+    .bind(wallet, ...generated.map((entry) => entry.dedupeKey), MAX_DELIVERY_BATCH)
+    .all<DeliveryRow>();
+  if (rows.results.length === 0) return;
+  try {
+    const summary = await deliverNotifications(
+      env,
+      wallet,
+      rows.results.map((row) => ({ id: row.id, kind: row.kind, payload: parsePayload(row.payload) })),
+      now,
+    );
+    if (summary.attempted > 0) {
+      console.log(JSON.stringify({ event: "push.delivered", wallet, ...summary }));
+    }
+  } catch (error) {
+    console.error(JSON.stringify({ event: "push.delivery_failed", wallet, error: String(error) }));
+  }
 }
 
 function parsePayload(raw: string): unknown {

@@ -1,57 +1,9 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
-import type { TransactionSigner } from "@solana/kit";
-import {
-  useConnect,
-  useConnectedWallet,
-  useDisconnect,
-  useSignMessage,
-  useWallets,
-} from "@solana/kit-plugin-wallet/react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import bs58 from "bs58";
 import "./walletConnect";
-import { useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect as useAppKitDisconnect } from "@reown/appkit/react";
-import type { Provider as WalletConnectSolanaProvider } from "@reown/appkit-adapter-solana/react";
-import {
-  ArrowDownRight,
-  ArrowUpRight,
-  Check,
-  ChevronRight,
-  Clock3,
-  Coins,
-  Copy,
-  Flame,
-  Gauge,
-  Gem,
-  Hammer,
-  HardHat,
-  Home,
-  LayoutDashboard,
-  LockKeyhole,
-  Pickaxe,
-  Plus,
-  Radio,
-  Search,
-  ShieldCheck,
-  Sparkles,
-  Trophy,
-  TrendingUp,
-  Users,
-  Wallet,
-  X,
-  Zap,
-} from "lucide-react";
+import { ArrowUpRight, Hammer, Plus } from "lucide-react";
 
-import type {
-  DiscoveryOpportunity,
-  DiscoveryRecord,
-  MarketTrade,
-  MineInfo,
-  MiningReport,
-  PlayerProfile,
-  TokenSummary,
-} from "../shared/types";
-import { GAMEPLAY_DEFAULTS } from "../shared/economics";
+import type { DiscoveryOpportunity, DiscoveryRecord, MineInfo, MiningReport, PlayerProfile, TokenSummary } from "../shared/types";
 import {
   activateMine as activateMineRequest,
   claimDiscovery as claimDiscoveryRequest,
@@ -70,56 +22,78 @@ import {
   requestDiscoveryOpportunity,
   getWalletSession,
   getToken,
-  recordTrade,
-  registerLaunchedToken,
   switchMine as switchMineRequest,
   upgradeCrew,
-  uploadTokenImage,
   verifyWallet,
+  ApiError,
   type RewardClaimView,
   type DiggoConfig,
 } from "./api";
 import { track } from "./analytics";
-import { compact, countdown, money, shortAddress } from "./format";
+import { TURNSTILE_SITE_KEY } from "./constants";
 import { NEUTRAL_VERIFICATION_TEXT, runGated, VerificationRequiredError } from "./verification";
-import { ApiError } from "./api";
 import { CREW_COMPONENT_LABELS, CREW_COMPONENTS } from "./crewLabels";
-import { AdminScreen } from "./components/AdminScreen";
-import { CosmeticsScreen } from "./components/CosmeticsScreen";
-import { CrewScreen } from "./components/CrewScreen";
-import { DashboardPanel } from "./components/DashboardPanel";
-import { DiscoveriesPanel } from "./components/DiscoveriesPanel";
-import { EconomyPanels } from "./components/EconomyPanels";
-import { LeaderboardsScreen } from "./components/LeaderboardsScreen";
-import { MineInfoPanel } from "./components/MineInfoPanel";
-import { MiningReportModal } from "./components/MiningReportModal";
-import { NotificationsBell } from "./components/NotificationsBell";
-import { SwitchMineModal } from "./components/SwitchMineModal";
-import { TokenOrb } from "./components/TokenOrb";
-import { TurnstileBox } from "./components/TurnstileBox";
+import { useDiggoWallet } from "./wallet";
+import { clearEquippedCosmetics, loadEquippedCosmetics } from "./cosmetics";
+import { AppHeader, type PageId } from "./components/AppHeader";
+import { ExploreBoard, FinalCta, HomeHero, HowItWorks, SelectedMine, SiteFooter, Ticker } from "./components/HomeSections";
+import { EmptyState, ErrorState, LoadingScreen, RouteFallback } from "./components/StatusViews";
 import { useVerificationGate } from "./components/VerificationGate";
-import { solanaClient } from "./solana";
-import {
-  address,
-  assignPowerOnChain,
-  bondingCurveSpotPriceLamports,
-  buyOnChain,
-  claimRewardsOnChain,
-  fetchMineAndMarket,
-  fetchProtocolConfig,
-  fetchSolBalance,
-  fetchTokenBalance,
-  launchCoinOnChain,
-  quoteBuy,
-  quoteSell,
-  sellOnChain,
-  type DiggoWallet,
-} from "./solanaProgram";
-import type { DecodedLaunchMarket, DecodedMine } from "../shared/program";
+import { ConsentBanner } from "./components/ConsentBanner";
+import { PushToggle } from "./components/PushToggle";
+import { isLegalPath } from "./components/legal/routes";
 
-const TURNSTILE_SITE_KEY = "0x4AAAAAAEzwvf6nnwXvXdMc";
+/*
+ * Every screen below the landing page is its own chunk: the swap terminal (lightweight-charts and
+ * the Solana program client), the launch builder, the game screens and the admin tools only
+ * download on the route that renders them.
+ */
+const AdminScreen = lazy(() => import("./components/AdminScreen").then((module) => ({ default: module.AdminScreen })));
+const CosmeticsScreen = lazy(() => import("./components/CosmeticsScreen").then((module) => ({ default: module.CosmeticsScreen })));
+const CrewScreen = lazy(() => import("./components/CrewScreen").then((module) => ({ default: module.CrewScreen })));
+const DashboardPanel = lazy(() => import("./components/DashboardPanel").then((module) => ({ default: module.DashboardPanel })));
+const DiscoveriesPanel = lazy(() => import("./components/DiscoveriesPanel").then((module) => ({ default: module.DiscoveriesPanel })));
+const EconomyPanels = lazy(() => import("./components/EconomyPanels").then((module) => ({ default: module.EconomyPanels })));
+const LaunchModal = lazy(() => import("./components/LaunchModal").then((module) => ({ default: module.LaunchModal })));
+const LeaderboardsScreen = lazy(() => import("./components/LeaderboardsScreen").then((module) => ({ default: module.LeaderboardsScreen })));
+const MineInfoPanel = lazy(() => import("./components/MineInfoPanel").then((module) => ({ default: module.MineInfoPanel })));
+const MiningReportModal = lazy(() => import("./components/MiningReportModal").then((module) => ({ default: module.MiningReportModal })));
+const SwapPanel = lazy(() => import("./components/SwapPanel").then((module) => ({ default: module.SwapPanel })));
+const SwitchMineModal = lazy(() => import("./components/SwitchMineModal").then((module) => ({ default: module.SwitchMineModal })));
+/** Terms, Privacy, Risk and Cookies: their own chunk, because most visits never open one. */
+const LegalRoute = lazy(() => import("./components/legal/LegalPage").then((module) => ({ default: module.LegalRoute })));
+/** Design review gallery; only exists in the Vite dev server and is dropped from production builds. */
+const UiGallery = import.meta.env.DEV ? lazy(() => import("./dev/UiGallery").then((module) => ({ default: module.UiGallery }))) : null;
 
 type CrewComponentKey = (typeof CREW_COMPONENTS)[number];
+
+const ROUTES: Record<string, PageId> = {
+  "/": "home",
+  "/mine": "mine",
+  "/explore": "explore",
+  "/trade": "trade",
+  "/leaderboards": "leaderboards",
+  "/mines": "mines",
+  "/create": "create",
+  "/crew": "crew",
+  "/discoveries": "discoveries",
+  "/cosmetics": "cosmetics",
+  "/admin": "admin",
+  ...(import.meta.env.DEV ? { "/__ui": "ui" as const } : {}),
+};
+
+const PAGE_TITLES: Partial<Record<PageId, string>> = {
+  mine: "Mine",
+  crew: "Crew",
+  discoveries: "Discoveries",
+  explore: "Explore mines",
+  trade: "Trade",
+  leaderboards: "Leaderboards",
+  mines: "Mine details",
+  cosmetics: "Cosmetics",
+  create: "Create a coin",
+  admin: "Admin",
+};
 
 /**
  * The one place a failure becomes user copy. A verification prompt or a second
@@ -130,584 +104,6 @@ function messageOf(error: unknown): string {
   if (error instanceof VerificationRequiredError) return NEUTRAL_VERIFICATION_TEXT;
   if (error instanceof ApiError && error.verificationRequired) return NEUTRAL_VERIFICATION_TEXT;
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
-}
-
-export interface ConnectedDiggoWallet {
-  kind: "kit" | "walletconnect";
-  /** Base58 wallet address — always a plain string, unlike @solana/kit's branded Address. */
-  address: string;
-  /** Pass this to src/solanaProgram.ts on-chain actions (buyOnChain, assignPowerOnChain, …). */
-  wallet: DiggoWallet;
-  signMessage(message: Uint8Array): Promise<Uint8Array>;
-}
-
-/**
- * Unifies the two ways a player can connect: a Wallet Standard extension (desktop, most mobile
- * in-app browsers — see src/solana.ts) or a WalletConnect-paired wallet via QR code (see
- * src/walletConnect.ts, for browsers with no extension to detect at all). Every other component
- * in this file talks to this hook instead of either underlying SDK directly, so on-chain actions
- * and message-signing work identically regardless of which path the player used to connect.
- */
-function useDiggoWallet(): ConnectedDiggoWallet | null {
-  const standard = useConnectedWallet(solanaClient);
-  const standardSignMessage = useSignMessage(solanaClient);
-  const wcAccount = useAppKitAccount({ namespace: "solana" });
-  const { walletProvider: wcProvider } = useAppKitProvider<WalletConnectSolanaProvider>("solana");
-
-  if (standard?.signer) {
-    return {
-      kind: "kit",
-      address: String(standard.account.address),
-      wallet: standard.signer,
-      signMessage: (message) => standardSignMessage.dispatchAsync(message),
-    };
-  }
-  if (wcAccount.isConnected && wcAccount.address && wcProvider) {
-    const wcAddress = wcAccount.address;
-    return {
-      kind: "walletconnect",
-      address: wcAddress,
-      wallet: { kind: "walletconnect", address: address(wcAddress), provider: wcProvider },
-      signMessage: (message) => wcProvider.signMessage(message),
-    };
-  }
-  return null;
-}
-
-function BrandMark() {
-  return (
-    <a className="brand" href="/" aria-label="Diggo.fun home">
-      <span className="brand-mark"><Pickaxe size={19} strokeWidth={2.8} /></span>
-      <span>DIGGO<span className="brand-dot">.FUN</span></span>
-    </a>
-  );
-}
-
-function WalletControl({
-  session,
-  onAuthenticated,
-}: {
-  session: string | null;
-  onAuthenticated(wallet: string): void;
-}) {
-  const wallets = useWallets(solanaClient);
-  const connected = useDiggoWallet();
-  const connect = useConnect(solanaClient);
-  const standardDisconnect = useDisconnect(solanaClient);
-  const { disconnect: wcDisconnect } = useAppKitDisconnect();
-  const { open: openWalletConnect } = useAppKit();
-  const [open, setOpen] = useState(false);
-  const [signingIn, setSigningIn] = useState(false);
-
-  async function signIn(): Promise<void> {
-    if (!connected) return;
-    setSigningIn(true);
-    try {
-      const challenge = await getChallenge(connected.address);
-      const signature = await connected.signMessage(new TextEncoder().encode(challenge.message));
-      const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature));
-      onAuthenticated(verified.wallet);
-      track("wallet_signed_in", { network: "solana-devnet" });
-    } catch {
-      track("wallet_sign_in_failed", { network: "solana-devnet" });
-    } finally {
-      setSigningIn(false);
-    }
-  }
-
-  async function disconnectWallet() {
-    if (connected?.kind === "walletconnect") await wcDisconnect({ namespace: "solana" });
-    else standardDisconnect.dispatch();
-  }
-
-  if (connected) {
-    const isAuthenticated = session === connected.address;
-    return (
-      <div className="wallet-control signed-wallet">
-        <button className="wallet-button" disabled={signingIn} onClick={() => void signIn()} title="Sign in with wallet">
-          {signingIn ? "Signing…" : isAuthenticated ? shortAddress(connected.address) : "Sign in"}
-        </button>
-        <button className="wallet-disconnect" onClick={() => void disconnectWallet()} title="Disconnect wallet (your secure session stays active)">×</button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="wallet-control">
-      <button className="wallet-button" onClick={() => setOpen((value) => !value)}>Connect wallet</button>
-      {open && (
-        <div className="wallet-menu">
-          <strong>Choose a Wallet Standard wallet</strong>
-          {wallets.length > 0 ? wallets.map((wallet) => (
-            <button key={wallet.name} disabled={connect.isRunning} onClick={() => { connect.dispatch(wallet); setOpen(false); track("wallet_connected", { network: "solana-devnet" }); }}>
-              {wallet.icon && <img src={wallet.icon} alt="" />} {wallet.name}
-            </button>
-          )) : <p>No compatible browser wallet found on this device.</p>}
-          <button
-            type="button"
-            className="wallet-walletconnect-button"
-            onClick={() => { setOpen(false); void openWalletConnect({ view: "Connect", namespace: "solana" }); track("walletconnect_opened", { network: "solana-devnet" }); }}
-          >
-            <Wallet size={16} /> Connect Wallet
-          </button>
-          <small>WalletConnect covers phones and any wallet not detected above.</small>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TokenCard({ token, onSelect }: { token: TokenSummary; onSelect(token: TokenSummary): void }) {
-  const reservePercent = Math.round((token.reserveRemaining / token.reserveTotal) * 100);
-  return (
-    <article className="token-card" onClick={() => onSelect(token)}>
-      <div className="token-card-head">
-        <TokenOrb symbol={token.symbol} imageUrl={token.imageUrl} />
-        <div className="token-title">
-          <h3>{token.name}</h3>
-          <span>${token.symbol}</span>
-        </div>
-        <span className={`change ${token.change24h >= 0 ? "positive" : "negative"}`}>
-          {token.change24h >= 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
-          {Math.abs(token.change24h)}%
-        </span>
-      </div>
-      <div className="card-price">
-        <strong>{money(token.priceUsd)}</strong>
-        <span>{compact(token.marketCapUsd)} mcap</span>
-      </div>
-      <div className="mini-chart" aria-hidden="true">
-        <svg viewBox="0 0 280 72" preserveAspectRatio="none">
-          <path className="chart-fill" d="M0,66 C28,58 34,31 62,42 C90,53 105,18 133,29 C161,41 168,12 196,24 C225,37 245,11 280,6 L280,72 L0,72Z" />
-          <path className="chart-line" d="M0,66 C28,58 34,31 62,42 C90,53 105,18 133,29 C161,41 168,12 196,24 C225,37 245,11 280,6" />
-        </svg>
-      </div>
-      <div className="reserve-row">
-        <span><Pickaxe size={13} /> unmined reserve</span>
-        <strong>{reservePercent}%</strong>
-      </div>
-      <div className="progress"><i style={{ width: `${reservePercent}%` }} /></div>
-      <div className="card-foot">
-        <span><Gauge size={13} /> {compact(token.networkPower)} power</span>
-        <button type="button">Mine <ChevronRight size={14} /></button>
-      </div>
-    </article>
-  );
-}
-
-function CreateModal({
-  onClose,
-  session,
-  onAuthenticated,
-  config,
-  onLaunched,
-}: {
-  onClose(): void;
-  session: string | null;
-  onAuthenticated(wallet: string): void;
-  config: DiggoConfig;
-  onLaunched(token: TokenSummary): void;
-}) {
-  const connected = useDiggoWallet();
-  const [name, setName] = useState("");
-  const [symbol, setSymbol] = useState("");
-  const [description, setDescription] = useState("");
-  const [initialBuy, setInitialBuy] = useState("0");
-  const [file, setFile] = useState<File | null>(null);
-  const [turnstileToken, setTurnstileToken] = useState("");
-  const [state, setState] = useState<"idle" | "working" | "done">("idle");
-  const [message, setMessage] = useState("");
-  const [recoveryMint, setRecoveryMint] = useState("");
-  const [recoveryMessage, setRecoveryMessage] = useState("");
-  const [recovering, setRecovering] = useState(false);
-  const onTurnstileToken = useCallback((token: string) => setTurnstileToken(token), []);
-
-  async function authenticate(): Promise<void> {
-    if (!connected) throw new Error("Connect a wallet that supports message signing");
-    const challenge = await getChallenge(connected.address);
-    const signature = await connected.signMessage(new TextEncoder().encode(challenge.message));
-    const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature));
-    onAuthenticated(verified.wallet);
-    track("wallet_signed_in", { network: "solana-devnet" });
-  }
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!connected) {
-      setMessage("Connect a wallet that can sign transactions before launching.");
-      return;
-    }
-    setState("working");
-    try {
-      if (session !== connected.address) await authenticate();
-      setMessage(file ? "Uploading artwork…" : "Preparing your launch…");
-      const imageUrl = file ? await uploadTokenImage(file) : undefined;
-
-      setMessage("Reading protocol configuration from chain…");
-      const programAddress = address(config.programId);
-      const protocol = await fetchProtocolConfig(programAddress);
-      if (!protocol) throw new Error("Protocol is not initialized on-chain yet");
-
-      setMessage("Waiting for your wallet signature to launch on-chain…");
-      const launch = await launchCoinOnChain(
-        programAddress,
-        connected.wallet,
-        protocol.treasury,
-        protocol.reserveBps,
-        protocol.discoveryReserveBps,
-        {
-          name,
-          symbol: symbol.toUpperCase(),
-          decimals: 6,
-          totalSupplyWhole: 1_000_000_000,
-          virtualSolReserveSol: 20,
-          graduationTargetSol: 5,
-          blockIntervalSeconds: 300,
-          epochLengthSeconds: 604_800,
-          reductionBps: 2_500,
-          initialBlockRewardWhole: 10_000,
-          minimumRewardWhole: 1,
-          initialBuySol: Math.max(0, Number(initialBuy) || 0),
-        },
-      );
-      track("launch_submitted", { has_artwork: Boolean(file), network: "solana-devnet" });
-
-      setMessage("Registering your launch…");
-      const token = await registerLaunchedToken(launch.mint, { description, imageUrl });
-      onLaunched(token);
-      setMessage(`Live on-chain at ${launch.mint.slice(0, 4)}…${launch.mint.slice(-4)}. Signature ${launch.signature.slice(0, 8)}…`);
-      setState("done");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Launch failed");
-      setState("idle");
-    }
-  }
-
-  async function recoverLaunch(event: FormEvent) {
-    event.preventDefault();
-    if (!connected) {
-      setRecoveryMessage("Connect the creator wallet before recovering this launch.");
-      return;
-    }
-    setRecovering(true);
-    setRecoveryMessage("");
-    try {
-      if (session !== connected.address) await authenticate();
-      const token = await registerLaunchedToken(recoveryMint.trim(), {});
-      onLaunched(token);
-      setRecoveryMessage(`${token.symbol} is now indexed and live in Diggo.`);
-      track("launch_recovered", { network: "solana-devnet" });
-    } catch (error) {
-      setRecoveryMessage(error instanceof Error ? error.message : "Could not recover this launch");
-    } finally {
-      setRecovering(false);
-    }
-  }
-
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="launch-modal" role="dialog" aria-modal="true" aria-labelledby="launch-title" onMouseDown={(event) => event.stopPropagation()}>
-        <button className="modal-close" onClick={onClose} aria-label="Close"><X size={20} /></button>
-        <div className="eyebrow"><Sparkles size={14} /> Launch on Diggo</div>
-        <h2 id="launch-title">Put your meme<br />on the map.</h2>
-        <p className="modal-intro">Every Diggo mint gets fixed supply and a program-locked 5% mining reserve plus 0.5% discovery reserve. This creates a real on-chain transaction from your wallet — Diggo never holds user funds.</p>
-        {state === "done" ? (
-          <div className="success-panel">
-            <span><Check size={28} /></span>
-            <h3>Your coin is live.</h3>
-            <p>{message}</p>
-            <button className="primary-button" onClick={onClose}>Back to the mines</button>
-          </div>
-        ) : (
-          <>
-          <form onSubmit={submit}>
-            <div className="form-grid">
-              <label>Name<input required maxLength={32} value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Deep Dog" /></label>
-              <label>Ticker<input required maxLength={10} value={symbol} onChange={(event) => setSymbol(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))} placeholder="DIG" /></label>
-            </div>
-            <label>Description<textarea required maxLength={280} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What is this coin digging for?" /></label>
-            <label>Initial creator buy (SOL)<input type="number" min="0" step="0.001" value={initialBuy} onChange={(event) => setInitialBuy(event.target.value)} placeholder="0.00" /><i>Optional. Executes atomically with launch and becomes real bonding-curve liquidity.</i></label>
-            <label className="file-input">
-              <span>Token artwork</span>
-              <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
-              <i>{file ? file.name : "PNG, JPG or WEBP · max 2 MB"}</i>
-            </label>
-            <div className="launch-allocation">
-              <span>94.5% user-held launch supply</span><span>5% locked mining reserve</span><span>0.5% locked discovery reserve</span><span>0% platform custody</span>
-            </div>
-            <TurnstileBox siteKey={TURNSTILE_SITE_KEY} onToken={onTurnstileToken} />
-            {message && <p className="form-message">{message}</p>}
-            <button className="primary-button launch-submit" disabled={state === "working" || !turnstileToken}>
-              {state === "working" ? "Launching on-chain…" : "Launch on-chain"} <Pickaxe size={17} />
-            </button>
-          </form>
-          <details className="recover-launch">
-            <summary>Already signed a launch but it did not appear?</summary>
-            <p>Paste its mint address. Diggo verifies that the connected wallet is the on-chain creator before indexing it.</p>
-            <form onSubmit={recoverLaunch}>
-              <input required value={recoveryMint} onChange={(event) => setRecoveryMint(event.target.value)} placeholder="Solana mint address" />
-              <button className="outline-button" disabled={recovering}>{recovering ? "Verifying…" : "Recover on-chain launch"}</button>
-            </form>
-            {recoveryMessage && <p className="form-message">{recoveryMessage}</p>}
-          </details>
-          </>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function formatTokenAmount(raw: bigint, decimals: number): string {
-  const whole = Number(raw) / 10 ** decimals;
-  return whole.toLocaleString(undefined, { maximumFractionDigits: whole < 1 ? 6 : 2 });
-}
-
-function DiggoSwapPanel({
-  token,
-  programAddress,
-  signer,
-  onTraded,
-}: {
-  token: TokenSummary;
-  programAddress: string;
-  signer: DiggoWallet | null;
-  onTraded(): void;
-}) {
-  const walletAddress = signer?.address ?? null;
-  const chartContainerRef = useRef<HTMLDivElement | null>(null);
-  const chartRef = useRef<IChartApi | null>(null);
-  const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
-  const [tradeCount, setTradeCount] = useState(0);
-  const [recentTrades, setRecentTrades] = useState<MarketTrade[]>([]);
-  const [lastSignature, setLastSignature] = useState("");
-  const [side, setSide] = useState<"buy" | "sell">("buy");
-  const [amount, setAmount] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [solBalance, setSolBalance] = useState<bigint | null>(null);
-  const [tokenBalance, setTokenBalance] = useState<bigint | null>(null);
-  const [chainState, setChainState] = useState<{ mine: DecodedMine; market: DecodedLaunchMarket } | null>(null);
-
-  // chart setup — created once per mount, data re-seeded whenever the mint changes
-  useEffect(() => {
-    if (!chartContainerRef.current) return;
-    const chart = createChart(chartContainerRef.current, {
-      height: 260,
-      layout: { background: { color: "transparent" }, textColor: "#79796e", fontFamily: "monospace", fontSize: 10 },
-      grid: { vertLines: { visible: false }, horzLines: { color: "rgba(23,24,19,.08)" } },
-      rightPriceScale: { borderVisible: false },
-      timeScale: { borderVisible: false, timeVisible: true, secondsVisible: true },
-      crosshair: { horzLine: { visible: false }, vertLine: { visible: false } },
-    });
-    const series = chart.addAreaSeries({
-      lineColor: "#7657ff",
-      topColor: "rgba(118,87,255,.28)",
-      bottomColor: "rgba(118,87,255,.02)",
-      lineWidth: 2,
-      priceFormat: { type: "price", precision: 9, minMove: 0.000000001 },
-    });
-    chartRef.current = chart;
-    seriesRef.current = series;
-    const resize = () => chart.applyOptions({ width: chartContainerRef.current?.clientWidth ?? 0 });
-    resize();
-    window.addEventListener("resize", resize);
-    return () => {
-      window.removeEventListener("resize", resize);
-      chart.remove();
-      chartRef.current = null;
-      seriesRef.current = null;
-    };
-  }, []);
-
-  // live trades over WebSocket, seeded from the snapshot the Worker/Durable Object already has
-  useEffect(() => {
-    setTradeCount(0);
-    setRecentTrades([]);
-    setChainState(null);
-    const protocol = "wss:";
-    const host = window.location.host;
-    const proto = window.location.protocol === "https:" ? protocol : "ws:";
-    const ws = new WebSocket(`${proto}//${host}/api/tokens/${token.mint}/live`);
-    ws.onmessage = (event) => {
-      const payload = JSON.parse(event.data) as
-        | { type: "snapshot"; snapshot: { recentTrades: MarketTrade[] } }
-        | { type: "trade"; trade: MarketTrade };
-      const series = seriesRef.current;
-      if (!series) return;
-      if (payload.type === "snapshot") {
-        const points = payload.snapshot.recentTrades
-          .filter((t) => t.priceSol > 0)
-          .slice()
-          .reverse()
-          .map((t) => ({ time: t.timestamp as UTCTimestamp, value: t.priceSol }));
-        if (points.length > 0) {
-          series.setData(points);
-          chartRef.current?.timeScale().fitContent();
-        }
-        setTradeCount(points.length);
-        setRecentTrades(payload.snapshot.recentTrades.slice(0, 12));
-      } else if (payload.type === "trade" && payload.trade.priceSol > 0) {
-        series.update({ time: payload.trade.timestamp as UTCTimestamp, value: payload.trade.priceSol });
-        setTradeCount((count) => count + 1);
-        setRecentTrades((current) => [payload.trade, ...current.filter((trade) => trade.signature !== payload.trade.signature)].slice(0, 12));
-      }
-    };
-    return () => ws.close();
-  }, [token.mint]);
-
-  const refreshChainState = useCallback(async () => {
-    try {
-      const result = await fetchMineAndMarket(address(programAddress), address(token.mint));
-      setChainState(result);
-    } catch {
-      setChainState(null);
-    }
-  }, [programAddress, token.mint]);
-
-  useEffect(() => {
-    void refreshChainState();
-  }, [refreshChainState]);
-
-  useEffect(() => {
-    if (!walletAddress) {
-      setSolBalance(null);
-      setTokenBalance(null);
-      return;
-    }
-    const owner = address(walletAddress);
-    fetchSolBalance(owner).then(setSolBalance).catch(() => setSolBalance(null));
-    fetchTokenBalance(owner, address(token.mint)).then(setTokenBalance).catch(() => setTokenBalance(null));
-  }, [walletAddress, token.mint, tradeCount]);
-
-  const decimals = token.decimals;
-  const parsedAmount = Number(amount);
-  const quoteOut = useMemo(() => {
-    if (!chainState || !Number.isFinite(parsedAmount) || parsedAmount <= 0) return null;
-    if (side === "buy") {
-      const lamportsIn = BigInt(Math.round(parsedAmount * 1_000_000_000));
-      return quoteBuy(chainState.market, lamportsIn);
-    }
-    const rawIn = BigInt(Math.round(parsedAmount * 10 ** decimals));
-    return quoteSell(chainState.market, rawIn);
-  }, [chainState, parsedAmount, side, decimals]);
-
-  async function submitTrade(event: FormEvent) {
-    event.preventDefault();
-    setError("");
-    if (!signer) {
-      setError("Connect a wallet that can sign transactions first.");
-      return;
-    }
-    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
-      setError("Enter an amount.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const programAddr = address(programAddress);
-      const mint = address(token.mint);
-      let result: { signature: string };
-      let recordedAmount: number;
-      if (side === "buy") {
-        const minOut = quoteOut !== null ? (quoteOut * 98n) / 100n : 0n;
-        result = await buyOnChain(programAddr, signer, mint, parsedAmount, minOut);
-        recordedAmount = quoteOut !== null ? Number(quoteOut) / 10 ** decimals : 0;
-      } else {
-        const rawIn = BigInt(Math.round(parsedAmount * 10 ** decimals));
-        const minOutLamports = quoteOut !== null ? (quoteOut * 98n) / 100n : 0n;
-        result = await sellOnChain(programAddr, signer, mint, rawIn, minOutLamports);
-        recordedAmount = parsedAmount;
-      }
-      await recordTrade(token.mint, { signature: result.signature, side, amount: recordedAmount });
-      setLastSignature(result.signature);
-      track(side === "buy" ? "swap_buy" : "swap_sell", { network: "solana-devnet" });
-      setAmount("");
-      await refreshChainState();
-      onTraded();
-    } catch (tradeError) {
-      setError(tradeError instanceof Error ? tradeError.message : "Trade failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const spotPriceSol = chainState ? bondingCurveSpotPriceLamports(chainState.market, decimals) / 1_000_000_000 : token.priceSol;
-
-  return (
-    <section className="swap-terminal page-shell" id="swap">
-      <div className="section-heading">
-        <div><div className="eyebrow"><TrendingUp size={14} /> DiggoSwap</div><h2>TRADE<br />${token.symbol}.</h2></div>
-        <div className="swap-price-tag">
-          <span>SPOT PRICE</span>
-          <strong>{spotPriceSol < 0.000001 ? spotPriceSol.toExponential(3) : spotPriceSol.toFixed(9)} SOL</strong>
-        </div>
-      </div>
-      <div className="swap-grid">
-        <div className="swap-chart-panel">
-          <div ref={chartContainerRef} className="swap-chart" />
-          {tradeCount < 2 && (
-            <div className="swap-chart-empty">
-              <Radio size={16} /> Not enough trade history yet — every real buy/sell plots here live.
-            </div>
-          )}
-          <div className="trade-tape">
-            <div className="trade-tape-head"><span>Side</span><span>Price (SOL)</span><span>Amount</span><span>Txn</span></div>
-            {recentTrades.map((trade) => (
-              <div className="trade-tape-row" key={trade.signature}>
-                <b className={trade.side}>{trade.side}</b>
-                <span>{trade.priceSol.toExponential(4)}</span>
-                <span>{compact(trade.amount)}</span>
-                <a href={`https://explorer.solana.com/tx/${trade.signature}?cluster=devnet`} target="_blank" rel="noreferrer">{trade.signature.slice(0, 5)}…</a>
-              </div>
-            ))}
-          </div>
-        </div>
-        <form className="swap-form" onSubmit={submitTrade}>
-          <div className="swap-tabs">
-            <button type="button" className={side === "buy" ? "active" : ""} onClick={() => setSide("buy")}>Buy</button>
-            <button type="button" className={side === "sell" ? "active" : ""} onClick={() => setSide("sell")}>Sell</button>
-          </div>
-          <label>
-            {side === "buy" ? "Pay (SOL)" : `Sell ($${token.symbol})`}
-            <input
-              type="number"
-              min="0"
-              step="any"
-              inputMode="decimal"
-              placeholder="0.00"
-              value={amount}
-              onChange={(event) => setAmount(event.target.value)}
-            />
-          </label>
-          <div className="swap-quote">
-            <span>YOU RECEIVE (EST., 2% SLIPPAGE FLOOR)</span>
-            <strong>
-              {quoteOut !== null
-                ? side === "buy"
-                  ? `${formatTokenAmount(quoteOut, decimals)} $${token.symbol}`
-                  : `${(Number(quoteOut) / 1_000_000_000).toFixed(6)} SOL`
-                : "—"}
-            </strong>
-          </div>
-          {walletAddress && (
-            <div className="swap-balances">
-              <span>{solBalance !== null ? (Number(solBalance) / 1_000_000_000).toFixed(4) : "…"} SOL</span>
-              <span>{tokenBalance !== null ? formatTokenAmount(tokenBalance, decimals) : "…"} ${token.symbol}</span>
-            </div>
-          )}
-          {error && <p className="form-message">{error}</p>}
-          {lastSignature && <a className="tx-success" href={`https://explorer.solana.com/tx/${lastSignature}?cluster=devnet`} target="_blank" rel="noreferrer"><Check size={13} /> Confirmed on devnet · View transaction</a>}
-          <button className="primary-button swap-submit" disabled={busy || !signer}>
-            {busy ? "Confirming…" : signer ? (side === "buy" ? "Buy on-chain" : "Sell on-chain") : "Connect wallet"} <Zap size={16} />
-          </button>
-          <p className="swap-note">
-            Real SOL moves through the mine's own bonding curve — this is the same liquidity a
-            graduation threshold is measured against. Nothing here is simulated.
-          </p>
-        </form>
-      </div>
-    </section>
-  );
 }
 
 export default function App() {
@@ -721,9 +117,9 @@ export default function App() {
   const [activating, setActivating] = useState(false);
   const [activateError, setActivateError] = useState("");
   const [launchOpen, setLaunchOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [session, setSession] = useState<string | null>(null);
   const [loadingTokens, setLoadingTokens] = useState(true);
+  const [bootstrapFailed, setBootstrapFailed] = useState(false);
   const [config, setConfig] = useState<DiggoConfig>({
     cluster: "devnet",
     turnstileSiteKey: "",
@@ -731,6 +127,12 @@ export default function App() {
     vanitySuffix: "diggo",
   });
   const connected = useDiggoWallet();
+  /**
+   * The connected address as a primitive. Effects and callbacks depend on this rather than on the
+   * connection object, so their identity only changes when the wallet itself does. src/wallet.ts
+   * memoizes the object too, but depending on the address keeps that guarantee local here.
+   */
+  const walletAddress = connected?.address ?? null;
   const [mineInfo, setMineInfo] = useState<MineInfo | null>(null);
   const [mineInfoLoading, setMineInfoLoading] = useState(false);
   const [mineInfoError, setMineInfoError] = useState("");
@@ -776,35 +178,43 @@ export default function App() {
     [connected, verification.requestTurnstileToken],
   );
 
-  const page = useMemo(() => {
-    const routes: Record<string, string> = {
-      "/": "home",
-      "/mine": "mine",
-      "/explore": "explore",
-      "/trade": "trade",
-      "/leaderboards": "leaderboards",
-      "/mines": "mines",
-      "/create": "create",
-      "/crew": "crew",
-      "/discoveries": "discoveries",
-      "/cosmetics": "cosmetics",
-      "/admin": "admin",
-    };
-    return routes[window.location.pathname] ?? "home";
-  }, []);
+  const page: PageId = useMemo(() => ROUTES[window.location.pathname] ?? "home", []);
+  /**
+   * The legal documents render in place of the home page at their own paths. They get no PageId on
+   * purpose: that union is AppHeader.tsx's, and a legal notice belongs nowhere in the game nav.
+   */
+  const legal = useMemo(() => isLegalPath(window.location.pathname), []);
 
   useEffect(() => {
-    getBootstrap()
-      .then((result) => {
-        setTokens(result.tokens);
-        const requestedMint = new URLSearchParams(window.location.search).get("mint");
-        setSelected(result.tokens.find((token) => token.mint === requestedMint) ?? result.tokens[0] ?? null);
-        setConfig(result.config);
-      })
-      .finally(() => setLoadingTokens(false));
+    const title = PAGE_TITLES[page];
+    document.title = title ? title + " · Diggo.fun" : "Diggo.fun — Build and manage your memecoin mining crew";
+  }, [page]);
+
+  const fetchBootstrap = useCallback(async (): Promise<void> => {
+    try {
+      const result = await getBootstrap();
+      setTokens(result.tokens);
+      const requestedMint = new URLSearchParams(window.location.search).get("mint");
+      setSelected(result.tokens.find((token) => token.mint === requestedMint) ?? result.tokens[0] ?? null);
+      setConfig(result.config);
+      setBootstrapFailed(false);
+    } catch {
+      setBootstrapFailed(true);
+    } finally {
+      setLoadingTokens(false);
+    }
+  }, []);
+
+  function retryBootstrap(): void {
+    setLoadingTokens(true);
+    void fetchBootstrap();
+  }
+
+  useEffect(() => {
+    void fetchBootstrap();
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [fetchBootstrap]);
 
   useEffect(() => {
     let current = true;
@@ -817,21 +227,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!session || !connected || session !== connected.address) {
+    if (!session || !walletAddress || session !== walletAddress) {
       setPlayer(null);
       return;
     }
-    getPlayerProfile(connected.address).then(setPlayer).catch(() => setPlayer(null));
-  }, [session, connected]);
+    getPlayerProfile(walletAddress).then(setPlayer).catch(() => setPlayer(null));
+  }, [session, walletAddress]);
 
-  const featured = selected ?? tokens[0];
-  const reservePercent = featured ? (featured.reserveRemaining / featured.reserveTotal) * 100 : 0;
-  const estimatedReward = featured && featured.networkPower > 0
-    ? ((player?.power ?? 0) / featured.networkPower) * featured.rewardPerBlock
-    : 0;
-  const sortedTokens = useMemo(() => [...tokens].sort((a, b) => b.change24h - a.change24h), [tokens]);
+  const featured = selected ?? tokens[0] ?? null;
   const isMiningActive = player?.activationState === "ACTIVE";
-  const signedIn = Boolean(session && connected && session === connected.address);
+  const signedIn = Boolean(session && walletAddress && session === walletAddress);
 
   const loadMineInfo = useCallback(async (mint: string): Promise<void> => {
     setMineInfoLoading(true);
@@ -846,30 +251,30 @@ export default function App() {
   }, []);
 
   const refreshClaims = useCallback(async (): Promise<void> => {
-    if (!connected || !signedIn) {
+    if (!walletAddress || !signedIn) {
       setClaims([]);
       return;
     }
     setClaimsLoading(true);
     try {
-      setClaims(await getPlayerRewards(connected.address));
+      setClaims(await getPlayerRewards(walletAddress));
       setClaimError("");
     } catch {
       setClaimError("Could not load your reward ledger.");
     } finally {
       setClaimsLoading(false);
     }
-  }, [connected, signedIn]);
+  }, [walletAddress, signedIn]);
 
   const refreshDiscoveries = useCallback(async (): Promise<void> => {
-    if (!connected || !signedIn) {
+    if (!walletAddress || !signedIn) {
       setDiscoveries([]);
       setOpportunity(null);
       return;
     }
     setDiscoveriesLoading(true);
     try {
-      const result = await getDiscoveries(connected.address);
+      const result = await getDiscoveries(walletAddress);
       setDiscoveries(result.discoveries);
       setOpportunity(result.opportunity);
       setDiscoveryError("");
@@ -878,14 +283,7 @@ export default function App() {
     } finally {
       setDiscoveriesLoading(false);
     }
-  }, [connected, signedIn]);
-
-  useEffect(() => {
-    // The dashboard's next-block countdown belongs to the mine the crew is actually working, which
-    // is not necessarily the one selected in the explore board.
-    const mint = player?.activeMint ?? featured?.mint;
-    if (mint) void loadMineInfo(mint);
-  }, [player?.activeMint, featured, loadMineInfo, session]);
+  }, [walletAddress, signedIn]);
 
   useEffect(() => {
     void refreshClaims();
@@ -894,6 +292,26 @@ export default function App() {
   useEffect(() => {
     void refreshDiscoveries();
   }, [refreshDiscoveries]);
+
+  /**
+   * The dashboard draws the player's mine, so it needs the equipped cosmetics too. Loading them
+   * once here means the look is right on the first visit to the dashboard rather than only after
+   * a trip to the cosmetics page; src/cosmetics.ts de-duplicates the request with that screen.
+   */
+  useEffect(() => {
+    if (signedIn) void loadEquippedCosmetics();
+    else clearEquippedCosmetics();
+  }, [signedIn]);
+
+  /**
+   * A reward the player collected on chain has just been confirmed to the backend, so the ledger
+   * it came from is stale: re-read it rather than guessing what the row now says. Without this the
+   * panel keeps offering a claim whose tokens are already in the wallet, and the reconciliation
+   * sweep sees a settled reward it cannot match to a signature.
+   */
+  const handleCollected = useCallback((): void => {
+    void refreshClaims();
+  }, [refreshClaims]);
 
   async function handleCollectReport(): Promise<void> {
     if (!signedIn) return;
@@ -1031,14 +449,6 @@ export default function App() {
     }
   }
 
-  function copyMint() {
-    if (!featured) return;
-    navigator.clipboard.writeText(featured.mint).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1_400);
-    });
-  }
-
   async function ensureSession(): Promise<void> {
     if (!connected || session === connected.address) return;
     const challenge = await getChallenge(connected.address);
@@ -1093,7 +503,11 @@ export default function App() {
       // here (e.g. the player's on-chain Player account doesn't exist yet) doesn't block the
       // off-chain switch above, which is what the ORE/streak/discovery loop actually runs on.
       if (config.programId) {
-        assignPowerOnChain(address(config.programId), connected.wallet, address(mint)).catch(() => {});
+        const programId = config.programId;
+        const wallet = connected.wallet;
+        void import("./solanaProgram")
+          .then(({ address, assignPowerOnChain }) => assignPowerOnChain(address(programId), wallet, address(mint)))
+          .catch(() => {});
       }
     } catch (error) {
       setActivateError(messageOf(error));
@@ -1106,6 +520,7 @@ export default function App() {
     if (!connected || !config.programId || !featured) return;
     setActivateError("");
     try {
+      const { address, claimRewardsOnChain } = await import("./solanaProgram");
       await claimRewardsOnChain(address(config.programId), connected.wallet, address(featured.mint));
       track("rewards_claimed", { network: "solana-devnet" });
       await refreshFeaturedToken();
@@ -1125,13 +540,21 @@ export default function App() {
     }
   }
 
+  useEffect(() => {
+    // The dashboard's countdowns belong to the mine the crew is actually working; the market pages
+    // describe the mine the player selected.
+    const marketPage = page === "mines" || page === "trade" || page === "home";
+    const mint = marketPage ? featured?.mint : (player?.activeMint ?? featured?.mint);
+    if (mint) void loadMineInfo(mint);
+  }, [page, player?.activeMint, featured?.mint, loadMineInfo, session]);
+
   const activeMineToken = player?.activeMint
     ? (tokens.find((token) => token.mint === player.activeMint) ?? featured ?? null)
     : (featured ?? null);
 
   /**
    * Navigation into a mine page or the trade panel for one mint. Both are plain URL loads, which
-   * is what the existing router (pathname + ?mint= selection at bootstrap) already understands.
+   * is what the router (pathname + ?mint= selection at bootstrap) already understands.
    */
   function openTokenPage(mint: string): void {
     window.location.assign("/mines?mint=" + encodeURIComponent(mint));
@@ -1141,355 +564,248 @@ export default function App() {
     window.location.assign("/trade?mint=" + encodeURIComponent(mint));
   }
 
-  if (loadingTokens) return <div className="loading-screen"><Pickaxe /> DIGGING UP THE DATA…</div>;
+  if (loadingTokens) return <LoadingScreen />;
+
+  const openLaunch = () => setLaunchOpen(true);
+  const economy = (
+    <EconomyPanels
+      player={player}
+      tokens={tokens}
+      claims={claims}
+      loading={claimsLoading}
+      signedIn={signedIn}
+      claimingId={claimingId}
+      claimError={claimError}
+      onClaim={(claim) => void handleClaimReward(claim)}
+      onOpenToken={openTokenPage}
+      onCollected={handleCollected}
+    />
+  );
+  const mineInfoPanel = (token: TokenSummary | null, canSwitch: boolean) =>
+    token && (
+      <MineInfoPanel
+        mine={mineInfo}
+        mineName={token.name}
+        now={now}
+        loading={mineInfoLoading}
+        error={mineInfoError}
+        canSwitch={canSwitch}
+        switching={switching}
+        onSwitchHere={() => void handleSwitchMine(token.mint)}
+      />
+    );
+  const canSwitchToFeatured = Boolean(signedIn && isMiningActive && featured && player?.activeMint !== featured.mint);
 
   return (
-    <main id="top" className={`app page-${page}`}>
-      <header className="site-header">
-        <BrandMark />
-        <nav aria-label="Main navigation">
-          <a className={page === "home" ? "active" : ""} href="/"><Home size={13} /> Home</a>
-          <a className={page === "mine" ? "active" : ""} href="/mine"><Pickaxe size={13} /> Mine</a>
-          <a className={page === "crew" ? "active" : ""} href="/crew"><Hammer size={13} /> Crew</a>
-          <a className={page === "discoveries" ? "active" : ""} href="/discoveries"><Gem size={13} /> Discoveries</a>
-          <a className={page === "explore" ? "active" : ""} href="/explore"><Search size={13} /> Explore</a>
-          <a className={page === "leaderboards" ? "active" : ""} href="/leaderboards"><Trophy size={13} /> Leaderboards</a>
-          <a className={page === "mines" ? "active" : ""} href="/mines"><LayoutDashboard size={13} /> Mines</a>
-          <a className={page === "cosmetics" ? "active" : ""} href="/cosmetics"><Sparkles size={13} /> Cosmetics</a>
-          <a className={page === "trade" ? "active" : ""} href="/trade"><TrendingUp size={13} /> Trade</a>
-        </nav>
-        <div className="header-actions">
-          <a className="launch-button" href="/create"><Plus size={16} /> Create a new coin</a>
-          <NotificationsBell signedIn={signedIn} />
-          <WalletControl session={session} onAuthenticated={setSession} />
-        </div>
-      </header>
+    <div className={"app page-" + page}>
+      <a className="skip-link" href="#content">Skip to content</a>
+      <AppHeader page={page} session={session} signedIn={signedIn} onAuthenticated={setSession} />
 
-      {page === "create" && (
-        <section className="create-coin-page page-shell">
-          <div>
-            <span className="eyebrow"><Plus size={14} /> Create a new coin</span>
-            <h1>START A<br /><span>NEW MINE.</span></h1>
-            <p>Create a fixed-supply Solana devnet coin, allocate its mining reserve, and optionally make the first real buy into its bonding curve.</p>
+      <main id="content" tabIndex={-1}>
+        {bootstrapFailed && (
+          <div className="page-shell page-alert">
+            <ErrorState title="The mines are unreachable right now." onRetry={retryBootstrap}>
+              Diggo could not load live mine data. Your wallet and rewards are unaffected.
+            </ErrorState>
           </div>
-          <div className="create-coin-card">
-            <span>DEVNET LAUNCH</span>
-            <h2>Everything settles on-chain.</h2>
-            <p>Your creator wallet signs the launch and, if selected, the initial liquidity buy in one transaction.</p>
-            <button className="primary-button" onClick={() => setLaunchOpen(true)}>Open launch builder <ArrowUpRight size={17} /></button>
-          </div>
-        </section>
-      )}
+        )}
 
-      <section className="hero page-shell" id="home">
-        <div className="hero-copy">
-          <div className="eyebrow">
-            <span className={`live-dot ${featured ? "" : "idle-dot"}`} />
-            {featured ? "Live on Solana devnet" : "Solana devnet · no mines launched yet"}
-          </div>
-          <h1>MEME COINS<br />WORTH <span>DIGGING.</span></h1>
-          <p>Launch a fixed-supply coin. Lock a finite reserve. Let the community mine every block with pure, provable power.</p>
-          <div className="hero-actions">
-            <a className="primary-button" href="/explore">Explore mines <Pickaxe size={18} /></a>
-            <a className="text-button" href="/create">Launch yours <ArrowUpRight size={17} /></a>
-          </div>
-          <div className="trust-row">
-            <span><ShieldCheck size={15} /> Mint revoked</span>
-            <span><LockKeyhole size={15} /> Reserve locked</span>
-            <span><Coins size={15} /> Funds stay in your wallet</span>
-          </div>
-        </div>
+        <Suspense fallback={<RouteFallback />}>
+          {legal && <LegalRoute pathname={window.location.pathname} />}
 
-        {!featured ? (
-          <div className="mine-console console-empty">
-            <div className="console-top">
-              <div className="featured-token">
-                <span className="token-orb token-orb-large orb-empty"><Pickaxe size={20} /></span>
-                <div><span>NO ACTIVE MINE</span><h2>Nothing launched yet</h2></div>
-              </div>
-              <span className="active-pill idle"><i /> EMPTY</span>
-            </div>
-            <div className="empty-body">
-              <p>
-                No token has been launched on this protocol yet, so there is nothing to mine.
-                Block rewards, network power and prices will appear here once a real coin is
-                launched on devnet.
-              </p>
-              <button className="primary-button" onClick={() => setLaunchOpen(true)}>
-                Launch the first coin <Plus size={17} />
-              </button>
-            </div>
-          </div>
-        ) : (
-        <div className={`mine-console ${isMiningActive ? "is-mining" : ""}`} id="mine">
-          <div className="console-top">
-            <div className="featured-token"><TokenOrb symbol={featured.symbol} imageUrl={featured.imageUrl} large /><div><span>{isMiningActive ? "NOW MINING" : "SELECTED MINE"}</span><h2>{featured.name}</h2></div></div>
-            <span className={`active-pill ${isMiningActive ? "" : "idle"}`}><i /> {isMiningActive ? "CREW ACTIVE" : player ? "CREW PAUSED" : "NOT ACTIVATED"}</span>
-          </div>
-          <div className="mine-scene" aria-hidden="true">
-            <div className="grid-lines" />
-            <div className="ore ore-one" /><div className="ore ore-two" /><div className="ore ore-three" />
-            <div className="pickaxe-wrap"><Pickaxe size={82} strokeWidth={1.25} /></div>
-            <div className="impact"><span /><span /><span /></div>
-            <div className="depth-label">LAYER 0{Math.max(1, Math.round((100 - reservePercent) / 15))}</div>
-          </div>
-          <div className="block-stats">
-            <div><span>NEXT BLOCK</span><strong>{featured.networkPower > 0 ? countdown(featured.nextBlockAt, now) : "AWAITING MINERS"}</strong></div>
-            <div><span>BLOCK REWARD</span><strong>{compact(featured.rewardPerBlock)} <small>${featured.symbol}</small></strong></div>
-            <div><span>YOUR EST.</span><strong>{estimatedReward.toFixed(2)} <small>${featured.symbol}</small></strong></div>
-          </div>
-          {player && (
-            <div className="crew-strip">
-              <span><Flame size={13} /> {player.streak} day streak</span>
-              <span><Gem size={13} /> {Math.floor(player.oreBalance).toLocaleString()} ORE</span>
-              <span><Gauge size={13} /> {player.power.toLocaleString()} power</span>
-              {isMiningActive && (
-                <span><Clock3 size={13} /> resets in {countdown(Math.floor((player.activationExpiresAt ?? 0)), now)}</span>
-              )}
-              {connected && (
-                <button type="button" className="claim-rewards-button" onClick={() => void handleClaimRewards()}>
-                  <Coins size={12} /> Claim on-chain rewards
-                </button>
-              )}
-            </div>
+          {!legal && page === "home" && (
+            <>
+              <HomeHero
+                featured={featured}
+                player={player}
+                connected={Boolean(connected)}
+                now={now}
+                activating={activating}
+                error={activateError}
+                onActivate={() => void handleActivate()}
+                onManageCrew={() => setCrewOpen(true)}
+                onLaunch={openLaunch}
+                onClaimRewards={() => void handleClaimRewards()}
+              />
+              <Ticker tokens={tokens} />
+              <ExploreBoard tokens={tokens} limit={3} onLaunch={openLaunch} />
+              <HowItWorks />
+              <FinalCta onLaunch={openLaunch} />
+            </>
           )}
-          {activateError && <p className="form-message console-error">{activateError}</p>}
-          {!connected ? (
-            <button className="mine-button" type="button">
-              <Pickaxe size={18} /> Connect wallet to mine
-            </button>
-          ) : isMiningActive ? (
-            <button className="mine-button" onClick={() => setCrewOpen(true)}>
-              <Hammer size={18} /> Manage crew
-            </button>
+
+          {page === "mine" && (
+            <>
+              <DashboardPanel
+                player={player}
+                mine={activeMineToken}
+                mineInfo={mineInfo}
+                now={now}
+                connected={Boolean(connected)}
+                activating={activating}
+                collecting={collecting}
+                error={activateError}
+                onActivate={() => void handleActivate()}
+                onManageCrew={() => setCrewOpen(true)}
+                onSwitchMine={() => setSwitchOpen(true)}
+                onCollect={() => void handleCollectReport()}
+              />
+              {economy}
+              {mineInfoPanel(activeMineToken, false)}
+            </>
+          )}
+
+          {page === "crew" && (
+            <>
+              {player ? (
+                <CrewScreen
+                  player={player}
+                  pending={crewPending}
+                  error={crewError}
+                  notice={crewNotice}
+                  onUpgrade={(component) => void handleUpgradeCrew(component)}
+                />
+              ) : (
+                <section className="crew-screen page-shell">
+                  <EmptyState
+                    icon={<Hammer size={26} />}
+                    title={connected ? "Loading your crew…" : "Your crew is waiting for a boss."}
+                  >
+                    {connected
+                      ? "Fetching crew levels, ORE and Mining Power."
+                      : "Connect and sign in with your wallet to hire Miners, add Drills and grow your operation."}
+                  </EmptyState>
+                </section>
+              )}
+              {economy}
+            </>
+          )}
+
+          {page === "discoveries" && (
+            <DiscoveriesPanel
+              signedIn={signedIn}
+              discoveries={discoveries}
+              opportunity={opportunity}
+              tokens={tokens}
+              loading={discoveriesLoading}
+              rolling={rolling}
+              claimingId={claimingDiscoveryId}
+              error={discoveryError}
+              notice={discoveryNotice}
+              onRequestOpportunity={() => void handleRequestOpportunity()}
+              onRoll={() => void handleRollDiscovery()}
+              onClaim={(discovery) => void handleClaimDiscovery(discovery)}
+              onOpenToken={openTokenPage}
+              onTrade={openTradePage}
+              onSwitchCrew={(mint) => void handleSwitchMine(mint)}
+            />
+          )}
+
+          {page === "explore" && (
+            <>
+              <Ticker tokens={tokens} />
+              <ExploreBoard tokens={tokens} onLaunch={openLaunch} />
+            </>
+          )}
+
+          {page === "leaderboards" && <LeaderboardsScreen tokens={tokens} onSelectMine={openTokenPage} />}
+
+          {page === "mines" && (featured ? (
+            <>
+              <SelectedMine token={featured} now={now} canSwitch={canSwitchToFeatured} onSwitch={() => void handleSwitchMine(featured.mint)} />
+              {mineInfoPanel(featured, canSwitchToFeatured)}
+              {config.programId && (
+                <SwapPanel token={featured} programAddress={config.programId} signer={connected?.wallet ?? null} onTraded={() => void refreshFeaturedToken()} />
+              )}
+            </>
           ) : (
-            <button className="mine-button" disabled={activating} onClick={() => void handleActivate()}>
-              {activating ? <><Radio size={18} /> Activating…</> : <><Pickaxe size={18} /> Activate mine ({GAMEPLAY_DEFAULTS.activationSeconds / 3_600}h)</>}
-            </button>
+            <section className="page-shell"><EmptyState title="No mine selected">Pick a mine from the board to see its reserve, power and market.</EmptyState></section>
+          ))}
+
+          {page === "trade" && (featured && config.programId ? (
+            <SwapPanel token={featured} programAddress={config.programId} signer={connected?.wallet ?? null} onTraded={() => void refreshFeaturedToken()} />
+          ) : (
+            <section className="page-shell">
+              <EmptyState title="Nothing to trade yet">Trading opens once a mine is live on devnet.</EmptyState>
+            </section>
+          ))}
+
+          {page === "create" && (
+            <section className="create-coin-page page-shell">
+              <div>
+                <span className="eyebrow"><Plus size={14} /> Create a new coin</span>
+                <h1>START A<br /><span>NEW MINE.</span></h1>
+                <p>Create a fixed-supply Solana devnet coin, allocate its mining reserve, and optionally make the first real buy into its bonding curve.</p>
+              </div>
+              <div className="create-coin-card">
+                <span>DEVNET LAUNCH</span>
+                <h2>Everything settles on-chain.</h2>
+                <p>Your creator wallet signs the launch and, if selected, the initial liquidity buy in one transaction.</p>
+                <button className="btn btn-primary" onClick={openLaunch}>Open launch builder <ArrowUpRight size={17} /></button>
+              </div>
+            </section>
           )}
-        </div>
+
+          {page === "cosmetics" && <CosmeticsScreen signedIn={signedIn} />}
+          {page === "admin" && <AdminScreen signedIn={signedIn} />}
+          {page === "ui" && UiGallery && <UiGallery />}
+        </Suspense>
+
+        <PushToggle />
+      </main>
+
+      <SiteFooter />
+
+      <Suspense fallback={null}>
+        {launchOpen && (
+          <LaunchModal
+            onClose={() => setLaunchOpen(false)}
+            session={session}
+            onAuthenticated={setSession}
+            config={config}
+            onLaunched={(token) => {
+              setTokens((current) => [token, ...current.filter((existing) => existing.mint !== token.mint)]);
+              setSelected(token);
+            }}
+          />
         )}
-      </section>
-
-      {page === "mine" && (
-        <DashboardPanel
-          player={player}
-          mine={activeMineToken}
-          mineInfo={mineInfo}
-          now={now}
-          connected={Boolean(connected)}
-          activating={activating}
-          collecting={collecting}
-          error={activateError}
-          onActivate={() => void handleActivate()}
-          onManageCrew={() => setCrewOpen(true)}
-          onSwitchMine={() => setSwitchOpen(true)}
-          onCollect={() => void handleCollectReport()}
-        />
-      )}
-
-      {page === "crew" && player && (
-        <CrewScreen
-          player={player}
-          pending={crewPending}
-          error={crewError}
-          notice={crewNotice}
-          onUpgrade={(component) => void handleUpgradeCrew(component)}
-        />
-      )}
-      {page === "crew" && !player && (
-        <section className="crew-screen page-shell">
-          <p className="board-empty">
-            {connected ? "Loading your crew…" : "Connect your wallet to manage your Mining Crew."}
-          </p>
-        </section>
-      )}
-
-      {(page === "crew" || page === "mine") && (
-        <EconomyPanels
-          player={player}
-          tokens={tokens}
-          claims={claims}
-          loading={claimsLoading}
-          signedIn={signedIn}
-          claimingId={claimingId}
-          claimError={claimError}
-          onClaim={(claim) => void handleClaimReward(claim)}
-          onOpenToken={openTokenPage}
-        />
-      )}
-
-      {page === "discoveries" && (
-        <DiscoveriesPanel
-          signedIn={signedIn}
-          discoveries={discoveries}
-          opportunity={opportunity}
-          tokens={tokens}
-          loading={discoveriesLoading}
-          rolling={rolling}
-          claimingId={claimingDiscoveryId}
-          error={discoveryError}
-          notice={discoveryNotice}
-          onRequestOpportunity={() => void handleRequestOpportunity()}
-          onRoll={() => void handleRollDiscovery()}
-          onClaim={(discovery) => void handleClaimDiscovery(discovery)}
-          onOpenToken={openTokenPage}
-          onTrade={openTradePage}
-          onSwitchCrew={(mint) => void handleSwitchMine(mint)}
-        />
-      )}
-
-      {page === "cosmetics" && <CosmeticsScreen signedIn={signedIn} />}
-      {page === "admin" && <AdminScreen signedIn={signedIn} />}
-
-      {(page === "home" || page === "explore" || page === "mines" || page === "mine") && tokens.length > 0 && (
-        <div className="ticker-wrap">
-          <div className="ticker">
-            {[...tokens, ...tokens].map((token, index) => (
-              <span key={`${token.symbol}-${index}`}><b>${token.symbol}</b> {money(token.priceUsd)} <i className={token.change24h >= 0 ? "up" : "down"}>{token.change24h >= 0 ? "+" : ""}{token.change24h}%</i></span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {(page === "home" || page === "explore") && (
-      <section className="discover page-shell" id="explore">
-        <div className="section-heading">
-          <div><div className="eyebrow"><TrendingUp size={14} /> Discovery board</div><h2>FIND YOUR<br />NEXT MINE.</h2></div>
-          <div className="filter-tabs"><button className="active">Trending</button><button>New</button><button>Near reduction</button><button>Almost mined</button></div>
-        </div>
-        {sortedTokens.length ? (
-          <>
-            <div className="token-grid">
-              {sortedTokens.map((token) => <TokenCard key={token.mint} token={token} onSelect={(next) => { window.location.assign(`/mines?mint=${encodeURIComponent(next.mint)}`); }} />)}
-            </div>
-            <button className="outline-button">View all active mines <ChevronRight size={16} /></button>
-          </>
-        ) : (
-          <div className="board-empty">
-            <Pickaxe size={34} />
-            <h3>No mines to discover yet</h3>
-            <p>Every coin launched through the protocol shows up here with its live price, unmined reserve and network power — straight from the chain, never seeded.</p>
-            <button className="primary-button" onClick={() => setLaunchOpen(true)}>Launch a coin <Plus size={17} /></button>
-          </div>
+        {miningReport && (
+          <MiningReportModal
+            report={miningReport}
+            mineSymbol={activeMineToken?.symbol ?? null}
+            collecting={collecting}
+            collected={reportCollected}
+            error={reportError}
+            onCollect={() => void handleCollectReport()}
+            onClose={() => setMiningReport(null)}
+            onManageCrew={() => { setMiningReport(null); setCrewOpen(true); }}
+            onSwitchMine={() => { setMiningReport(null); setSwitchOpen(true); }}
+          />
         )}
-      </section>
-      )}
-
-      {(page === "home" || page === "leaderboards") && (
-        <LeaderboardsScreen tokens={tokens} onSelectMine={openTokenPage} />
-      )}
-
-      {featured && (
-        <MineInfoPanel
-          mine={mineInfo}
-          mineName={featured.name}
-          now={now}
-          loading={mineInfoLoading}
-          error={mineInfoError}
-          canSwitch={Boolean(signedIn && isMiningActive && player?.activeMint !== featured.mint)}
-          switching={switching}
-          onSwitchHere={() => void handleSwitchMine(featured.mint)}
-        />
-      )}
-
-      {(page === "home" || page === "mines") && featured && (
-      <section className="selected-mine page-shell" id="mines">
-        <div className="selected-heading">
-          <div><span className="mono-label">SELECTED MINE // ${featured.symbol}</span><h2>{featured.name}</h2></div>
-          <div className="selected-heading-actions">
-            {isMiningActive && player?.activeMint !== featured.mint && (
-              <button className="outline-button switch-mine-button" onClick={() => void handleSwitchMine(featured.mint)}>
-                Switch crew here <Pickaxe size={14} />
-              </button>
-            )}
-            <button className="mint-address" onClick={copyMint}>{shortAddress(featured.mint)} {copied ? <Check size={14} /> : <Copy size={14} />}</button>
-          </div>
-        </div>
-        <div className="selected-grid">
-          <div className="reserve-panel">
-            <div className="reserve-number"><span>UNMINED SUPPLY</span><strong>{reservePercent.toFixed(1)}%</strong><small>{compact(featured.reserveRemaining)} ${featured.symbol} remain</small></div>
-            <div className="shaft"><i style={{ height: `${reservePercent}%` }}><Pickaxe size={28} /></i></div>
-          </div>
-          <div className="metric-panel"><Gauge /><span>Network power</span><strong>{compact(featured.networkPower)}</strong><small>total crew power on this mine</small></div>
-          <div className="metric-panel"><Clock3 /><span>Next reduction</span><strong>{countdown(featured.nextEpochAt, now)}</strong><small>{compact(featured.rewardPerBlock)} → {compact(featured.rewardPerBlock * 0.75)} per block</small></div>
-          <div className="metric-panel"><Users /><span>Custody</span><strong>NON-CUSTODIAL</strong><small>only the LP is program-controlled</small></div>
-        </div>
-      </section>
-      )}
-
-      {(page === "home" || page === "mines" || page === "trade") && featured && config.programId && (
-        <DiggoSwapPanel
-          token={featured}
-          programAddress={config.programId}
-          signer={connected?.wallet ?? null}
-          onTraded={() => void refreshFeaturedToken()}
-        />
-      )}
-
-      <section className="how-section" id="how">
-        <div className="page-shell">
-          <div className="section-heading light"><div><div className="eyebrow"><HardHat size={14} /> The core loop</div><h2>LAUNCH. DIG.<br />LEVEL UP.</h2></div><p>No inflation. No magic yield. Just a finite, transparent reserve distributed by mining power.</p></div>
-          <div className="steps">
-            <article><b>01</b><span className="step-icon"><Plus /></span><h3>Launch a coin</h3><p>Fixed supply, revoked authorities, 5% program-locked mining reserve.</p></article>
-            <article><b>02</b><span className="step-icon"><Pickaxe /></span><h3>Assign power</h3><p>Pick one active mine. Every block pays your proportional share.</p></article>
-            <article><b>03</b><span className="step-icon"><Hammer /></span><h3>Upgrade gear</h3><p>Program rules settle upgrades on-chain. Your wallet stays in control.</p></article>
-          </div>
-        </div>
-      </section>
-
-      <section className="final-cta">
-        <div className="page-shell"><span className="huge-pick"><Pickaxe /></span><div><span>THE NEXT MEME IS UNDERGROUND.</span><h2>START DIGGING.</h2></div><button className="primary-button invert" onClick={() => setLaunchOpen(true)}>Launch your coin <ArrowUpRight size={18} /></button></div>
-      </section>
-
-      <footer className="site-footer page-shell"><BrandMark /><p>Finite supply. Infinite memes.</p><div><a href="/mines">Mines</a><a href="/">X / Twitter</a></div><small>© 2026 Diggo.fun · Devnet MVP</small></footer>
-      {launchOpen && (
-        <CreateModal
-          onClose={() => setLaunchOpen(false)}
-          session={session}
-          onAuthenticated={setSession}
-          config={config}
-          onLaunched={(token) => {
-            setTokens((current) => [token, ...current.filter((existing) => existing.mint !== token.mint)]);
-            setSelected(token);
-          }}
-        />
-      )}
-      {miningReport && (
-        <MiningReportModal
-          report={miningReport}
-          mineSymbol={activeMineToken?.symbol ?? null}
-          collecting={collecting}
-          collected={reportCollected}
-          error={reportError}
-          onCollect={() => void handleCollectReport()}
-          onClose={() => setMiningReport(null)}
-          onManageCrew={() => { setMiningReport(null); setCrewOpen(true); }}
-          onSwitchMine={() => { setMiningReport(null); setSwitchOpen(true); }}
-        />
-      )}
-      {switchOpen && (
-        <SwitchMineModal
-          tokens={tokens}
-          activeMint={player?.activeMint ?? null}
-          switching={switching}
-          error={activateError}
-          onSwitch={(mint) => void handleSwitchMine(mint)}
-          onClose={() => setSwitchOpen(false)}
-        />
-      )}
-      {crewOpen && player && (
-        <CrewScreen
-          variant="modal"
-          player={player}
-          pending={crewPending}
-          error={crewError}
-          notice={crewNotice}
-          onUpgrade={(component) => void handleUpgradeCrew(component)}
-          onClose={() => setCrewOpen(false)}
-        />
-      )}
+        {switchOpen && (
+          <SwitchMineModal
+            tokens={tokens}
+            activeMint={player?.activeMint ?? null}
+            switching={switching}
+            error={activateError}
+            onSwitch={(mint) => void handleSwitchMine(mint)}
+            onClose={() => setSwitchOpen(false)}
+          />
+        )}
+        {crewOpen && player && (
+          <CrewScreen
+            variant="modal"
+            player={player}
+            pending={crewPending}
+            error={crewError}
+            notice={crewNotice}
+            onUpgrade={(component) => void handleUpgradeCrew(component)}
+            onClose={() => setCrewOpen(false)}
+          />
+        )}
+      </Suspense>
       {verification.verificationModal}
-    </main>
+      <ConsentBanner />
+    </div>
   );
 }
