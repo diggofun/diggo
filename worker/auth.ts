@@ -13,7 +13,7 @@ import { ed25519 } from "@noble/curves/ed25519.js";
 import bs58 from "bs58";
 import { DIGGO_CONFIG } from "../shared/config";
 import { RISK_OPS } from "../shared/riskOps";
-import type { RuntimeEnv } from "./env";
+import { optionalBinding, type RuntimeEnv } from "./env";
 import {
   SESSION_COOKIE,
   SESSION_TTL_SECONDS,
@@ -224,6 +224,52 @@ export function verifyWalletSignature(wallet: string, message: string, signature
   }
 }
 
+/**
+ * A configured hostname list entry, reduced to the host siteverify reports: a bare hostname, or a
+ * URL/origin an operator pasted, all with the same meaning.
+ */
+function normalizeTurnstileHostname(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed.length === 0) return "";
+  const afterScheme = trimmed.includes("://") ? trimmed.slice(trimmed.indexOf("://") + 3) : trimmed;
+  const host = (afterScheme.split("/")[0] ?? "").split(":")[0] ?? "";
+  return host;
+}
+
+function commaSeparatedBinding(env: RuntimeEnv, name: string): string[] {
+  const raw = optionalBinding<string>(env, name);
+  if (typeof raw !== "string") return [];
+  return raw
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0);
+}
+
+/**
+ * The hostnames a Turnstile token is allowed to have been solved on: wherever this request actually
+ * arrived (so the production domain needs no configuration) plus the configured allowlist, because
+ * the same deployment legitimately answers on apex, ``www`` and preview hosts.
+ */
+export function turnstileAllowedHostnames(request: Request, env: RuntimeEnv): string[] {
+  const hostnames = new Set<string>();
+  const requestHostname = normalizeTurnstileHostname(new URL(request.url).hostname);
+  if (requestHostname.length > 0) hostnames.add(requestHostname);
+  for (const entry of commaSeparatedBinding(env, "TURNSTILE_ALLOWED_HOSTNAMES")) {
+    const hostname = normalizeTurnstileHostname(entry);
+    if (hostname.length > 0) hostnames.add(hostname);
+  }
+  return [...hostnames];
+}
+
+/**
+ * Verifies a Turnstile token (spec 46, 62).
+ *
+ * Success is not enough on its own: siteverify reports the hostname the token was solved on, so a
+ * token solved on an attacker's own page - which an attacker can always produce with their own site
+ * key - has to be refused here, or the friction this gate exists to add can be cleared off-site.
+ * When the token carries an action it has to be one this deployment expects (TURNSTILE_ACTIONS),
+ * which is what stops a token minted for a cheap widget from being replayed into a sensitive one.
+ */
 export async function verifyTurnstile(
   token: string,
   request: Request,
@@ -244,8 +290,28 @@ export async function verifyTurnstile(
       idempotency_key: crypto.randomUUID(),
     }),
   });
-  const result = (await response.json()) as { success?: boolean; hostname?: string };
-  return result.success === true;
+  let result: { success?: boolean; hostname?: string; action?: string };
+  try {
+    result = (await response.json()) as { success?: boolean; hostname?: string; action?: string };
+  } catch {
+    // An unreadable answer is an unverified token, never a cleared one.
+    return false;
+  }
+  if (result.success !== true) return false;
+
+  const solvedOn = typeof result.hostname === "string" ? normalizeTurnstileHostname(result.hostname) : "";
+  if (solvedOn.length === 0) return false;
+  if (!turnstileAllowedHostnames(request, env).includes(solvedOn)) return false;
+
+  const action = typeof result.action === "string" ? result.action.trim().toLowerCase() : "";
+  // The action check only exists for deployments that declare actions. An unconfigured list must
+  // not refuse every token: siteverify reports an empty action for a widget with no action, and a
+  // deployment that never set TURNSTILE_ACTIONS would otherwise reject every real solution - a
+  // gate that fails closed on its own missing configuration is an outage, not a defence. The
+  // hostname check above is what makes the token this deployment's, and it always runs.
+  const declaredActions = commaSeparatedBinding(env, "TURNSTILE_ACTIONS");
+  if (declaredActions.length > 0 && action.length > 0 && !declaredActions.includes(action)) return false;
+  return true;
 }
 
 export async function sessionWallet(request: Request, env: RuntimeEnv): Promise<string | null> {

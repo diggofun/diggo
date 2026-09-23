@@ -2,7 +2,7 @@
  * HTTP plumbing shared by every route module: JSON responses, error helpers, request-body
  * parsing, session cookie formatting and the two rate-limit dimensions (per-IP and per-wallet).
  */
-import type { RuntimeEnv } from "./env";
+import { rateLimiterBinding, type RuntimeEnv } from "./env";
 
 interface CloudflareSubtleCrypto extends SubtleCrypto {
   timingSafeEqual(a: ArrayBufferView, b: ArrayBufferView): boolean;
@@ -120,6 +120,8 @@ export async function checkKeyedRateLimits(
 ): Promise<RateLimitVerdict> {
   const active = checks.filter((check) => check.key !== null && check.key.length > 0 && check.limit > 0);
   if (active.length === 0) return { allowed: true, exceeded: null, retryAfterSec: 0 };
+  const bindingVerdict = await rateLimitBindingVerdict(env, active);
+  if (bindingVerdict) return bindingVerdict;
   const counts = await Promise.all(
     active.map(async (check) => {
       const stored = await env.TOKEN_CACHE.get(rateKey(check.dimension, check.key as string, check.windowSeconds));
@@ -145,6 +147,40 @@ export async function checkKeyedRateLimits(
     }),
   );
   return { allowed: exceeded === null, exceeded, retryAfterSec: exceeded === null ? 0 : retryAfterSec };
+}
+
+/**
+ * The Cloudflare Rate Limiting binding, consulted before the KV counters.
+ *
+ * The binding is a strongly consistent counter enforced at the edge, while KV is eventually
+ * consistent and can therefore leak a burst across regions. Its ceiling comes from wrangler.jsonc
+ * and is shared by every action that keys the same dimension, so it is deliberately loose (a flood
+ * backstop, not the per-action budget): the exact per-action budgets stay in the KV counters above,
+ * and both have to pass.
+ *
+ * Returns null when nothing was over budget, or when the binding is absent or fails - the limiter
+ * is defense in depth and must never turn a binding outage into a game outage (spec 48).
+ */
+async function rateLimitBindingVerdict(
+  env: RuntimeEnv,
+  checks: readonly RateLimitCheck[],
+): Promise<RateLimitVerdict | null> {
+  const limiter = rateLimiterBinding(env);
+  if (!limiter) return null;
+  const outcomes = await Promise.all(
+    checks.map(async (check) => {
+      try {
+        const outcome = await limiter.limit({ key: "rl:" + check.dimension + ":" + check.key });
+        return outcome.success ? null : check;
+      } catch (error) {
+        // Local development and a partially provisioned deployment both land here.
+        console.warn(JSON.stringify({ event: "rate_limit.binding_failed", error: String(error) }));
+        return null;
+      }
+    }),
+  );
+  const blocked = outcomes.find((check) => check !== null);
+  return blocked ? { allowed: false, exceeded: blocked.dimension, retryAfterSec: blocked.windowSeconds } : null;
 }
 
 
