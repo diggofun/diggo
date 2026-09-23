@@ -159,12 +159,15 @@ export async function readAccount(
     .getAccountInfo(account, { commitment: "confirmed", encoding: "base64" })
     .send();
   if (!value) return null;
+  // `data` is the [base64, "base64"] tuple the requested encoding produces, so the byte length has
+  // to be measured on the decoded bytes: taking `.length` of the tuple reports 2 for every account.
+  const data = base64ToBytes(value.data[0]);
   return {
     address: account,
     owner: address(value.owner),
     lamports: BigInt(value.lamports),
-    dataLength: value.data.length,
-    data: base64ToBytes(value.data[0]),
+    dataLength: data.length,
+    data,
   };
 }
 

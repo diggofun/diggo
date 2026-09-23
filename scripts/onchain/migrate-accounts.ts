@@ -51,7 +51,7 @@ import {
 } from "./lib.ts";
 
 /** The diggo_protocol program id; matches Anchor.toml and wrangler.jsonc. */
-const DEFAULT_PROGRAM_ID = "48WgfSPnEPitiasXV5B3aLpeAWtUisSt6YSR6djDZebC";
+const DEFAULT_PROGRAM_ID = "BLF7g1SbT72xb5M8rVrD7V3mdDXxb1AqwChcoeF4ppmE";
 
 const KIND_BY_NAME: Record<string, MigratableAccountKind> = {
   protocol: MIGRATABLE_ACCOUNT_KIND.protocol,

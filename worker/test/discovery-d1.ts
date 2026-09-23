@@ -60,7 +60,7 @@ export function createHarness(options: HarnessOptions = {}): DiscoveryTestHarnes
     DB: db,
     TOKEN_CACHE: kv,
     INDEXING_QUEUE: queue,
-    DIGGO_PROGRAM_ID: "48WgfSPnEPitiasXV5B3aLpeAWtUisSt6YSR6djDZebC",
+    DIGGO_PROGRAM_ID: "BLF7g1SbT72xb5M8rVrD7V3mdDXxb1AqwChcoeF4ppmE",
     DIGGO_KEEPER: "G3QELLuGprfRBYxoh3P5v4ZkGFyNXGLjATsNYZx6xWu8",
     SOLANA_CLUSTER: "devnet",
     ENVIRONMENT: "production",
