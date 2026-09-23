@@ -193,16 +193,29 @@ export async function registerLaunchedToken(request: Request, env: RuntimeEnv): 
 
 /**
  * Records a trade the caller's own wallet just executed on-chain (buy or sell against a mine's
- * bonding curve — see src/solanaProgram.ts) so the DiggoSwap chart has something to draw. This
+ * trading venue — see src/solanaProgram.ts) so the DiggoSwap chart has something to draw. This
  * only feeds display data, never account/reward state, so verification is deliberately light:
  * confirm the signature is a real, successful, recent transaction before trusting its side/amount.
- * price/market_cap in the `tokens` row are always re-derived from a fresh on-chain read, never
- * from the client-supplied price.
+ *
+ * price/market_cap/liquidity in the `tokens` row are always re-derived from a fresh on-chain read,
+ * never from anything the client sent. That read is venue-aware: before graduation the price comes
+ * from the bonding curve, and after `graduate_market` the curve's reserves are zero and both the
+ * price and the liquidity come from the program-owned pool (docs/ONCHAIN.md).
  */
 export async function recordTrade(request: Request, env: RuntimeEnv, mint: string): Promise<Response> {
   if (!(await checkRateLimit(request, env, "trade-record", 60))) return apiError("Too many requests", 429);
-  const body = await readJson<{ signature?: string; side?: "buy" | "sell"; amount?: number }>(request);
-  if (!body.signature || (body.side !== "buy" && body.side !== "sell") || typeof body.amount !== "number") {
+  const body = await readJson<{ signature?: string; side?: "buy" | "sell"; amount?: number | string }>(request);
+  // The client sends the amount as an exact decimal string (src/solanaProgram.ts recordedAmount): a
+  // raw base-unit figure above 2^53 does not survive a JS Number, and this is the record of what
+  // traded. A plain number is still accepted, because that is what an older client sends.
+  const amountText = typeof body.amount === "number" ? String(body.amount) : body.amount;
+  if (
+    !body.signature ||
+    (body.side !== "buy" && body.side !== "sell") ||
+    typeof amountText !== "string" ||
+    amountText.length > 40 ||
+    !/^\d+(\.\d+)?$/.test(amountText)
+  ) {
     return apiError("Invalid trade payload");
   }
   const rpc = getChainRpc(env);
@@ -229,11 +242,14 @@ export async function recordTrade(request: Request, env: RuntimeEnv, mint: strin
   await env.DB.batch([
     env.DB.prepare(
       "INSERT OR IGNORE INTO trades (signature, mint, side, price_usd, price_sol, amount, block_time) VALUES (?1,?2,?3,?4,?5,?6,?7)",
-    ).bind(body.signature, mint, body.side, chain.priceUsd, chain.priceSol, body.amount, timestamp),
-    env.DB.prepare("UPDATE tokens SET price_usd = ?1, price_sol = ?2, market_cap_usd = ?3 WHERE mint = ?4").bind(
+    ).bind(body.signature, mint, body.side, chain.priceUsd, chain.priceSol, amountText, timestamp),
+    env.DB.prepare(
+      "UPDATE tokens SET price_usd = ?1, price_sol = ?2, market_cap_usd = ?3, liquidity_usd = ?4 WHERE mint = ?5",
+    ).bind(
       chain.priceUsd,
       chain.priceSol,
       chain.marketCapUsd,
+      chain.liquidityUsd,
       mint,
     ),
   ]);
@@ -243,11 +259,22 @@ export async function recordTrade(request: Request, env: RuntimeEnv, mint: strin
     side: body.side,
     priceSol: chain.priceSol,
     priceUsd: chain.priceUsd,
-    amount: body.amount,
+    // The Durable Object's tape and its 24h volume aggregate are display-only, so this one hop is
+    // allowed to be a float. The indexed row above keeps the exact figure.
+    amount: Number(amountText),
     timestamp,
   });
   await env.TOKEN_CACHE.delete(TOKEN_CACHE_KEY);
-  return json({ ok: true, priceUsd: chain.priceUsd, priceSol: chain.priceSol });
+  console.log(
+    JSON.stringify({
+      event: "trade.recorded",
+      mint,
+      side: body.side,
+      venue: chain.venue,
+      priceSol: chain.priceSol,
+    }),
+  );
+  return json({ ok: true, priceUsd: chain.priceUsd, priceSol: chain.priceSol, venue: chain.venue });
 }
 
 export async function serveMedia(pathname: string, env: RuntimeEnv): Promise<Response> {

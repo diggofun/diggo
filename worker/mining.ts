@@ -15,14 +15,27 @@
  * Scalability (spec 17, 78): blocks are advanced lazily and in bounded batches on read/write, and
  * a position is settled exactly once per settlement point instead of once per block per player.
  */
+import {
+  address,
+  getBase58Encoder,
+  type Address,
+  type Instruction,
+  type ReadonlyUint8Array,
+} from "@solana/kit";
 import { DIGGO_CONFIG, type DiggoConfig } from "../shared/config";
-import { crewTier, crewPower } from "../shared/crew";
+import { crewTier, crewPower, effectiveMiningPower } from "../shared/crew";
 import { discoveryEligible } from "../shared/discovery";
 import { oreCapacity, oreForActiveSeconds, oreFromActivation, storeOre } from "../shared/ore";
 import {
+  buildClaimRewardsInstruction,
+  deriveAssociatedTokenAddress,
+  deriveMineAddresses,
+  derivePositionPda,
+} from "../shared/program";
+import {
   applyBlock,
-  reducedReward,
-  rewardReductionSchedule,
+  emissionSchedulePreview,
+  epochReward,
   settlePosition,
   type MiningPosition,
   type RewardIndexState,
@@ -41,7 +54,15 @@ import type {
   RewardClaimPayout,
   TokenStatus,
 } from "../shared/types";
-import { loadChallenge, sessionWallet, storeChallenge, verifyWalletSignature } from "./auth";
+import {
+  challengeKey,
+  consumeChallengeNonce,
+  issueChallenge,
+  loadChallenge,
+  sessionWallet,
+  storeChallenge,
+  verifyWalletSignature,
+} from "./auth";
 import { isBreakerOpen } from "./breakers";
 import { getChainRpc } from "./chain";
 import { rollDiscovery } from "./discovery";
@@ -57,7 +78,7 @@ import {
   rowToProfile,
   type PlayerRow,
 } from "./player";
-import { gateAction, recordActivity } from "./risk";
+import { gateAction, miningClusterCounts, recordActivity } from "./risk";
 import { metric } from "./telemetry";
 
 /**
@@ -69,6 +90,16 @@ export const NOMINAL_BLOCK_INTERVAL_SECONDS = 300;
 export const NOMINAL_EPOCH_LENGTH_SECONDS = 604_800;
 /** Bounds per call, so one request can never walk an unbounded block range (spec 78). */
 export const MAX_BLOCKS_PER_ADVANCE = 512;
+/**
+ * Epoch steps one advance call may take before it stops and resumes on the next call.
+ *
+ * The on-chain walk has the same shape for the same reason (MAX_SYNC_SEGMENTS in
+ * programs/diggo-protocol): one block's worth of catch-up can span an arbitrary number of epoch
+ * boundaries, and a schedule with a very short epoch length would otherwise make a single call do
+ * unbounded work inside one block. Reaching the budget is not a failure - the epochs stepped so far
+ * are persisted, so the next call continues from exactly there.
+ */
+export const MAX_EPOCHS_PER_ADVANCE = 64;
 export const MAX_EXPIRY_ROWS = 256;
 /** How long a settled block-reward claim stays claimable before it expires. */
 export const REWARD_CLAIM_WINDOW_SECONDS = 30 * 86_400;
@@ -92,10 +123,25 @@ export interface MineState {
   rewardPerBlock: bigint;
   committed: bigint;
   dustScaled: bigint;
+  /**
+   * Whole tokens applyBlock has taken out of the reserve into the index (spec 19). Stored rather
+   * than derived: every position floors its own share, so in a mine with more than one miner the
+   * whole tokens the positions hold are not a function of `committed`.
+   */
+  released: bigint;
+  /** Whole tokens a forfeit has handed back to the reserve (spec 19, 21). */
+  forfeited: bigint;
   blockInterval: number;
   epochLength: number;
   epochEndsAt: number;
   authority: MineAuthority;
+  /**
+   * Days over which this mine is meant to distribute its whole Mining Reserve (spec 20, 21). It is
+   * a launch parameter of the mine, like its reserve split and its starting reward, so it is not
+   * stored in DIGGO_CONFIG: a mine that does not set one follows
+   * the configured default `economy.emission.targetLifetimeDays`.
+   */
+  targetLifetimeDays?: number;
 }
 
 interface MineStateRow {
@@ -110,6 +156,8 @@ interface MineStateRow {
   reward_per_block: string;
   committed: string;
   dust_scaled: string;
+  released: string;
+  forfeited: string;
   block_interval: number;
   epoch_length: number;
   epoch_ends_at: number;
@@ -132,6 +180,8 @@ export interface PositionRow {
   wallet: string;
   mint: string;
   assigned_power: string;
+  /** The crew's nominal power this position was armed from, before maturity/cluster/share cap. */
+  raw_power: string;
   last_reward_index: string;
   pending_reward: string;
   paused: number;
@@ -149,9 +199,13 @@ export interface RewardClaimRow {
   created_at: number;
   eligible_until: number;
   claimed_at: number | null;
+  /** When this claim was parked in HELD, so its window can stop running while it is held. */
+  held_at: number | null;
   settlement_seq: number;
   authority: MineAuthority;
   tx_signature: string | null;
+  /** Token amount the confirmed payout actually moved, measured from the transaction itself. */
+  paid_amount: string | null;
 }
 
 /** A mining position as the accounting needs it, independent of storage. */
@@ -223,6 +277,8 @@ export function rowToMineState(row: MineStateRow): MineState {
     rewardPerBlock: big(row.reward_per_block),
     committed: big(row.committed),
     dustScaled: big(row.dust_scaled),
+    released: big(row.released),
+    forfeited: big(row.forfeited),
     blockInterval: row.block_interval > 0 ? row.block_interval : NOMINAL_BLOCK_INTERVAL_SECONDS,
     epochLength: row.epoch_length > 0 ? row.epoch_length : NOMINAL_EPOCH_LENGTH_SECONDS,
     epochEndsAt: row.epoch_ends_at,
@@ -242,12 +298,18 @@ export function rowToPositionSnapshot(row: PositionRow): PositionSnapshot {
   };
 }
 
-function toRewardIndexState(state: MineState): RewardIndexState {
+export function toRewardIndexState(state: MineState): RewardIndexState {
   return {
     globalRewardIndex: state.rewardIndex,
     totalEligiblePower: state.totalEligiblePower,
     reserveRemaining: state.remainingReserve,
     committed: state.committed,
+    // The mine's own ledger counters. Reconstructing them from dustScaled + committed only works
+    // while a mine has a single position: with two or more, the per-position flooring leaves whole
+    // tokens in the positions that `committed` (the block-level floor) never counted, and the
+    // sub-token remainders only reach dustScaled when a position settles.
+    released: state.released,
+    forfeited: state.forfeited,
     dustScaled: state.dustScaled,
     rewardPerBlock: state.rewardPerBlock,
     blocksProcessed: 0,
@@ -263,6 +325,16 @@ function toMiningPosition(mint: string, position: PositionSnapshot): MiningPosit
     pendingReward: position.pendingReward,
     paused: position.paused,
   };
+}
+
+/**
+ * True when a mine's schedule can actually move forward: a block interval of zero would credit the
+ * same instant over and over, and an epoch length of zero would make the epoch walk inside one block
+ * step forever. Neither can come from a well-formed row (rowToMineState substitutes the nominal
+ * values), which is exactly why a state carrying one is refused rather than quietly walked.
+ */
+export function scheduleCanAdvance(state: MineState): boolean {
+  return state.blockInterval > 0 && state.epochLength > 0;
 }
 
 /**
@@ -285,6 +357,11 @@ export function simulateAdvance(input: AdvanceInput): AdvanceOutcome {
   if (state.lastBlock <= 0 || maxBlocks === 0 || state.status === "FULLY_MINED") {
     return { state, expiries, blocksAdvanced: 0, distributed: 0n };
   }
+  // Fail closed on a schedule that cannot advance, before any work: nothing is credited and the
+  // caller is handed its own state back. advanceMineTo records the refusal as a metric.
+  if (!scheduleCanAdvance(state)) {
+    return { state, expiries, blocksAdvanced: 0, distributed: 0n };
+  }
 
   let core = toRewardIndexState(state);
   let rewardPerBlock = state.rewardPerBlock;
@@ -300,13 +377,30 @@ export function simulateAdvance(input: AdvanceInput): AdvanceOutcome {
     if (input.exclusive === true ? blockTime >= input.upTo : blockTime > input.upTo) break;
 
     if (epochEndsAt > 0 && blockTime >= epochEndsAt) {
+      let stepped = 0;
       while (blockTime >= epochEndsAt) {
-        rewardPerBlock = BigInt(
-          reducedReward(Number(rewardPerBlock), config.economy.rewardReductionBps, config.economy.minimumReducedReward),
-        );
+        // Per-call epoch budget, like the on-chain segment budget. Stopping here leaves the block
+        // uncredited and the *epoch cursor* advanced, which the caller persists: the next call picks
+        // the same block up with the remaining epochs, so a burst of catch-up costs several calls
+        // instead of one unbounded one.
+        if (stepped >= MAX_EPOCHS_PER_ADVANCE) break;
+        // The epoch boundary is where the schedule steps down (spec 21). Under the reserve-runway
+        // schedule the step is derived from the reserve that is actually left, so the mine's whole
+        // Mining Reserve stays distributable however it was launched (spec 19, 20).
+        rewardPerBlock = epochReward({
+          reserveRemaining: core.reserveRemaining,
+          previousRewardPerBlock: rewardPerBlock,
+          epoch: epoch + 1,
+          epochLengthSeconds: state.epochLength,
+          blockIntervalSeconds: state.blockInterval,
+          targetLifetimeDays: state.targetLifetimeDays,
+          config,
+        });
         epoch += 1;
         epochEndsAt += state.epochLength;
+        stepped += 1;
       }
+      if (blockTime >= epochEndsAt) break;
     }
 
     for (const position of positions) {
@@ -359,6 +453,8 @@ export function simulateAdvance(input: AdvanceInput): AdvanceOutcome {
       rewardPerBlock,
       epoch,
       epochEndsAt,
+      released: core.released,
+      forfeited: core.forfeited,
       status: fullyMined ? "FULLY_MINED" : state.status,
     },
     expiries,
@@ -433,6 +529,7 @@ export interface MineInfoInput {
   symbol: string;
   tokenStatus: TokenStatus;
   playerPower: number | null;
+  config?: DiggoConfig;
 }
 
 /** Mine information payload (spec 33): never an ROI/APY promise, always labelled as an estimate. */
@@ -458,7 +555,20 @@ export function mineInfoPayload(input: MineInfoInput): MineInfo {
     estimatedShare,
     estimatedRewardPerBlock,
     estimateLabel: ESTIMATE_LABEL,
-    reductionSchedule: rewardReductionSchedule(REDUCTION_SCHEDULE_EPOCHS, blockReward),
+    // The schedule the mine is actually on, not a fixed decay curve: under the reserve-runway
+    // schedule the next epochs follow from the reserve that is left (spec 21, 33).
+    reductionSchedule: emissionSchedulePreview(
+      {
+        reserveRemaining: state.remainingReserve,
+        previousRewardPerBlock: state.rewardPerBlock,
+        epoch: state.epoch,
+        epochLengthSeconds: state.epochLength,
+        blockIntervalSeconds: state.blockInterval,
+        targetLifetimeDays: state.targetLifetimeDays,
+      },
+      REDUCTION_SCHEDULE_EPOCHS,
+      input.config ?? DIGGO_CONFIG,
+    ).map((reward) => Number(reward)),
     fullyMinedProgress: initialReserve > 0 ? Math.min(1, Math.max(0, 1 - remainingReserve / initialReserve)) : 1,
     nextBlockAt: state.lastBlock + state.blockInterval,
     epoch: state.epoch,
@@ -482,11 +592,30 @@ export async function loadMineToken(env: RuntimeEnv, mint: string): Promise<Mine
  * The block cursor is anchored at first touch rather than back-dated: the off-chain index starts
  * accounting when it starts existing, so no reward is invented for a period nobody tracked.
  */
-export async function loadMineState(env: RuntimeEnv, mint: string, now: number): Promise<MineState | null> {
+export interface LoadedMineState {
+  state: MineState;
+  /**
+   * False when the stored row's own schedule cannot walk forward (a block interval or epoch length
+   * of zero or less). rowToMineState substitutes the nominal values so the rest of the game keeps
+   * working, so this is the only place that still knows the row was unusable.
+   */
+  scheduleUsable: boolean;
+}
+
+export async function loadMineState(
+  env: RuntimeEnv,
+  mint: string,
+  now: number,
+): Promise<LoadedMineState | null> {
   const existing = await env.DB.prepare("SELECT * FROM mine_reward_state WHERE mint = ?1")
     .bind(mint)
     .first<MineStateRow>();
-  if (existing) return rowToMineState(existing);
+  if (existing) {
+    return {
+      state: rowToMineState(existing),
+      scheduleUsable: existing.block_interval > 0 && existing.epoch_length > 0,
+    };
+  }
 
   const token = await loadMineToken(env, mint);
   if (!token) return null;
@@ -503,8 +632,8 @@ export async function loadMineState(env: RuntimeEnv, mint: string, now: number):
     `INSERT OR IGNORE INTO mine_reward_state
        (mint, reward_index, last_block, remaining_reserve, initial_reserve, epoch, status,
         total_eligible_power, reward_per_block, committed, dust_scaled, block_interval,
-        epoch_length, epoch_ends_at, authority, updated_at)
-     VALUES (?1, '0', ?2, ?3, ?4, 0, ?5, '0', ?6, '0', '0', ?7, ?8, ?9, ?10, ?2)`,
+        epoch_length, epoch_ends_at, authority, released, forfeited, updated_at)
+     VALUES (?1, '0', ?2, ?3, ?4, 0, ?5, '0', ?6, '0', '0', ?7, ?8, ?9, ?10, ?11, '0', ?2)`,
   )
     .bind(
       mint,
@@ -517,13 +646,17 @@ export async function loadMineState(env: RuntimeEnv, mint: string, now: number):
       NOMINAL_EPOCH_LENGTH_SECONDS,
       epochEndsAt,
       authority,
+      // Whatever the reserve split already says has left it: a mine first seen with a reserve below
+      // its total has already paid that difference out.
+      (initialReserve > remainingReserve ? initialReserve - remainingReserve : 0n).toString(),
     )
     .run();
 
   const created = await env.DB.prepare("SELECT * FROM mine_reward_state WHERE mint = ?1")
     .bind(mint)
     .first<MineStateRow>();
-  return created ? rowToMineState(created) : null;
+  // A row this function just created always carries the nominal schedule.
+  return created ? { state: rowToMineState(created), scheduleUsable: true } : null;
 }
 
 /**
@@ -535,7 +668,7 @@ async function persistMineState(env: RuntimeEnv, state: MineState, now: number):
     `UPDATE mine_reward_state SET
        reward_index = ?1, last_block = ?2, remaining_reserve = ?3, initial_reserve = ?4, epoch = ?5,
        status = ?6, reward_per_block = ?7, committed = ?8, dust_scaled = ?9, epoch_ends_at = ?10,
-       updated_at = ?11
+       released = ?13, forfeited = ?14, updated_at = ?11
      WHERE mint = ?12 AND last_block <= ?2`,
   )
     .bind(
@@ -551,6 +684,8 @@ async function persistMineState(env: RuntimeEnv, state: MineState, now: number):
       state.epochEndsAt,
       now,
       state.mint,
+      state.released.toString(),
+      state.forfeited.toString(),
     )
     .run();
 }
@@ -562,6 +697,39 @@ async function adjustMinePower(env: RuntimeEnv, mint: string, delta: number, now
     "UPDATE mine_reward_state SET total_eligible_power = MAX(0, CAST(total_eligible_power AS INTEGER) + ?1), updated_at = ?2 WHERE mint = ?3",
   )
     .bind(delta, now, mint)
+    .run();
+}
+
+/**
+ * Books the ledger moves one position's settlement produced onto the mine's row: the sub-token
+ * remainder it could not be credited with, which is dust, and - for a forfeit - the share handed
+ * back to the reserve. Both are deltas against the state the settlement started from, so a
+ * settlement that moved neither writes nothing.
+ *
+ * advanceMineTo() persists its own ledger through persistMineState(); this is the same move for the
+ * settlements that run outside it. Dropping them is what leaves a mine's books short of the tokens
+ * its positions actually hold (spec 17, 19).
+ */
+async function bookSettlementLedger(
+  env: RuntimeEnv,
+  mint: string,
+  before: RewardIndexState,
+  after: RewardIndexState,
+  now: number,
+): Promise<void> {
+  const dust = after.dustScaled - before.dustScaled;
+  const reserve = after.reserveRemaining - before.reserveRemaining;
+  const forfeited = after.forfeited - before.forfeited;
+  if (dust === 0n && reserve === 0n && forfeited === 0n) return;
+  await env.DB.prepare(
+    `UPDATE mine_reward_state
+        SET dust_scaled = CAST(dust_scaled AS INTEGER) + CAST(?1 AS INTEGER),
+            remaining_reserve = CAST(remaining_reserve AS INTEGER) + CAST(?2 AS INTEGER),
+            forfeited = CAST(forfeited AS INTEGER) + CAST(?3 AS INTEGER),
+            updated_at = ?4
+      WHERE mint = ?5`,
+  )
+    .bind(dust.toString(), reserve.toString(), forfeited.toString(), now, mint)
     .run();
 }
 
@@ -611,10 +779,26 @@ export async function advanceMineTo(
   upTo: number,
   options: { exclusive?: boolean; maxBlocks?: number } = {},
 ): Promise<MineAdvance | null> {
-  const state = await loadMineState(env, mint, upTo);
-  if (!state) return null;
+  const loaded = await loadMineState(env, mint, upTo);
+  if (!loaded) return null;
+  const { state } = loaded;
   const wasFullyMined = state.status === "FULLY_MINED";
   if (state.status === "FULLY_MINED" || state.lastBlock <= 0) {
+    return { state, blocksAdvanced: 0, expiries: [] };
+  }
+  if (!loaded.scheduleUsable) {
+    // Fail closed, loudly: a mine whose stored schedule cannot move forward is never walked with a
+    // substituted interval, because that would credit blocks the row never described. The counter
+    // is what makes a corrupt row visible instead of silently paying a different schedule.
+    await metric(env, "mining.advance_schedule_invalid", 1, { mint });
+    console.error(
+      JSON.stringify({
+        event: "mining.advance_schedule_invalid",
+        mint,
+        blockInterval: state.blockInterval,
+        epochLength: state.epochLength,
+      }),
+    );
     return { state, blocksAdvanced: 0, expiries: [] };
   }
 
@@ -682,6 +866,44 @@ export async function loadPositionRow(
 }
 
 /**
+ * The effective Mining Power one position is armed with (spec 40, 53, 58, 61, 64).
+ *
+ * Time is the anti-sybil resource (spec 58), so a wallet that was created a minute ago brings its
+ * configured maturity share to a block; a wallet sharing a device or a network environment with a
+ * whole farm brings the cluster's share of that; and no single account may own more than the
+ * configured fraction of one block. None of it is a paywall (spec 41) and none of it stops the
+ * account from mining: the crew keeps accruing ORE, keeps its streak and keeps its claim, it just
+ * carries less weight while it is young or inside a farm-sized cluster (spec 53).
+ *
+ * Both cluster counts come from account_signals, the same counters the risk score uses. A missing
+ * device or network key reports no cluster at all, so an absent header can never damp a player.
+ */
+export async function effectiveArmPower(
+  env: RuntimeEnv,
+  wallet: string,
+  rawPower: bigint,
+  now: number,
+  options: { mineTotalPower?: bigint; config?: DiggoConfig } = {},
+): Promise<bigint> {
+  if (rawPower <= 0n) return 0n;
+  const config = options.config ?? DIGGO_CONFIG;
+  const [player, cluster] = await Promise.all([
+    env.DB.prepare("SELECT created_at FROM players WHERE wallet = ?1")
+      .bind(wallet)
+      .first<{ created_at: number }>(),
+    miningClusterCounts(env, wallet, now).catch(() => ({ walletsOnDevice: 0, walletsOnNetwork: 0 })),
+  ]);
+  const accountAgeSeconds = player ? Math.max(0, now - player.created_at) : 0;
+  return effectiveMiningPower({
+    power: rawPower,
+    accountAgeSeconds,
+    cluster,
+    mineTotalPower: options.mineTotalPower ?? 0n,
+    config,
+  });
+}
+
+/**
  * Arms (or re-arms) a position at the mine's current index: no retroactive credit.
  *
  * The stored activation instant is the later of the activation the caller asked for and the
@@ -689,6 +911,11 @@ export async function loadPositionRow(
  * cursor starts at the mine's cursor, so no block at or before it can ever be credited - and
  * keeping them equal is what makes creditedBlockCount() exact for a crew that switched mines
  * mid-window (the position keeps the original window end but starts earning on this mine now).
+ *
+ * The position is settled first, always. `last_reward_index` is the only record of what a position
+ * has already accrued, so moving it (or the power it is measured against) without a settlement in
+ * front of it silently destroys that entitlement (spec 30). The settle is exclusive, so the block
+ * landing exactly on `now` still belongs to the new arm (spec 77).
  */
 export async function armPosition(
   env: RuntimeEnv,
@@ -698,34 +925,58 @@ export async function armPosition(
   activatedAt: number,
   activeUntil: number,
   now: number,
+  options: { config?: DiggoConfig } = {},
 ): Promise<void> {
-  const index = await env.DB.prepare("SELECT reward_index, last_block FROM mine_reward_state WHERE mint = ?1")
-    .bind(mint)
-    .first<{ reward_index: string; last_block: number }>();
-  const armedAt = Math.max(activatedAt, index?.last_block ?? 0);
-  await env.DB.prepare(
-    `INSERT INTO mining_positions
-       (wallet, mint, assigned_power, last_reward_index, pending_reward, paused, activated_at, active_until, claim_seq, updated_at)
-     VALUES (?1, ?2, ?3, ?4, '0', 0, ?5, ?6, 0, ?7)
-     ON CONFLICT(wallet, mint) DO UPDATE SET
-       assigned_power = excluded.assigned_power,
-       last_reward_index = excluded.last_reward_index,
-       paused = 0,
-       activated_at = excluded.activated_at,
-       active_until = excluded.active_until,
-       updated_at = excluded.updated_at`,
+  await settlePositionAt(env, wallet, mint, now, { releasePower: true, exclusive: true });
+
+  const index = await env.DB.prepare(
+    "SELECT reward_index, last_block, total_eligible_power FROM mine_reward_state WHERE mint = ?1",
   )
-    .bind(
+    .bind(mint)
+    .first<{ reward_index: string; last_block: number; total_eligible_power: string }>();
+  const armedAt = Math.max(activatedAt, index?.last_block ?? 0);
+  // The position stores the power it actually brings to a block, which is the crew's power after the
+  // account-maturity, cluster-damping and share-cap rules (spec 40, 58, 61, 64). This is the only
+  // place a block share is created, so it is the only place a cumulative index can apply them.
+  const armedPower = await effectiveArmPower(env, wallet, power, now, {
+    mineTotalPower: big(index?.total_eligible_power),
+    config: options.config,
+  });
+  // One batch, so the mine's total and the row that explains it move together. The delta is
+  // (new - old) with the old value read from the position row inside the same statement, so two
+  // concurrent arms of one position cannot both add the same power to the mine (spec 78).
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE mine_reward_state
+          SET total_eligible_power = MAX(0, CAST(total_eligible_power AS INTEGER) + ?1 -
+                COALESCE((SELECT CAST(assigned_power AS INTEGER) FROM mining_positions
+                           WHERE wallet = ?2 AND mint = ?3), 0)),
+              updated_at = ?4
+        WHERE mint = ?3`,
+    ).bind(Number(armedPower), wallet, mint, now),
+    env.DB.prepare(
+      `INSERT INTO mining_positions
+         (wallet, mint, assigned_power, raw_power, last_reward_index, pending_reward, paused, activated_at, active_until, claim_seq, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, '0', 0, ?6, ?7, 0, ?8)
+       ON CONFLICT(wallet, mint) DO UPDATE SET
+         assigned_power = excluded.assigned_power,
+         raw_power = excluded.raw_power,
+         last_reward_index = excluded.last_reward_index,
+         paused = 0,
+         activated_at = excluded.activated_at,
+         active_until = excluded.active_until,
+         updated_at = excluded.updated_at`,
+    ).bind(
       wallet,
       mint,
-      (power > 0n ? power : 0n).toString(),
+      armedPower.toString(),
+      power.toString(),
       big(index?.reward_index).toString(),
       armedAt,
       activeUntil,
       now,
-    )
-    .run();
-  await adjustMinePower(env, mint, Number(power), now);
+    ),
+  ]);
 }
 
 export interface PositionSettlement {
@@ -746,16 +997,20 @@ export interface PositionSettlement {
  * releasePower = true is the switch/upgrade/expiry path: the position stops carrying power, so
  * the mine's eligible total drops with it. releasePower = false is the "show me my report" path:
  * the crew keeps mining and only the settled tokens move into a claim row.
+ *
+ * exclusive leaves the block landing exactly on `now` to the next caller, which is what lets
+ * armPosition() settle a position and re-arm it on the same instant without either losing the
+ * block at that instant or crediting it twice (spec 77).
  */
 export async function settlePositionAt(
   env: RuntimeEnv,
   wallet: string,
   mint: string,
   now: number,
-  options: { releasePower?: boolean } = {},
+  options: { releasePower?: boolean; exclusive?: boolean } = {},
 ): Promise<PositionSettlement | null> {
   const releasePower = options.releasePower ?? false;
-  const advance = await advanceMineTo(env, mint, now);
+  const advance = await advanceMineTo(env, mint, now, { exclusive: options.exclusive });
   if (!advance) return null;
   const row = await loadPositionRow(env, wallet, mint);
   if (!row) return null;
@@ -766,7 +1021,8 @@ export async function settlePositionAt(
   let released = false;
 
   if (snapshot.assignedPower > 0n) {
-    const outcome = settlePosition(toRewardIndexState(advance.state), toMiningPosition(mint, snapshot));
+    const mineState = toRewardIndexState(advance.state);
+    const outcome = settlePosition(mineState, toMiningPosition(mint, snapshot));
     settled = outcome.earned;
     forfeited = outcome.forfeited;
     // A forfeit (paused/zero-power position) goes back to the reserve, never to the position.
@@ -791,6 +1047,11 @@ export async function settlePositionAt(
     if (cas.meta.changes === 1 && releasePower) {
       released = true;
       await adjustMinePower(env, mint, -Number(snapshot.assignedPower), now);
+    }
+    if (cas.meta.changes === 1) {
+      // The settlement's own ledger moves land only if the position it belongs to was actually
+      // updated, so a lost compare-and-swap cannot book the same remainder twice.
+      await bookSettlementLedger(env, mint, mineState, outcome.state, now);
     }
     if (cas.meta.changes === 1 && settled > 0n) {
       // The position was credited, so count the blocks this settlement paid for (spec 68).
@@ -885,19 +1146,33 @@ export async function releaseArmedPositions(
  * Makes the stored position agree with the player's activation window. Used on the read path so
  * an interrupted activation (state written, position not armed) heals on the next request
  * without ever crediting blocks retroactively.
+ *
+ * The guard compares like with like: what a position stores is the *effective* power it brings to
+ * a block (maturity ramp, cluster damping and the share cap already applied), so the only reading
+ * it can be compared against is the raw crew power it was armed from, which the row keeps in
+ * raw_power. Comparing the stored effective power with a raw crewPower() reading made this fire on
+ * every collect for a damped account (a young, clustered or share-capped one) - and because
+ * re-arming resets the position's index cursor, that destroyed the accrual it had not settled yet.
  */
 export async function reconcileArmedPosition(env: RuntimeEnv, row: PlayerRow, now: number): Promise<boolean> {
   if (activationStateOf(row, now) !== "ACTIVE" || !row.active_mint) return false;
   const power = BigInt(crewPower(crewLevelsOf(row)));
   const position = await loadPositionRow(env, row.wallet, row.active_mint);
   const armed = big(position?.assigned_power ?? "0");
-  if (position && armed === power && position.active_until === row.activation_expires_at) return false;
+  if (
+    position &&
+    armed > 0n &&
+    big(position.raw_power) === power &&
+    position.active_until === row.activation_expires_at
+  ) {
+    return false;
+  }
 
   const token = await loadMineToken(env, row.active_mint);
   if (!token || token.status === "FULLY_MINED") return false;
 
-  await advanceMineTo(env, row.active_mint, now, { exclusive: true });
-  if (armed > 0n) await adjustMinePower(env, row.active_mint, -Number(armed), now);
+  // armPosition settles the position it is about to move and releases its power through its own
+  // compare-and-swap, so the mine's total moves exactly once per position (spec 78).
   await armPosition(
     env,
     row.wallet,
@@ -1441,18 +1716,17 @@ export async function claimRewardChallenge(request: Request, env: RuntimeEnv): P
     return apiError("This reward claim has expired", 410);
   }
 
-  const nonce = crypto.randomUUID();
-  const message = [
-    "Claim Diggo mining reward",
-    `Wallet: ${wallet}`,
-    `Reward: ${claim.id}`,
-    `Nonce: ${nonce}`,
-    "This request does not trigger a blockchain transaction.",
-  ].join("\n");
-  await storeChallenge(env, `claim:challenge:${nonce}`, { wallet, message });
+  // Issued through the shared helper so the nonce is bound to the wallet, the action and this exact
+  // reward as a structured `resource`, rather than only being implied by the text that gets signed.
+  const challenge = await issueChallenge(env, {
+    wallet,
+    action: CLAIM_REWARD_ACTION,
+    resource: claim.id,
+    title: "Claim Diggo mining reward",
+  });
   return json({
-    nonce,
-    message,
+    nonce: challenge.nonce,
+    message: challenge.message,
     rewardId: claim.id,
     mint: claim.mint,
     amount: Number(big(claim.amount)),
@@ -1486,6 +1760,8 @@ function claimView(row: RewardClaimRow): Record<string, unknown> {
  */
 export const MINING_CLAIM_PAYOUT_ROUTE = "USER_SIGNED" as const;
 export const MINING_CLAIM_INSTRUCTION = "claim_rewards" as const;
+/** The action a claim challenge is bound to in challenge_nonces (see worker/auth.ts issueChallenge). */
+export const CLAIM_REWARD_ACTION = "claim_reward";
 
 /**
  * `ready` means the accounting is finished and the player still has to submit the on-chain claim:
@@ -1519,9 +1795,15 @@ export async function claimReward(request: Request, env: RuntimeEnv): Promise<Re
   }
   const body = await readJson<{ rewardId?: string; nonce?: string; signature?: string }>(request);
   if (!body.rewardId || !body.nonce || !body.signature) return apiError("Incomplete claim proof");
+  const now = Math.floor(Date.now() / 1_000);
 
-  // The breaker is a hard, auditable halt, checked before any risk decision (spec 65).
-  if (await isBreakerOpen(env, "claims")) {
+  // The breaker is a hard, auditable halt, checked before any risk decision (spec 65). The claim's
+  // mint is read first so an admin can halt one mine's claims without freezing the whole game:
+  // isBreakerOpen consults that mine's row *and* the scope-wide one.
+  const breakerTarget = await env.DB.prepare("SELECT mint FROM reward_claims WHERE id = ?1 AND wallet = ?2")
+    .bind(body.rewardId, wallet)
+    .first<{ mint: string }>();
+  if (await isBreakerOpen(env, "claims", breakerTarget?.mint)) {
     await metric(env, "mining.claim_halted", 1, {});
     return json(
       { code: "CLAIMS_HALTED", message: "Reward claims are temporarily paused. Please try again later." },
@@ -1535,12 +1817,14 @@ export async function claimReward(request: Request, env: RuntimeEnv): Promise<Re
     return verificationResponse();
   }
   // A held reward is parked in HELD and can never reach CLAIMED (spec 53). It becomes claimable
-  // again only once the hold is lifted, which is what the release step below does.
+  // again only once the hold is lifted, which is what the release step below does. The instant the
+  // hold started is recorded, because the eligibility window stops running while it is in place.
   if (gate.rewardState === "HELD" || gate.rewardState === "UNDER_REVIEW") {
     await env.DB.prepare(
-      "UPDATE reward_claims SET status = 'HELD' WHERE id = ?1 AND wallet = ?2 AND status IN ('ELIGIBLE', 'PENDING')",
+      "UPDATE reward_claims SET status = 'HELD', held_at = COALESCE(held_at, ?3)" +
+        " WHERE id = ?1 AND wallet = ?2 AND status IN ('ELIGIBLE', 'PENDING')",
     )
-      .bind(body.rewardId, wallet)
+      .bind(body.rewardId, wallet, now)
       .run();
     await metric(env, "mining.claim_held", 1, { state: gate.rewardState });
     await recordActivity(env, { wallet, request, action: "claim_reward", outcome: "rejected" });
@@ -1558,13 +1842,24 @@ export async function claimReward(request: Request, env: RuntimeEnv): Promise<Re
     return denied;
   }
 
-  const challengeKey = `claim:challenge:${body.nonce}`;
-  const challenge = await loadChallenge(env, challengeKey);
+  const key = challengeKey(CLAIM_REWARD_ACTION, body.nonce);
+  const challenge = await loadChallenge(env, key);
   if (!challenge || challenge.wallet !== wallet) {
+    // Nothing usable is left in KV, so the nonce table has the final word: a spent nonce is a
+    // replay, not merely a late request (spec 47).
+    const status = await consumeChallengeNonce(env, {
+      nonce: body.nonce,
+      wallet,
+      action: CLAIM_REWARD_ACTION,
+      resource: body.rewardId,
+    });
     await recordActivity(env, { wallet, request, action: "claim_reward", outcome: "failed_challenge" });
+    if (status === "replay") return apiError("Challenge already used", 409);
     return apiError("Challenge expired", 401);
   }
-  if (!challenge.message.includes(`Reward: ${body.rewardId}`)) {
+  // The bound resource, not a substring of the signed text: a signature over another reward's
+  // challenge must not be usable for this one.
+  if ((challenge.resource ?? "") !== body.rewardId) {
     await recordActivity(env, { wallet, request, action: "claim_reward", outcome: "failed_challenge" });
     return apiError("Challenge does not match this reward", 401);
   }
@@ -1572,12 +1867,34 @@ export async function claimReward(request: Request, env: RuntimeEnv): Promise<Re
     await recordActivity(env, { wallet, request, action: "claim_reward", outcome: "failed_challenge" });
     return apiError("Invalid wallet signature", 401);
   }
-  await env.TOKEN_CACHE.delete(challengeKey);
+  // Single-use in the authoritative table: the conditional UPDATE is what spends the nonce in every
+  // colo, where deleting the KV record only clears the cache of the colo that handled the claim.
+  const consumed = await consumeChallengeNonce(env, {
+    nonce: body.nonce,
+    wallet,
+    action: CLAIM_REWARD_ACTION,
+    resource: body.rewardId,
+  });
+  if (consumed !== "ok") {
+    await recordActivity(env, { wallet, request, action: "claim_reward", outcome: "replay" });
+    return apiError(
+      consumed === "replay" ? "Challenge already used" : "Challenge expired",
+      consumed === "replay" ? 409 : 401,
+    );
+  }
+  await env.TOKEN_CACHE.delete(key);
 
-  const now = Math.floor(Date.now() / 1_000);
-  // Recovery path for a claim parked while the account was under review.
-  await env.DB.prepare("UPDATE reward_claims SET status = 'ELIGIBLE' WHERE id = ?1 AND wallet = ?2 AND status = 'HELD'")
-    .bind(body.rewardId, wallet)
+  // Recovery path for a claim parked while the account was under review. The window stopped
+  // running while the hold was in place, so it is extended by exactly the time the hold lasted: a
+  // hold that outlives eligible_until must not destroy the reward it was protecting (spec 53).
+  await env.DB.prepare(
+    `UPDATE reward_claims
+        SET status = 'ELIGIBLE',
+            eligible_until = eligible_until + MAX(0, ?1 - COALESCE(held_at, ?1)),
+            held_at = NULL
+      WHERE id = ?2 AND wallet = ?3 AND status = 'HELD'`,
+  )
+    .bind(now, body.rewardId, wallet)
     .run();
 
   const transition = await env.DB.prepare(
@@ -1656,13 +1973,542 @@ export async function listClaimsAwaitingPayout(
   return rows.results;
 }
 
-export async function markClaimPaid(env: RuntimeEnv, claimId: string, txSignature: string): Promise<boolean> {
+/**
+ * Records one user-signed payout against its claim. The conditional UPDATE is the concurrency
+ * guard - of N writers exactly one sees meta.changes === 1 - and the partial UNIQUE index on
+ * tx_signature (migrations/0012_reconciliation.sql) is the storage-level guard behind it, so a
+ * signature that already backs another reward is rejected even by a writer that raced past the
+ * read-side replay check.
+ *
+ * paidAmount is what the verified transaction actually moved, not what the claim asked for; it is
+ * the number the reconciliation cron compares against the chain.
+ */
+export async function markClaimPaid(
+  env: RuntimeEnv,
+  claimId: string,
+  txSignature: string,
+  paidAmount?: bigint | null,
+): Promise<boolean> {
   const result = await env.DB.prepare(
-    "UPDATE reward_claims SET tx_signature = ?1 WHERE id = ?2 AND status = 'CLAIMED' AND tx_signature IS NULL",
+    "UPDATE reward_claims SET tx_signature = ?1, paid_amount = ?3 " +
+      "WHERE id = ?2 AND status = 'CLAIMED' AND tx_signature IS NULL",
   )
-    .bind(txSignature, claimId)
+    .bind(txSignature, claimId, paidAmount === undefined || paidAmount === null ? null : paidAmount.toString())
     .run();
   return result.meta.changes === 1;
+}
+
+/* ---- confirming a player's own on-chain claim_rewards transaction (spec 57) ---------- */
+
+/**
+ * The slice of a JSON-RPC confirmed transaction this module reads. Declared structurally, and the
+ * reader that fetches it is injectable, so a test can drive the whole confirmation path with a
+ * crafted transaction and no network double.
+ */
+export interface RawClaimInstruction {
+  programId?: unknown;
+  accounts?: readonly unknown[] | null;
+  data?: unknown;
+}
+
+export interface RawTokenBalance {
+  accountIndex?: unknown;
+  mint?: unknown;
+  owner?: unknown;
+  uiTokenAmount?: { amount?: unknown } | null;
+}
+
+export interface RawClaimTransaction {
+  /** Unix seconds the block was produced, when the RPC reports it. */
+  blockTime?: number | null;
+  meta?: {
+    err?: unknown;
+    preTokenBalances?: readonly RawTokenBalance[] | null;
+    postTokenBalances?: readonly RawTokenBalance[] | null;
+    innerInstructions?: readonly { instructions?: readonly RawClaimInstruction[] | null }[] | null;
+    /**
+     * The accounts this transaction's address lookup tables resolved. A versioned transaction's
+     * message carries only its statically declared keys, so without these the account list is
+     * incomplete - and the loaded ones follow the static ones in the runtime's own order, writable
+     * entries first and read-only entries after.
+     */
+    loadedAddresses?: {
+      writable?: readonly unknown[] | null;
+      readonly?: readonly unknown[] | null;
+    } | null;
+  } | null;
+  transaction?: {
+    message?: {
+      accountKeys?: readonly unknown[] | null;
+      instructions?: readonly RawClaimInstruction[] | null;
+    } | null;
+  } | null;
+}
+
+/** The one chain read the confirmation path needs. */
+export interface ClaimTransactionReader {
+  getTransaction(signature: string): Promise<RawClaimTransaction | null>;
+}
+
+export function chainClaimTransactionReader(env: RuntimeEnv): ClaimTransactionReader {
+  return {
+    async getTransaction(signature: string): Promise<RawClaimTransaction | null> {
+      const rpc = getChainRpc(env);
+      const transaction = await rpc
+        .getTransaction(signature as never, {
+          commitment: "confirmed",
+          encoding: "jsonParsed",
+          maxSupportedTransactionVersion: 0,
+        })
+        .send();
+      return (transaction as unknown as RawClaimTransaction | null) ?? null;
+    },
+  };
+}
+
+/**
+ * Why a reported payout was refused. Every value is a stable name, because the endpoint reports
+ * one back to the client and the telemetry counter tags on it.
+ */
+export type ClaimVerificationReason =
+  | "program_not_configured"
+  | "transaction_not_found"
+  | "transaction_failed"
+  /** The claim has no settlement instant to anchor the transaction against. */
+  | "claim_not_settled"
+  | "transaction_predates_claim"
+  | "wallet_not_signer"
+  | "instruction_not_found"
+  | "instruction_accounts_mismatch"
+  | "no_token_credit"
+  | "reserve_not_debited";
+
+export interface ClaimVerification {
+  ok: boolean;
+  reason: ClaimVerificationReason | null;
+  /** Tokens the transaction credited to the player's own associated token account. */
+  paidAmount: bigint;
+  // paidAmount is in raw base units, exactly as the chain reported them. reward_claims.amount is
+  // the settled whole-token figure, so the two are deliberately not compared here: the
+  // settled-vs-paid comparison belongs to the reconciliation job (worker/reconcile.ts), which loads
+  // the mint's decimals in one place instead of each caller guessing the unit.
+}
+
+function accountKeyOf(entry: unknown): { pubkey: string; signer: boolean } | null {
+  if (typeof entry === "string") return { pubkey: entry, signer: false };
+  if (entry && typeof entry === "object") {
+    const candidate = entry as { pubkey?: unknown; signer?: unknown };
+    if (typeof candidate.pubkey === "string") {
+      return { pubkey: candidate.pubkey, signer: candidate.signer === true };
+    }
+  }
+  return null;
+}
+
+/**
+ * The complete account list of a transaction: the keys its message declares, followed by the ones
+ * its address lookup tables loaded. jsonParsed reports the loaded entries separately, and a claim
+ * that names one of them - a wallet's own associated token account is the usual case - is only
+ * matchable against this list. Order matters: indices, including every token balance's
+ * accountIndex, are positions in exactly this array.
+ */
+function resolvedAccountKeys(transaction: RawClaimTransaction): { pubkey: string; signer: boolean }[] {
+  const declared = (transaction.transaction?.message?.accountKeys ?? []).map(accountKeyOf);
+  const loaded = [
+    ...(transaction.meta?.loadedAddresses?.writable ?? []),
+    ...(transaction.meta?.loadedAddresses?.readonly ?? []),
+  ].map(accountKeyOf);
+  return [...declared, ...loaded].filter((entry): entry is { pubkey: string; signer: boolean } => entry !== null);
+}
+
+/**
+ * The accounts an instruction names. jsonParsed gives a parsed instruction base58 pubkeys, but an
+ * instruction it could not parse (which is what a custom program instruction is) carries indices
+ * into the transaction's account list instead - including indices that resolve through an address
+ * lookup table, which is why the caller passes the resolved list rather than the static keys.
+ */
+function instructionAccountKeys(
+  instruction: RawClaimInstruction,
+  accountKeys: readonly { pubkey: string }[],
+): string[] {
+  const keys: string[] = [];
+  for (const entry of instruction.accounts ?? []) {
+    if (typeof entry === "number") {
+      const resolved = accountKeys[entry];
+      if (resolved) keys.push(resolved.pubkey);
+      continue;
+    }
+    const key = accountKeyOf(entry);
+    if (key) keys.push(key.pubkey);
+  }
+  return keys;
+}
+
+/**
+ * Instruction bytes as jsonParsed reports them (base58 for a program the RPC cannot parse). The
+ * decoder is the same one the client uses, so the two sides cannot disagree about the encoding.
+ */
+function instructionDataBytes(instruction: RawClaimInstruction): Uint8Array | ReadonlyUint8Array | null {
+  const data = instruction.data;
+  if (data instanceof Uint8Array) return data;
+  if (Array.isArray(data)) return Uint8Array.from(data as number[]);
+  if (typeof data === "string") {
+    try {
+      return getBase58Encoder().encode(data);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+interface ExpectedClaim {
+  instruction: Instruction;
+  reserveVault: Address;
+  ownerTokens: Address;
+}
+
+/**
+ * The instruction a legitimate claim_rewards payout for this claim has to contain, plus the two
+ * token accounts whose balances say what it actually paid.
+ *
+ * Built with the same shared/program.ts builder the browser uses, so the discriminator, the PDA
+ * seeds and the account order have exactly one definition in the codebase.
+ */
+async function expectedClaimInstruction(
+  programId: string,
+  wallet: string,
+  mint: string,
+): Promise<ExpectedClaim> {
+  const programAddress = address(programId);
+  const mintAddress = address(mint);
+  const owner = address(wallet);
+  const { mine, reserveVault } = await deriveMineAddresses(programAddress, mintAddress);
+  const [position, ownerTokens] = await Promise.all([
+    derivePositionPda(programAddress, mine, owner),
+    deriveAssociatedTokenAddress(owner, mintAddress),
+  ]);
+  return {
+    instruction: buildClaimRewardsInstruction({
+      programAddress,
+      owner,
+      mine,
+      mint: mintAddress,
+      reserveVault,
+      ownerTokens,
+      position,
+    }),
+    reserveVault,
+    ownerTokens,
+  };
+}
+
+function tokenAmountAt(balances: readonly RawTokenBalance[] | null | undefined, accountIndex: number): bigint | null {
+  for (const balance of balances ?? []) {
+    if (Number(balance.accountIndex) !== accountIndex) continue;
+    const amount = balance.uiTokenAmount?.amount;
+    return amount === undefined || amount === null ? null : BigInt(String(amount));
+  }
+  return null;
+}
+
+/**
+ * Verifies a reported claim_rewards signature against the chain and measures what it paid.
+ *
+ * The checks are identity, not amount: the transaction has to be a confirmed, successful,
+ * wallet-signed call to the Diggo program whose claim_rewards instruction carries this claim's
+ * owner, mine, mint, reserve vault, owner token account and mining position, and it has to have
+ * moved tokens out of that mine's reserve vault into that wallet's own token account by the same
+ * amount it left the vault. Any of those failing means the signature is not this claim's payout,
+ * so nothing is recorded - anything unreadable counts as unverified, which is what makes a flaky
+ * RPC unable to turn a forged report into a recorded payout.
+ */
+export async function verifyConfirmedClaim(
+  env: RuntimeEnv,
+  signature: string,
+  claim: { wallet: string; mint: string; claimed_at?: number | null },
+  reader: ClaimTransactionReader,
+): Promise<ClaimVerification> {
+  const refuse = (reason: ClaimVerificationReason): ClaimVerification => ({
+    ok: false,
+    reason,
+    paidAmount: 0n,
+  });
+
+  if (!env.DIGGO_PROGRAM_ID) return refuse("program_not_configured");
+
+  let transaction: RawClaimTransaction | null;
+  try {
+    transaction = await reader.getTransaction(signature);
+  } catch (error) {
+    console.error(
+      JSON.stringify({ event: "mining.claim_confirm_read_failed", mint: claim.mint, error: String(error) }),
+    );
+    return refuse("transaction_not_found");
+  }
+  if (!transaction) return refuse("transaction_not_found");
+  if (transaction.meta?.err) return refuse("transaction_failed");
+
+  // A transaction older than the moment the reward settled cannot be that reward's payout. Without
+  // this, a real claim_rewards signature that was never recorded (a collect made outside this
+  // endpoint) could be replayed later as proof for a newer, still-unpaid reward. The slack absorbs
+  // ordinary clock skew between this Worker and the cluster.
+  //
+  // A missing block time is refused rather than skipped: "the RPC did not say when this landed" is
+  // not evidence that it is recent, and treating it as recent is exactly the hole above.
+  const claimedAt = claim.claimed_at ?? null;
+  // A claim with no settlement instant is the same hole from the other side: without the anchor
+  // there is nothing to compare against, so every old signature for this wallet and mine would
+  // count as proof for it. Refuse instead of skipping the check.
+  if (claimedAt === null) return refuse("claim_not_settled");
+  if (typeof transaction.blockTime !== "number") return refuse("transaction_predates_claim");
+  if (transaction.blockTime < claimedAt - 300) return refuse("transaction_predates_claim");
+
+  const accountKeys = resolvedAccountKeys(transaction);
+  const indexOf = new Map<string, number>();
+  accountKeys.forEach((key, index) => {
+    if (!indexOf.has(key.pubkey)) indexOf.set(key.pubkey, index);
+  });
+  const walletSigned = accountKeys.some((key) => key.pubkey === claim.wallet && key.signer);
+  if (!walletSigned) return refuse("wallet_not_signer");
+
+  let expected: ExpectedClaim;
+  try {
+    expected = await expectedClaimInstruction(env.DIGGO_PROGRAM_ID, claim.wallet, claim.mint);
+  } catch (error) {
+    console.error(
+      JSON.stringify({ event: "mining.claim_confirm_derive_failed", mint: claim.mint, error: String(error) }),
+    );
+    return refuse("instruction_accounts_mismatch");
+  }
+  const expectedData = instructionDataBytes({ data: expected.instruction.data });
+  // The builder always carries the discriminator; if it ever did not, every instruction on the
+  // program would look like a match, so refuse instead of comparing against nothing.
+  if (!expectedData || expectedData.length === 0) return refuse("instruction_not_found");
+  const requiredAccounts = (expected.instruction.accounts ?? []).map((account) => account.address);
+  const required = new Set<string>(requiredAccounts);
+
+  // A claim that another program CPI'd into the Diggo program is still a real payout, so the
+  // inner instructions are searched too; only a top-level match is required to be present once.
+  const candidates: RawClaimInstruction[] = [
+    ...(transaction.transaction?.message?.instructions ?? []),
+    ...(transaction.meta?.innerInstructions ?? []).flatMap((entry) => entry.instructions ?? []),
+  ];
+  const matching = candidates.filter((instruction) => {
+    if (String(instruction.programId) !== env.DIGGO_PROGRAM_ID) return false;
+    const data = instructionDataBytes(instruction);
+    if (!data || data.length < expectedData.length) return false;
+    for (let index = 0; index < expectedData.length; index += 1) {
+      if (data[index] !== expectedData[index]) return false;
+    }
+    // Superset, not equality: a caller that adds remaining accounts is still claiming the same
+    // reward, but every account this claim's payout must name has to be named.
+    const present = new Set(instructionAccountKeys(instruction, accountKeys));
+    for (const account of required) {
+      if (!present.has(account)) return false;
+    }
+    return true;
+  });
+  if (matching.length === 0) {
+    // Distinguish "no claim_rewards at all" from "a claim_rewards for somewhere else".
+    const anyClaim = candidates.some((instruction) => {
+      const data = instructionDataBytes(instruction);
+      if (!data || data.length < expectedData.length) return false;
+      for (let index = 0; index < expectedData.length; index += 1) {
+        if (data[index] !== expectedData[index]) return false;
+      }
+      return true;
+    });
+    return refuse(anyClaim ? "instruction_accounts_mismatch" : "instruction_not_found");
+  }
+
+  const ownerTokensIndex = indexOf.get(expected.ownerTokens);
+  const reserveVaultIndex = indexOf.get(expected.reserveVault);
+  if (ownerTokensIndex === undefined || reserveVaultIndex === undefined) {
+    return refuse("instruction_accounts_mismatch");
+  }
+  const credited = (tokenAmountAt(transaction.meta?.postTokenBalances, ownerTokensIndex) ?? 0n) -
+    (tokenAmountAt(transaction.meta?.preTokenBalances, ownerTokensIndex) ?? 0n);
+  const debited = (tokenAmountAt(transaction.meta?.preTokenBalances, reserveVaultIndex) ?? 0n) -
+    (tokenAmountAt(transaction.meta?.postTokenBalances, reserveVaultIndex) ?? 0n);
+  if (credited <= 0n) return refuse("no_token_credit");
+  if (debited !== credited) return refuse("reserve_not_debited");
+
+  return { ok: true, reason: null, paidAmount: credited };
+}
+
+/** Signature shape the RPC accepts; a malformed one is rejected before any chain call. */
+const TRANSACTION_SIGNATURE_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{64,88}$/;
+
+/**
+ * POST /api/rewards/claim/confirm (spec 53, 57).
+ *
+ * The player's own wallet signs and submits claim_rewards, so the backend never touches the
+ * Mining Reserve; this endpoint exists only to record that the payout happened, and only after
+ * verifying the transaction on-chain. It is deliberately idempotent: confirming the same
+ * signature again is a success, while a signature that already backs a different reward is a
+ * rejection (the partial UNIQUE index on tx_signature is the storage-level version of the same
+ * rule).
+ */
+export async function confirmRewardClaim(
+  request: Request,
+  env: RuntimeEnv,
+  reader?: ClaimTransactionReader,
+): Promise<Response> {
+  // Higher than the claim endpoint's IP budget on purpose: a player who has banked several settled
+  // rewards confirms them one after another in a short window, and each one is a real transaction.
+  if (!(await checkRateLimit(request, env, "rewards-confirm", 30))) return apiError("Too many requests", 429);
+  const wallet = await sessionWallet(request, env);
+  if (!wallet) return apiError("Wallet authentication required", 401);
+  if (!(await checkWalletRateLimit(env, wallet, "rewards-confirm", 30, 300))) {
+    return apiError("Too many claim confirmations, slow down", 429);
+  }
+  const body = await readJson<{ rewardId?: string; signature?: string }>(request);
+  if (typeof body.rewardId !== "string" || body.rewardId.length === 0) return apiError("Missing reward id");
+  if (typeof body.signature !== "string" || !TRANSACTION_SIGNATURE_PATTERN.test(body.signature)) {
+    return apiError("Invalid transaction signature");
+  }
+
+  const claim = await env.DB.prepare("SELECT * FROM reward_claims WHERE id = ?1")
+    .bind(body.rewardId)
+    .first<RewardClaimRow>();
+  // Another wallet's claim is reported exactly like a missing one, so this endpoint cannot be used
+  // to probe which reward ids exist.
+  if (!claim || claim.wallet !== wallet) return apiError("Unknown reward claim", 404);
+
+  if (claim.tx_signature !== null) {
+    if (claim.tx_signature === body.signature) {
+      return json({ status: "CONFIRMED", idempotent: true, claim: claimView(claim) });
+    }
+    await metric(env, "mining.claim_confirm_replay", 1, { mint: claim.mint });
+    return json(
+      { code: "ALREADY_CLAIMED", message: "This reward already has a confirmed payout." },
+      { status: 409 },
+    );
+  }
+  if (claim.status !== "CLAIMED") {
+    await metric(env, "mining.claim_confirm_not_settled", 1, { mint: claim.mint, status: claim.status });
+    return json(
+      { code: "NOT_SETTLED", message: "This reward has not finished settling yet." },
+      { status: 409 },
+    );
+  }
+  // A claims breaker scoped to this mint (which is what the reconciliation cron opens when a
+  // reserve diverges) has to stop a payout from being recorded for that mine. isBreakerOpen also
+  // consults the scope-wide row, so both kinds of halt are covered by this one check.
+  if (await isBreakerOpen(env, "claims", claim.mint)) {
+    await metric(env, "mining.claim_confirm_halted", 1, { mint: claim.mint });
+    return json(
+      { code: "CLAIMS_HALTED", message: "Reward claims are temporarily paused. Please try again later." },
+      { status: 503, headers: { "retry-after": "300" } },
+    );
+  }
+
+  const reused = await env.DB.prepare("SELECT id FROM reward_claims WHERE tx_signature = ?1")
+    .bind(body.signature)
+    .first<{ id: string }>();
+  if (reused && reused.id !== claim.id) {
+    await metric(env, "risk.replay_attempt", 1, { path: "claim_confirm" });
+    console.error(
+      JSON.stringify({ event: "mining.claim_confirm_replay", claimId: claim.id, wallet, signature: body.signature }),
+    );
+    return json(
+      {
+        code: "SIGNATURE_REUSED",
+        message: "That transaction signature is already recorded against another reward.",
+      },
+      { status: 409 },
+    );
+  }
+
+  const verification = await verifyConfirmedClaim(
+    env,
+    body.signature,
+    claim,
+    reader ?? chainClaimTransactionReader(env),
+  );
+  if (!verification.ok) {
+    await metric(env, "mining.claim_confirm_unverified", 1, {
+      mint: claim.mint,
+      reason: verification.reason ?? "unknown",
+    });
+    console.error(
+      JSON.stringify({
+        event: "mining.claim_confirm_unverified",
+        claimId: claim.id,
+        wallet,
+        mint: claim.mint,
+        signature: body.signature,
+        reason: verification.reason,
+      }),
+    );
+    return json(
+      {
+        code: "PAYOUT_UNVERIFIED",
+        message: "That transaction could not be verified as this reward's payout.",
+      },
+      { status: 409 },
+    );
+  }
+
+  let recorded: boolean;
+  try {
+    recorded = await markClaimPaid(env, claim.id, body.signature, verification.paidAmount);
+  } catch (error) {
+    // The partial UNIQUE index rejected a signature another row already carries.
+    await metric(env, "risk.replay_attempt", 1, { path: "claim_confirm_unique" });
+    console.error(
+      JSON.stringify({
+        event: "mining.claim_confirm_unique_violation",
+        claimId: claim.id,
+        error: String(error),
+      }),
+    );
+    return json(
+      { code: "SIGNATURE_REUSED", message: "That transaction signature is already recorded." },
+      { status: 409 },
+    );
+  }
+
+  const settled = await env.DB.prepare("SELECT * FROM reward_claims WHERE id = ?1")
+    .bind(claim.id)
+    .first<RewardClaimRow>();
+  if (!recorded) {
+    // A concurrent confirm won the guarded UPDATE. The same signature is a success; anything else
+    // means this payout was already recorded by another transaction.
+    if (settled && settled.tx_signature === body.signature) {
+      return json({ status: "CONFIRMED", idempotent: true, claim: claimView(settled) });
+    }
+    await metric(env, "mining.claim_confirm_conflict", 1, { mint: claim.mint });
+    return json(
+      { code: "ALREADY_CLAIMED", message: "This reward already has a confirmed payout." },
+      { status: 409 },
+    );
+  }
+
+  // Counted as one confirmed payout, with the settled figure and the measured raw figure logged
+  // side by side rather than folded into one number: they are in different units on purpose, and
+  // the numeric comparison between them is the reconciliation job's.
+  await metric(env, "mining.claim_confirmed", 1, { mint: claim.mint });
+  console.log(
+    JSON.stringify({
+      event: "mining.claim_confirmed",
+      claimId: claim.id,
+      wallet,
+      mint: claim.mint,
+      signature: body.signature,
+      settledAmount: claim.amount,
+      paidAmountRaw: verification.paidAmount.toString(),
+    }),
+  );
+  return json({
+    status: "CONFIRMED",
+    idempotent: false,
+    // Raw base units, exactly as the chain reported them.
+    paidAmountRaw: verification.paidAmount.toString(),
+    settledAmount: claim.amount,
+    claim: claimView(settled ?? claim),
+  });
 }
 
 export interface RewardClaimQueueEvent {
@@ -1700,11 +2546,15 @@ export interface RewardClaimSettlement {
  * So a job without a txSignature ends in `ready`: the claim row is already CLAIMED, its amount is
  * already accounted out of the reserve, and the player collects it on-chain themselves. A job that
  * carries a txSignature is the other half of the loop - the player's transaction is verified
- * against chain and only then recorded through markClaimPaid.
+ * against chain and only then recorded through markClaimPaid, by the same verifier the confirm
+ * endpoint uses. A signature that only proves "some wallet-signed transaction touched the program"
+ * is not proof of this claim's payout, so the weak check that used to sit here is gone rather than
+ * kept as a second, easier door into markClaimPaid.
  */
 export async function settleRewardClaim(
   env: RuntimeEnv,
   event: RewardClaimQueueEvent,
+  reader?: ClaimTransactionReader,
 ): Promise<RewardClaimSettlement> {
   const claimId = event.claimId;
   const done = async (
@@ -1742,14 +2592,25 @@ export async function settleRewardClaim(
   }
 
   if (event.txSignature) {
-    if (!(await verifyUserSignedPayout(env, event.txSignature, row))) {
+    const verification = await verifyConfirmedClaim(
+      env,
+      event.txSignature,
+      { wallet: row.wallet, mint: row.mint, claimed_at: row.claimed_at },
+      reader ?? chainClaimTransactionReader(env),
+    );
+    if (!verification.ok) {
       await metric(env, "mining.claim_payout_unverified", 1, { mint: row.mint });
       console.error(
-        JSON.stringify({ event: "mining.claim_payout_unverified", claimId, signature: event.txSignature }),
+        JSON.stringify({
+          event: "mining.claim_payout_unverified",
+          claimId,
+          signature: event.txSignature,
+          reason: verification.reason,
+        }),
       );
       return done("ignored", "unverified_signature", claimPayoutView(row));
     }
-    if (!(await markClaimPaid(env, claimId, event.txSignature))) {
+    if (!(await markClaimPaid(env, claimId, event.txSignature, verification.paidAmount))) {
       // Another job recorded the same payout first; the row is paid exactly once either way.
       await metric(env, "mining.claim_paid_conflict", 1, { mint: row.mint });
       const settled = await env.DB.prepare("SELECT * FROM reward_claims WHERE id = ?1")
@@ -1780,45 +2641,4 @@ export async function settleRewardClaim(
     }),
   );
   return done("ready", "awaiting_user_signature", claimPayoutView(row));
-}
-
-/**
- * True when signature is a confirmed, successful transaction to the Diggo program that this wallet
- * signed.
- *
- * Deliberately not a full instruction decode: the program is authoritative for whether a claim was
- * paid, and the recorded signature is a pointer for the player and for operators. What the check
- * has to prevent is a client marking a reward paid with an unrelated or failed signature, which
- * would strand that player's own reward. Anything unreadable counts as unverified, so a flaky RPC
- * can never turn a forged report into a recorded payout.
- */
-async function verifyUserSignedPayout(
-  env: RuntimeEnv,
-  signature: string,
-  row: RewardClaimRow,
-): Promise<boolean> {
-  if (!env.DIGGO_PROGRAM_ID) return false;
-  try {
-    const rpc = getChainRpc(env);
-    const transaction = await rpc
-      .getTransaction(signature as never, {
-        commitment: "confirmed",
-        encoding: "jsonParsed",
-        maxSupportedTransactionVersion: 0,
-      })
-      .send();
-    if (!transaction || transaction.meta?.err) return false;
-    const keys = transaction.transaction.message.accountKeys as readonly {
-      pubkey?: unknown;
-      signer?: boolean;
-    }[];
-    const walletSigned = keys.some((key) => String(key.pubkey) === row.wallet && key.signer === true);
-    const touchedProgram = keys.some((key) => String(key.pubkey) === env.DIGGO_PROGRAM_ID);
-    return walletSigned && touchedProgram;
-  } catch (error) {
-    console.error(
-      JSON.stringify({ event: "mining.claim_verify_failed", claimId: row.id, error: String(error) }),
-    );
-    return false;
-  }
 }

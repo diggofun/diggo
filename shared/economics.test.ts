@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DIGGO_CONFIG } from "./config";
 import {
   BPS_DENOMINATOR,
   CREW_TIERS,
@@ -41,7 +42,7 @@ describe("Diggo economics", () => {
   });
 
   it("uses ORE-only upgrade costs", () => {
-    expect(upgradeOreCost("miners", 1)).toBe(120);
+    expect(upgradeOreCost("miners", 1)).toBe(DIGGO_CONFIG.crew.upgradeCostBase.miners);
     expect(upgradeOreCost("drills", 10)).toBeGreaterThan(upgradeOreCost("drills", 9));
   });
 
@@ -53,7 +54,9 @@ describe("Diggo economics", () => {
     expect(maturityBps(0)).toBe(2_000);
     expect(maturityBps(3 * DAY)).toBe(5_000);
     expect(maturityBps(7 * DAY)).toBe(10_000);
-    expect(oreForActiveSeconds(3_600, 0)).toBe(4);
+    expect(oreForActiveSeconds(3_600, 0)).toBe(
+      Math.floor((DIGGO_CONFIG.ore.baseOrePerActiveHour * DIGGO_CONFIG.ore.maturityRamp[0].bps) / 10_000),
+    );
   });
 
   it("applies diminishing returns to crew power", () => {

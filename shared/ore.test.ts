@@ -31,7 +31,10 @@ describe("ORE generation", () => {
 
   it("accrues ORE from active time at the configured base rate", () => {
     expect(oreForActiveSeconds(3_600, day(7))).toBe(DIGGO_CONFIG.ore.baseOrePerActiveHour);
-    expect(oreForActiveSeconds(3_600, 0)).toBe(4);
+    // A brand-new account accrues its maturity share of the same hour.
+    expect(oreForActiveSeconds(3_600, 0)).toBe(
+      Math.floor((DIGGO_CONFIG.ore.baseOrePerActiveHour * maturityBps(0)) / 10_000),
+    );
     expect(oreForActiveSeconds(0, day(7))).toBe(0);
     expect(oreForActiveSeconds(-10, day(7))).toBe(0);
     expect(oreForActiveSeconds(Number.NaN, day(7))).toBe(0);
@@ -79,7 +82,9 @@ describe("ORE generation", () => {
       const amount = oreGrant({ source, activeSeconds: 3_600, accountAgeSeconds: day(30), streakDay: 7, milestoneOre: 250, achievementId: "FIRST_BLOCK", level: 5, amount: 100 }, starter);
       expect(amount).toBeGreaterThanOrEqual(0);
     }
-    expect(oreGrant({ source: "active_mine", activeSeconds: 3_600, accountAgeSeconds: day(30) })).toBe(20);
+    expect(oreGrant({ source: "active_mine", activeSeconds: 3_600, accountAgeSeconds: day(30) })).toBe(
+      DIGGO_CONFIG.ore.baseOrePerActiveHour,
+    );
     expect(oreGrant({ source: "activation", accountAgeSeconds: 0 })).toBe(10);
     expect(oreGrant({ source: "streak_milestone", milestoneOre: 250 })).toBe(250);
     expect(oreGrant({ source: "achievement", achievementId: "FIRST_DISCOVERY" })).toBe(200);
