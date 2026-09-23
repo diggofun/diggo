@@ -8,12 +8,21 @@
  * and the crew summary. Nothing here computes a reward.
  */
 import { useState } from "react";
-import { Clock3, Coins, Flame, Gauge, Hammer, Hourglass, Pickaxe, Repeat2, Snowflake, Timer, Users, Wallet } from "lucide-react";
 import type { MineInfo, PlayerProfile, TokenSummary } from "../../shared/types";
 import { CREW_COMPONENT_LABELS, CREW_COMPONENTS } from "../crewLabels";
 import { compact, countdown, oreAmount } from "../format";
 import { DIGGO_CONFIG, GAMEPLAY_DEFAULTS, crewTier } from "../../shared/economics";
 import { useEquippedCosmetics } from "../cosmetics";
+import {
+  IconHammer,
+  IconMine,
+  IconOre,
+  IconSnowflake,
+  IconStreak,
+  IconSwap,
+  IconTimer,
+  IconWallet,
+} from "../icons";
 import { requestWalletMenu } from "../wallet";
 import { MineScene } from "./MineScene";
 import { TokenOrb } from "./TokenOrb";
@@ -77,7 +86,7 @@ export function DashboardPanel({
       <div className="dashboard-head">
         <div>
           <span className="eyebrow">
-            <Pickaxe size={14} /> Mining dashboard
+            <IconMine size={14} /> Mining dashboard
           </span>
           <h1 id="dashboard-title">
             YOUR CREW IS
@@ -109,13 +118,13 @@ export function DashboardPanel({
 
           {active ? (
             <div className="dash-status-timer">
-              <span><Timer size={12} /> Shift ends in</span>
+              <span><IconTimer size={12} /> Shift ends in</span>
               <strong className="dash-countdown">{countdown(Math.floor(player.activationExpiresAt ?? 0), now)}</strong>
               <div className="shift-bar" aria-hidden="true"><i style={{ width: (windowShare * 100).toFixed(2) + "%" }} /></div>
             </div>
           ) : (
             <div className="dash-status-timer">
-              <span><Hourglass size={12} /> Streak expires in</span>
+              <span>Streak expires in</span>
               {player.streak && player.streakGraceUntil ? (
                 <strong className={"dash-countdown" + (graceSeconds === 0 ? " expired" : "")}>
                   {graceSeconds === 0 ? "expired" : countdown(player.streakGraceUntil, now)}
@@ -123,17 +132,17 @@ export function DashboardPanel({
               ) : (
                 <strong className="dash-countdown muted-value">no streak yet</strong>
               )}
-              <small><Flame size={11} /> {player.streak} day streak · <Snowflake size={11} /> {player.streakFreezes} freeze{player.streakFreezes === 1 ? "" : "s"}</small>
+              <small><IconStreak size={11} /> {player.streak} day streak · <IconSnowflake size={11} /> {player.streakFreezes} freeze{player.streakFreezes === 1 ? "" : "s"}</small>
             </div>
           )}
 
           {active ? (
             <button className="btn btn-primary btn-lg dash-cta" disabled={collecting} onClick={onCollect}>
-              {collecting ? <><Hourglass size={18} /> Collecting…</> : <><Coins size={18} /> Collect report</>}
+              {collecting ? <>Collecting…</> : <><IconOre size={18} /> Collect report</>}
             </button>
           ) : (
             <button className="btn btn-primary btn-lg dash-cta dash-cta-activate" disabled={activating} onClick={onActivate}>
-              {activating ? <><Hourglass size={18} /> Activating…</> : <><Pickaxe size={18} /> Activate for {WINDOW_HOURS}h</>}
+              {activating ? <>Activating…</> : <><IconMine size={18} /> Activate for {WINDOW_HOURS}h</>}
             </button>
           )}
           {celebrating && (
@@ -161,7 +170,7 @@ export function DashboardPanel({
                   <TokenOrb symbol={mine.symbol} imageUrl={mine.imageUrl} large />
                 ) : (
                   <span className="token-orb token-orb-large orb-empty">
-                    <Pickaxe size={20} />
+                    <IconMine size={20} />
                   </span>
                 )}
                 <div>
@@ -173,13 +182,13 @@ export function DashboardPanel({
               <div className="dash-counters">
                 <div>
                   <span>
-                    <Timer size={12} /> TIME REMAINING
+                    <IconTimer size={12} /> TIME REMAINING
                   </span>
                   <strong>{countdown(Math.floor(player.activationExpiresAt ?? 0), now)}</strong>
                 </div>
                 <div>
                   <span>
-                    <Clock3 size={12} /> NEXT BLOCK
+                    <IconTimer size={12} /> NEXT BLOCK
                   </span>
                   <strong>{mineInfo ? countdown(mineInfo.nextBlockAt, now) : "—"}</strong>
                 </div>
@@ -189,7 +198,7 @@ export function DashboardPanel({
             <div className="dash-stats">
               <article>
                 <span>
-                  <Gauge size={13} /> MINING POWER
+                  MINING POWER
                 </span>
                 <strong>{player.power.toLocaleString()}</strong>
                 <small>
@@ -200,18 +209,18 @@ export function DashboardPanel({
               </article>
               <article>
                 <span>
-                  <Flame size={13} /> STREAK
+                  <IconStreak size={13} /> STREAK
                 </span>
                 <strong>
                   {player.streak} {player.streak === 1 ? "day" : "days"}
                 </strong>
                 <small>
-                  <Snowflake size={11} /> {player.streakFreezes} freeze{player.streakFreezes === 1 ? "" : "s"} banked
+                  <IconSnowflake size={11} /> {player.streakFreezes} freeze{player.streakFreezes === 1 ? "" : "s"} banked
                 </small>
               </article>
               <article>
                 <span>
-                  <Coins size={13} /> ORE
+                  <IconOre size={13} /> ORE
                 </span>
                 <strong>
                   {oreAmount(player.oreBalance)} <small>/ {oreAmount(player.oreCapacity)}</small>
@@ -225,7 +234,7 @@ export function DashboardPanel({
               </article>
               <article>
                 <span>
-                  <Users size={13} /> CREW
+                  CREW
                 </span>
                 <strong>{tier?.name ?? "Backyard Diggers"}</strong>
                 <small>{crewSummary(player)}</small>
@@ -235,10 +244,10 @@ export function DashboardPanel({
 
           <div className="dash-actions">
             <button className="btn btn-ghost" onClick={onManageCrew}>
-              Manage crew <Hammer size={14} />
+              Manage crew <IconHammer size={14} />
             </button>
             <button className="btn btn-ghost" onClick={onSwitchMine}>
-              Switch mine <Repeat2 size={14} />
+              Switch mine <IconSwap size={14} />
             </button>
           </div>
           <p className="dash-note">
@@ -261,16 +270,16 @@ export function DashboardPanel({
             </p>
             {player.streakFreezes > 0 && (
               <p className="paused-freezes">
-                <Snowflake size={12} /> {player.streakFreezes} streak freeze{player.streakFreezes === 1 ? "" : "s"} will
+                <IconSnowflake size={12} /> {player.streakFreezes} streak freeze{player.streakFreezes === 1 ? "" : "s"} will
                 cover a missed window.
               </p>
             )}
             <div className="dash-actions dash-actions-inline">
               <button className="btn btn-ghost btn-sm" onClick={onManageCrew}>
-                Manage crew <Hammer size={14} />
+                Manage crew <IconHammer size={14} />
               </button>
               <button className="btn btn-ghost btn-sm" onClick={onSwitchMine}>
-                Switch mine <Repeat2 size={14} />
+                Switch mine <IconSwap size={14} />
               </button>
             </div>
           </div>
@@ -300,7 +309,7 @@ function GuestDashboard() {
           has settled. Mining Power is earned only by playing.
         </p>
         <button className="btn btn-primary btn-lg" onClick={requestWalletMenu}>
-          <Wallet size={18} /> Connect wallet
+          <IconWallet size={18} /> Connect wallet
         </button>
       </div>
       <div className="dash-guest-visual">

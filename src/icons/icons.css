@@ -1,0 +1,41 @@
+/*
+ * Raster icon glyphs.
+ *
+ * Every icon component renders <span class="icon"> with --icon pointing at a PNG under
+ * /assets/icons. The image is used as a mask, so the glyph paints in currentColor (or in
+ * --icon-color for an accent tint) and inherits whatever ink colour the surrounding component
+ * sets, instead of shipping a colour variant per asset.
+ *
+ * A missing asset uses the readable text mark rendered by Glyph.tsx (the name's own initials), so
+ * the component stays legible and keeps its box rather than collapsing.
+ */
+.icon {
+  display: inline-block;
+  flex: none;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.1em;
+  color: var(--icon-color, currentColor);
+  background-color: var(--icon-color, currentColor);
+  -webkit-mask-image: var(--icon);
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-image: var(--icon);
+  mask-position: center;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+}
+
+.icon-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--icon-color, currentColor);
+  background-color: transparent;
+  font-family: system-ui, sans-serif;
+  font-size: 0.8em;
+  line-height: 1;
+  -webkit-mask-image: none;
+  mask-image: none;
+}

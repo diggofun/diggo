@@ -14,7 +14,7 @@
  * budget that is actually paying blocks, and the emission source badge says which side that is
  * (see emissionSource and curveMining on MineInfo).
  */
-import { AlertTriangle, Clock3, Gauge, Layers, Pickaxe, Repeat2, TrendingUp, Users } from "lucide-react";
+import { IconLayers, IconMine, IconTimer } from "../icons";
 import type { MineInfo, MiningAccounting } from "../../shared/types";
 import { compact, countdown, percent, tokenAmount } from "../format";
 import { curveCapSpent, describeMineStatus, runwayLabel } from "../mineView";
@@ -58,7 +58,7 @@ export function MineInfoPanel({
           </div>
         ) : error ? (
           <div className="error-state" role="alert">
-            <AlertTriangle size={18} aria-hidden="true" />
+            <strong>Mine unavailable</strong>
             <div>
               <strong>Mine information is unavailable</strong>
               <p>{error}</p>
@@ -123,7 +123,7 @@ export function MineInfoPanel({
           </span>
           {paused ? (
             <span className={"badge badge-" + statusView.tone}>
-              <AlertTriangle size={13} aria-hidden="true" /> {statusView.badge}
+              {statusView.badge}
             </span>
           ) : !statusView.known ? (
             /* A status this build has no label for is still shown, in its own words: a new state from
@@ -135,7 +135,7 @@ export function MineInfoPanel({
               disabled={!canSwitch || switching}
               onClick={onSwitchHere}
             >
-              {switching ? "Switching…" : "Switch crew to this mine"} <Repeat2 size={14} aria-hidden="true" />
+              {switching ? "Switching…" : "Switch crew to this mine"}
             </button>
           )}
         </div>
@@ -146,7 +146,7 @@ export function MineInfoPanel({
       <div className="mine-info-grid">
         <article className="card stat">
           <span>
-            <Pickaxe size={13} aria-hidden="true" /> BLOCK REWARD
+            <IconMine size={13} aria-hidden="true" /> BLOCK REWARD
           </span>
           <strong>
             {compact(mine.blockReward)} <small>{mine.symbol}</small>
@@ -155,14 +155,14 @@ export function MineInfoPanel({
         </article>
         <article className="card stat">
           <span>
-            <Gauge size={13} aria-hidden="true" /> TOTAL MINING POWER
+            <strong>TOTAL MINING POWER</strong>
           </span>
           <strong>{compact(mine.totalMiningPower)}</strong>
           <small>{powerDetail}</small>
         </article>
         <article className="card stat">
           <span>
-            <Layers size={13} aria-hidden="true" /> {hasCurveBudget ? "CURVE MINING BUDGET" : "REMAINING RESERVE"}
+            <IconLayers size={13} aria-hidden="true" /> {hasCurveBudget ? "CURVE MINING BUDGET" : "REMAINING RESERVE"}
           </span>
           <strong>
             {compact(mine.remainingReserve)} <small>{mine.symbol}</small>
@@ -175,7 +175,7 @@ export function MineInfoPanel({
         </article>
         <article className="card stat is-featured">
           <span>
-            <Users size={13} aria-hidden="true" /> ESTIMATED SHARE
+            <strong>ESTIMATED SHARE</strong>
           </span>
           <strong>{shareLabel}</strong>
           <small>{shareDetail}</small>
@@ -187,7 +187,7 @@ export function MineInfoPanel({
         <div className="reduction-schedule">
           <div className="mine-info-subhead">
             <span>
-              <Clock3 size={13} aria-hidden="true" /> {onCurve ? "EMISSION RATE" : "REDUCTION SCHEDULE"}
+                <IconTimer size={13} aria-hidden="true" /> {onCurve ? "EMISSION RATE" : "REDUCTION SCHEDULE"}
             </span>
             <small>
               {onCurve
@@ -236,7 +236,7 @@ export function MineInfoPanel({
             <span>
               {hasCurveBudget ? (
                 <>
-                  <TrendingUp size={13} aria-hidden="true" /> CURVE MINING
+                  CURVE MINING
                 </>
               ) : (
                 "MINED SO FAR"

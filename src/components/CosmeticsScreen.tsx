@@ -11,10 +11,10 @@
  * where it will be seen while digging.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Check, Lock, Shirt, Sparkles } from "lucide-react";
 import type { CosmeticsView } from "../../shared/types";
 import { equipCosmetic, getCosmetics, unequipCosmetic } from "../api";
 import { setEquippedCosmetics } from "../cosmetics";
+import { IconCosmetics } from "../icons";
 import { MineScene } from "./MineScene";
 
 export interface CosmeticsScreenProps {
@@ -110,7 +110,7 @@ export function CosmeticsScreen({ signedIn, previewTier = 3 }: CosmeticsScreenPr
       <div className="section-heading">
         <div>
           <div className="eyebrow">
-            <Shirt size={14} /> Cosmetics
+            <IconCosmetics size={14} /> Cosmetics
           </div>
           <h2>
             DRESS THE
@@ -144,7 +144,7 @@ export function CosmeticsScreen({ signedIn, previewTier = 3 }: CosmeticsScreenPr
         <div className="cosmetics-preview">
           <div className="mine-info-subhead">
             <span>
-              <Sparkles size={13} aria-hidden="true" /> PREVIEW · TIER {previewTier}
+              PREVIEW · TIER {previewTier}
             </span>
             <small>
               {equippedCount === 0
@@ -190,12 +190,12 @@ export function CosmeticsScreen({ signedIn, previewTier = 3 }: CosmeticsScreenPr
                         {comingSoon && <em className="badge badge-idle">coming soon</em>}
                         {!comingSoon && locked && (
                           <em className="badge badge-idle">
-                            <Lock size={11} aria-hidden="true" /> locked
+                            locked
                           </em>
                         )}
                         {item.equipped && (
                           <em className="badge badge-active">
-                            <Check size={11} aria-hidden="true" /> equipped
+                            equipped
                           </em>
                         )}
                       </header>
@@ -220,7 +220,7 @@ export function CosmeticsScreen({ signedIn, previewTier = 3 }: CosmeticsScreenPr
 
       {signedIn && view && !view.purchasesEnabled && (
         <p className="cosmetics-note">
-          <Sparkles size={12} /> Display items stay marked "coming soon": the game does not sell
+          Display items stay marked "coming soon": the game does not sell
           anything, and no purchase will ever grant power or rewards.
         </p>
       )}

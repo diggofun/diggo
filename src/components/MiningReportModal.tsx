@@ -7,7 +7,7 @@
  * belongs to it. The UI renders the event; it never picks a rarity, a token or an amount, and
  * there is no client-side randomness anywhere in this file (spec 55).
  */
-import { Coins, Compass, Hammer, Repeat2, Sparkles, X } from "lucide-react";
+import { IconClose, IconHammer } from "../icons";
 import type { DiscoveryVisualEvent, MiningReport } from "../../shared/types";
 import { duration, oreAmount, tokenAmount } from "../format";
 import { useReducedMotion } from "../motion";
@@ -70,10 +70,9 @@ export function MiningReportModal({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <button className="modal-close" onClick={onClose} aria-label="Close">
-          <X size={20} />
+          <IconClose size={20} />
         </button>
         <div className="eyebrow">
-          <Sparkles size={14} />
           <span>
             WELCOME BACK
             {viewerName !== null && (
@@ -205,23 +204,23 @@ export function MiningReportModal({
             </div>
           )}
           <button className="outline-button" onClick={onManageCrew}>
-            Manage crew <Hammer size={15} />
+            Manage crew <IconHammer size={15} />
           </button>
           <button className="outline-button" onClick={onSwitchMine}>
-            Switch mine <Repeat2 size={15} />
+            Switch mine
           </button>
           <button className="primary-button" disabled={collecting || collected} onClick={onCollect} data-autofocus>
             {collected ? (
               <>
-                <Compass size={16} /> Collected
+                Collected
               </>
             ) : collecting ? (
               <>
-                <Coins size={16} /> Collecting…
+                Collecting…
               </>
             ) : (
               <>
-                <Coins size={16} /> COLLECT
+                COLLECT
               </>
             )}
           </button>

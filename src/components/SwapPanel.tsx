@@ -3,19 +3,19 @@
  * by the Worker's WebSocket. Loaded lazily so lightweight-charts and the Solana program client
  * only ship on the pages that trade.
  *
- * The venue is read from the decoded market account on every load and after every trade: a market
+ * The venue is read from the decoded Coin account on every load and after every trade: a coin
  * trades its bonding curve until `graduate_market` moves that liquidity into the program-owned
- * locked pool, and after that the program only accepts pool buys and sells (docs/ONCHAIN.md). The
- * quote and the slippage floor shown here come from the shared mirrors of the program's own math,
- * so what the form promises is what the program will enforce.
+ * locked pool, and after that the program only accepts pool buys and sells. The quote and the
+ * slippage floor shown here come from the shared mirror of the program's own math, so what the
+ * form promises is what the program will enforce.
  *
- * While a market is still on its curve its mining is paid out of that curve's own token inventory,
- * which adds no SOL to it, so a seller can only ever take out what buyers put in. That ceiling is
- * stated here as the curve's sell capacity rather than left for the quote to reveal.
+ * The trade itself is one wallet-signed transaction, priced again from a fresh account read
+ * immediately before signing. A form's quote can be seconds old, and a stale floor is the failure
+ * this panel exists to avoid: every path through executeSwap either sends a floor derived from the
+ * read it just made, or sends nothing.
  */
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
-import { Check, Radio, TrendingUp, Wallet, Zap } from "lucide-react";
 import type { MarketTrade, TokenSummary } from "../../shared/types";
 import { recordTrade } from "../api";
 import { track } from "../analytics";
@@ -25,15 +25,17 @@ import {
   address,
   DEFAULT_SLIPPAGE_BPS,
   executeSwap,
-  fetchMarketVenue,
+  fetchCoinVenue,
   fetchSolBalance,
   fetchTokenBalance,
   quoteSwap,
   swapAmountRaw,
   venueSpotPriceSol,
   type DiggoWallet,
-  type MarketVenueState,
+  type CoinVenueState,
 } from "../solanaProgram";
+import { usePendingTransaction } from "../onchain";
+import { IconSwap, IconWallet } from "../icons";
 
 function formatTokenAmount(raw: bigint, decimals: number): string {
   const whole = Number(raw) / 10 ** decimals;
@@ -70,7 +72,8 @@ export function SwapPanel({
   const [error, setError] = useState("");
   const [solBalance, setSolBalance] = useState<bigint | null>(null);
   const [tokenBalance, setTokenBalance] = useState<bigint | null>(null);
-  const [venueState, setVenueState] = useState<MarketVenueState | null>(null);
+  const [venueState, setVenueState] = useState<CoinVenueState | null>(null);
+  const pendingTransaction = usePendingTransaction();
 
   // chart setup — created once per mount, data re-seeded whenever the mint changes
   useEffect(() => {
@@ -141,7 +144,7 @@ export function SwapPanel({
 
   const refreshChainState = useCallback(async () => {
     try {
-      const result = await fetchMarketVenue(address(programAddress), address(token.mint));
+      const result = await fetchCoinVenue(address(programAddress), address(token.mint));
       setVenueState(result);
     } catch {
       setVenueState(null);
@@ -169,10 +172,11 @@ export function SwapPanel({
   const parsedAmount = Number(amount);
   const venue = venueState?.venue ?? null;
   /**
-   * Pre-graduation, from the venue the chain reports once it is read; before that read lands the
-   * token summary's own onCurve flag is the answer, and it is the same fact.
+   * Pre-graduation, from the venue the chain reports. Before that read lands there is no answer,
+   * and the honest default is the curve: a coin starts on it, and the program rejects the wrong
+   * route with MarketGraduated rather than filling it at a wrong price.
    */
-  const onCurve = venue !== null ? venue === "curve" : token.curveMining.onCurve;
+  const onCurve = venue !== "pool";
   const poolUnreadable = venue === "pool" && !venueState?.pool;
   /**
    * The quote for the current input, on the venue the market is actually on: the curve's own
@@ -194,12 +198,13 @@ export function SwapPanel({
 
   const slippageLabel = `${(slippageBps / 100).toFixed(0)}%`;
   const feeSol = quote ? Number(quote.feeRaw) / 1_000_000_000 : 0;
-  const creatorFeePercent = venueState ? formatFeeBps(venueState.market.creatorFeeBps) : null;
-  const platformFeePercent = venueState ? formatFeeBps(venueState.market.platformFeeBps) : null;
+  const creatorFeePercent = venueState ? formatFeeBps(venueState.coin.creatorFeeBps) : null;
+  const platformFeePercent = venueState ? formatFeeBps(venueState.coin.platformFeeBps) : null;
 
   async function submitTrade(event: FormEvent) {
     event.preventDefault();
     setError("");
+    if (!pendingTransaction.canSubmit()) return;
     if (!signer) {
       setError("Connect a wallet that can sign transactions first.");
       return;
@@ -233,7 +238,9 @@ export function SwapPanel({
       setAmount("");
       onTraded();
     } catch (tradeError) {
-      setError(tradeError instanceof Error ? tradeError.message : "Trade failed");
+      if (!pendingTransaction.record(tradeError, "Trade")) {
+        setError(tradeError instanceof Error ? tradeError.message : "Trade failed");
+      } else setError("");
     } finally {
       setBusy(false);
     }
@@ -244,7 +251,7 @@ export function SwapPanel({
   return (
     <section className="swap-terminal page-shell" id="swap">
       <div className="section-heading">
-        <div><div className="eyebrow"><TrendingUp size={14} /> DiggoSwap</div><h2>TRADE<br />${token.symbol}.</h2></div>
+        <div><div className="eyebrow"><IconSwap size={14} /> DiggoSwap</div><h2>TRADE<br />${token.symbol}.</h2></div>
         <div className="swap-price-tag">
           <span>SPOT PRICE</span>
           <strong>{spotPriceSol < 0.000001 ? spotPriceSol.toExponential(3) : spotPriceSol.toFixed(9)} SOL</strong>
@@ -259,7 +266,7 @@ export function SwapPanel({
           <div ref={chartContainerRef} className="swap-chart" />
           {tradeCount < 2 && (
             <div className="swap-chart-empty">
-              <Radio size={16} /> Not enough trade history yet — every real buy/sell plots here live.
+              Not enough trade history yet — every real buy/sell plots here live.
             </div>
           )}
           <div className="trade-tape">
@@ -316,14 +323,14 @@ export function SwapPanel({
             </div>
           )}
           {error && <p className="form-message" role="alert">{error}</p>}
-          {lastSignature && <a className="tx-success" href={`https://explorer.solana.com/tx/${lastSignature}?cluster=devnet`} target="_blank" rel="noreferrer"><Check size={13} /> Confirmed on devnet · View transaction</a>}
+          {lastSignature && <a className="tx-success" href={`https://explorer.solana.com/tx/${lastSignature}?cluster=devnet`} target="_blank" rel="noreferrer">Confirmed on devnet · View transaction</a>}
           {signer ? (
-            <button className="primary-button swap-submit" disabled={busy || !quoteReady}>
-              {busy ? "Confirming…" : side === "buy" ? "Buy on-chain" : "Sell on-chain"} <Zap size={16} />
+            <button className="primary-button swap-submit" disabled={busy || !quoteReady || !pendingTransaction.canSubmit()}>
+              {busy ? "Confirming…" : side === "buy" ? "Buy on-chain" : "Sell on-chain"}
             </button>
           ) : (
             <button type="button" className="primary-button swap-submit" onClick={requestWalletMenu}>
-              Connect wallet <Wallet size={16} />
+              Connect wallet <IconWallet size={16} />
             </button>
           )}
           {signer && !quoteReady && parsedAmount > 0 && !busy && (

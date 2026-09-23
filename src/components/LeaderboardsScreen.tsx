@@ -8,7 +8,7 @@
  * protection.
  */
 import { useEffect, useState } from "react";
-import { Trophy } from "lucide-react";
+import { IconLeaderboards } from "../icons";
 import type { TokenSummary } from "../../shared/types";
 import { getLeaderboards, type LeaderboardsView, type RankedEntry } from "../api";
 import { compact } from "../format";
@@ -72,7 +72,7 @@ export function LeaderboardsScreen({ tokens, onSelectMine }: LeaderboardsScreenP
       <div className="section-heading">
         <div>
           <div className="eyebrow">
-            <Trophy size={14} /> Leaderboards
+            <IconLeaderboards size={14} /> Leaderboards
           </div>
           <h2>
             TOP OF

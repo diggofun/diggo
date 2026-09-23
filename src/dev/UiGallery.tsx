@@ -7,6 +7,11 @@
 import { useState } from "react";
 import type { MineInfo, MiningReport, PlayerProfile, TokenSummary } from "../../shared/types";
 import type { DiscoveryRecord } from "../../shared/types";
+import {
+  LAUNCH_RENT_SOL,
+  LAUNCH_TOTAL_SOL,
+  LAUNCH_TX_FEE_SOL,
+} from "../constants";
 import { DIGGO_CONFIG } from "../../shared/economics";
 import { discoveryVisualEvent } from "../../shared/discoveryVisual";
 import { CrewScreen } from "../components/CrewScreen";
@@ -16,8 +21,17 @@ import { ExploreBoard, SelectedMine } from "../components/HomeSections";
 import { DiscoveryArt, GameArt, MineScene } from "../components/MineScene";
 import { MineInfoPanel } from "../components/MineInfoPanel";
 import { MiningReportModal } from "../components/MiningReportModal";
+import { PLAY_SUMMARY, PlayerOnboarding } from "../components/PlayerOnboarding";
+import { SponsorEventsPanel } from "../components/SponsorEventsPanel";
 
 const NOW = Math.floor(Date.now() / 1_000);
+
+/**
+ * The v2 program id, for the panels that need one to derive PDAs. The gallery never reads the
+ * chain — both panels are rendered with a null wallet, so they show their unconnected state and
+ * make no request at all.
+ */
+const GALLERY_PROGRAM_ID = "H3Y8GgTnvwv5U1bajfzj386YSPC48vvwjFroXYyHZFj5";
 
 const SAMPLE_MINE: TokenSummary = {
   mint: "Samp1eMint11111111111111111111111111111111",
@@ -220,11 +234,11 @@ const WIDE_ART_FILES: readonly { name: string; width: number; height: number; cl
   { name: "og-image", width: 1200, height: 630, className: "ui-gallery-wide-art is-social" },
 ];
 
-/** The brand lockups from public/assets/brand, exactly as the header uses them. */
+/** The raster brand marks available for the gallery. */
 const BRAND_FILES: readonly { src: string; alt: string; className?: string }[] = [
-  { src: "/assets/brand/logo.svg", alt: "Diggo wordmark" },
-  { src: "/assets/brand/logo-dark.svg", alt: "Diggo wordmark for dark backgrounds" },
-  { src: "/assets/brand/logo-mark.svg", alt: "Diggo mark", className: "is-mark" },
+  { src: "/assets/brand/apple-touch-icon.png", alt: "Diggo mark" },
+  { src: "/assets/brand/icon-192.png", alt: "Diggo mark at 192 pixels" },
+  { src: "/assets/brand/icon-512.png", alt: "Diggo mark at 512 pixels", className: "is-mark" },
 ];
 
 const RARITIES = ["common", "uncommon", "rare", "epic", "legendary", "mythic"] as const;
@@ -275,8 +289,8 @@ export function UiGallery() {
         <span className="mono-label">DEV ONLY // UI GALLERY</span>
         <p>
           Sample data, no Worker calls. Filter with
-          ?section=active|paused|first|tiers|crew|loadouts|discoveries|art|market|mineinfo and open
-          the report with ?report.
+          ?section=active|paused|first|tiers|crew|loadouts|discoveries|art|market|mineinfo|v2 and
+          open the report with ?report.
         </p>
         <button className="btn btn-ghost btn-sm" onClick={() => { setCollected(false); setReportOpen(true); }}>Open mining report</button>
       </section>
@@ -292,6 +306,43 @@ export function UiGallery() {
           {...dashboardProps}
           player={samplePlayer({ activationState: "NEVER_ACTIVATED", streak: 0, streakFreezes: 0, streakGraceUntil: null, crewLevels: { miners: 1, drills: 1, carts: 1, foreman: 1, storage: 1 }, power: 100 })}
         />
+      )}
+      {/*
+        The v2 surfaces, in their disconnected state. That is the first thing a new visitor sees,
+        so it is the state worth reviewing: the two ways to play, what each costs, and the exact
+        launch figure before a creator signs anything.
+      */}
+      {show("v2") && (
+        <>
+          <section className="page-shell ui-gallery-tiers">
+            <h2>Player onboarding — not connected</h2>
+            <p className="onboarding-fine">
+              {PLAY_SUMMARY}
+            </p>
+            <PlayerOnboarding programAddress={GALLERY_PROGRAM_ID} wallet={null} onChanged={noop} />
+          </section>
+          <section className="page-shell ui-gallery-tiers">
+            <h2>Launch cost</h2>
+            <div className="launch-cost">
+              <div className="launch-cost-head">
+                <span className="launch-cost-label">You pay to launch</span>
+                <strong className="launch-cost-total">{LAUNCH_TOTAL_SOL.toFixed(6)} SOL</strong>
+              </div>
+              <dl className="launch-cost-breakdown">
+                <div><dt>Mint, coin account and vault rent</dt><dd>{LAUNCH_RENT_SOL.toFixed(6)} SOL</dd></div>
+                <div><dt>Network fee (estimated)</dt><dd>{LAUNCH_TX_FEE_SOL.toFixed(6)} SOL</dd></div>
+              </dl>
+              <p className="launch-sponsored">
+                Sponsored — event #0 pays the rent from its vault, so you
+                pay the network fee only.
+              </p>
+            </div>
+          </section>
+          <section className="page-shell ui-gallery-tiers">
+            <h2>Sponsor console — no vault yet</h2>
+            <SponsorEventsPanel programAddress={GALLERY_PROGRAM_ID} wallet={null} />
+          </section>
+        </>
       )}
       {show("tiers") && (
         <section className="page-shell ui-gallery-tiers">
@@ -346,8 +397,8 @@ export function UiGallery() {
         <section className="page-shell ui-gallery-tiers">
           <h2>Brand</h2>
           <p className="ui-gallery-note">
-            The header lockup and the square mark, from public/assets/brand. Both are SVG, so they
-            stay sharp at any size and at any zoom.
+            The available raster brand marks, from public/assets/brand, shown at the sizes they
+            ship.
           </p>
           <div className="ui-gallery-brand">
             {BRAND_FILES.map((file) => (
@@ -369,7 +420,7 @@ export function UiGallery() {
                   height={file.height}
                   className={file.className}
                   eager
-                  fallback={<span className="ui-gallery-art-missing">no file — SVG fallback</span>}
+                  fallback={<span className="ui-gallery-art-missing">no file</span>}
                 />
                 <figcaption>{file.name}</figcaption>
               </figure>
@@ -392,7 +443,7 @@ export function UiGallery() {
                   height={file.height}
                   className="ui-gallery-art-img"
                   eager
-                  fallback={<span className="ui-gallery-art-missing">no file — SVG fallback</span>}
+                  fallback={<span className="ui-gallery-art-missing">no file</span>}
                 />
                 <figcaption>{file.name}</figcaption>
               </figure>

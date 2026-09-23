@@ -143,24 +143,29 @@ export function useRewardCollection(onCollected?: (claim: RewardClaimView) => vo
         signature: null,
         message: "Waiting for your wallet to sign, then for the network to confirm…",
       });
+      let submittedSignature: string | null = null;
       try {
         const programId = await loadProgramId();
         if (!programId) throw new Error("Rewards are unavailable right now. Try again shortly.");
-        const { address, submitClaimRewardsOnChain } = await import("./solanaProgram");
-        const submission = await submitClaimRewardsOnChain(
-          address(programId),
-          connected.wallet,
-          address(claim.mint),
-        );
+        // v2: the tokens leave the coin's vault only through `claim_rewards`, signed by the
+        // player's own wallet. There is no keeper and no server key on this path, so the
+        // transaction is the payout and the API call afterwards only records what it verified.
+        const { address, claimRewards } = await import("./solanaProgram");
+        const submission = await claimRewards({
+          programAddress: address(programId),
+          wallet: connected.wallet,
+          mint: address(claim.mint),
+        });
+        submittedSignature = submission.signature;
         // The signature is reported even when confirmation polling timed out: the backend checks
         // the transaction itself, and a landed payout must not be lost to a slow RPC.
         await confirmRewardClaimPayout(claim.id, submission.signature);
         update({
-          state: "confirmed",
+          state: submission.confirmed ? "confirmed" : "pending",
           signature: submission.signature,
           message: submission.confirmed
             ? "Collected. The tokens are in your wallet."
-            : "Submitted. The tokens are in your wallet once the network confirms.",
+            : "Submitted. Confirmation is pending; do not submit this reward again.",
         });
         onCollectedRef.current?.(claim);
       } catch (error) {
@@ -171,6 +176,13 @@ export function useRewardCollection(onCollected?: (claim: RewardClaimView) => vo
             message: "Already collected — this reward has a confirmed payout.",
           });
           onCollectedRef.current?.(claim);
+        } else if (submittedSignature &&
+          (error instanceof ApiError && (error.code === "PAYOUT_UNVERIFIED" || error.code === "CLAIMS_HALTED"))) {
+          update({
+            state: "pending",
+            signature: submittedSignature,
+            message: "The reward transaction was submitted and is still being verified. Do not submit it again.",
+          });
         } else {
           update({ state: "failed", signature: null, message: collectionFailureMessage(error) });
         }

@@ -3,13 +3,13 @@
  * reads the same everywhere instead of as a blank page.
  */
 import type { ReactNode } from "react";
-import { AlertTriangle, Pickaxe, RefreshCw } from "lucide-react";
+import { IconMine } from "../icons";
 
 export function LoadingScreen({ label = "Digging up the data…" }: { label?: string }) {
   return (
     <div className="loading-screen" role="status" aria-live="polite">
       <span className="loading-pick" aria-hidden="true">
-        <Pickaxe size={34} strokeWidth={2.4} />
+        <IconMine size={34} />
       </span>
       <span>{label}</span>
     </div>
@@ -44,7 +44,7 @@ export function EmptyState({
 }) {
   return (
     <div className="empty-state">
-      <span className="empty-state-icon" aria-hidden="true">{icon ?? <Pickaxe size={26} />}</span>
+      <span className="empty-state-icon" aria-hidden="true">{icon ?? <IconMine size={26} />}</span>
       <h3>{title}</h3>
       {children && <p>{children}</p>}
       {action}
@@ -55,14 +55,13 @@ export function EmptyState({
 export function ErrorState({ title, children, onRetry }: { title: string; children?: ReactNode; onRetry?(): void }) {
   return (
     <div className="error-state" role="alert">
-      <AlertTriangle size={20} aria-hidden="true" />
       <div>
         <strong>{title}</strong>
         {children && <p>{children}</p>}
       </div>
       {onRetry && (
         <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>
-          <RefreshCw size={14} /> Try again
+          Try again
         </button>
       )}
     </div>
