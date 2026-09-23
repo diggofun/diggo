@@ -512,7 +512,7 @@ export function SiteFooter() {
           </a>
         ))}
       </nav>
-      <small>© 2026 Diggo.fun · Devnet MVP</small>
+      <small>© 2026 Diggo.fun</small>
     </footer>
   );
 }
