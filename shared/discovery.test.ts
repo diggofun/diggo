@@ -5,6 +5,7 @@ import {
   discoveryBudgetRemaining,
   discoveryEligible,
   discoveryEligibility,
+  heldUsageCountedUsd,
   type DiscoveryUsage,
 } from "./discovery";
 
@@ -175,3 +176,33 @@ describe("discovery budget caps", () => {
   });
 });
 
+describe("held grants and the budget they may reserve", () => {
+  it("counts held value in full while it is inside its configured share", () => {
+    // 10% of the 500 cap, against 20 held: the share is what binds, not the held value.
+    const config = createDiggoConfig({ discovery: { heldBudgetShareBps: 1_000 } });
+
+    expect(heldUsageCountedUsd(20, 500, config)).toBe(20);
+    expect(heldUsageCountedUsd(50, 500, config)).toBe(50);
+  });
+
+  it("stops counting held value above the configured share", () => {
+    const config = createDiggoConfig({ discovery: { heldBudgetShareBps: 1_000 } });
+
+    // A held farm cannot commit more than its share of a cap, however much it holds.
+    expect(heldUsageCountedUsd(495, 500, config)).toBe(50);
+    expect(heldUsageCountedUsd(1_000_000, 500, config)).toBe(50);
+  });
+
+  it("counts nothing when held value, the cap or the share is unusable", () => {
+    const noShare = createDiggoConfig({ discovery: { heldBudgetShareBps: 0 } });
+
+    expect(heldUsageCountedUsd(0, 500)).toBe(0);
+    expect(heldUsageCountedUsd(-5, 500)).toBe(0);
+    expect(heldUsageCountedUsd(Number.NaN, 500)).toBe(0);
+    expect(heldUsageCountedUsd(50, 0)).toBe(0);
+    expect(heldUsageCountedUsd(50, -1)).toBe(0);
+    expect(heldUsageCountedUsd(50, 500, noShare)).toBe(0);
+    // The shipped default is the fifth the deployment ships with, not a full pass-through.
+    expect(heldUsageCountedUsd(500, 500)).toBe(100);
+  });
+});

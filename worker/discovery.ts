@@ -34,29 +34,49 @@ import {
   discoveryBudgetCheck,
   discoveryBudgetRemaining,
   discoveryEligibility,
+  heldUsageCountedUsd,
   type DiscoveryCapReason,
   type DiscoveryUsage,
 } from "../shared/discovery";
 import { discoveryVisualEvent } from "../shared/discoveryVisual";
+import {
+  COMMIT_REVEAL_ALGORITHM,
+  DEFAULT_EPOCH_SECONDS,
+  commitmentOf,
+  commitmentView,
+  createCommitRevealRandomSource,
+  deriveEpochSeed,
+  epochInfo,
+  epochOf,
+  rollVerificationRecipe,
+  verifyCommitment,
+  type RngCommitmentRecord,
+} from "../shared/commitReveal";
 import { maturityBps } from "../shared/ore";
-import { createHmacRandomSource, type RandomSource } from "../shared/random";
+import type { RandomSource } from "../shared/random";
 import {
   capRarityByBudget,
   normalizedDiscoveryAmount,
   rarityTier,
   resolveRarity,
-  robustPrice,
   rollDiscoveryRarity,
   tokenEligibilityScore,
   type PriceSample,
-  type RobustPrice,
   type TokenEligibilityInput,
 } from "../shared/rarity";
 import type { DiscoveryOpportunity, DiscoveryRecord } from "../shared/types";
-import { loadChallenge, sessionWallet, storeChallenge, verifyWalletSignature } from "./auth";
+import {
+  challengeKey,
+  consumeChallengeNonce,
+  issueChallenge,
+  loadChallenge,
+  sessionWallet,
+  verifyWalletSignature,
+} from "./auth";
 import { isBreakerOpen } from "./breakers";
 import type { RuntimeEnv } from "./env";
-import { apiError, checkWalletRateLimit, isBase58Address, json, readJson } from "./http";
+import { apiError, checkRateLimit, checkWalletRateLimit, isBase58Address, json, readJson } from "./http";
+import { getRobustPrice, internalPriceSamples, type OracleQuote } from "./oracle";
 import { activationStateOf, crewLevelsOf, getOrCreatePlayer, type PlayerRow } from "./player";
 import { gateAction, recordActivity } from "./risk";
 import { metric } from "./telemetry";
@@ -71,6 +91,10 @@ export const DISCOVERY_DEFAULT_ROLL_CHANCE_BPS = DIGGO_CONFIG.discovery.rollChan
 export const DISCOVERY_MAX_CANDIDATES = 60;
 /** Price observations kept per mint; older rows are pruned when a new one is written. */
 export const DISCOVERY_PRICE_SAMPLE_RETENTION = 200;
+/** The action name a discovery claim challenge is bound to (see worker/auth.ts issueChallenge). */
+export const CLAIM_DISCOVERY_ACTION = "claim_discovery";
+/** How long a signed claim challenge stays usable; short, because it is signed immediately. */
+export const CLAIM_CHALLENGE_TTL_SECONDS = 300;
 
 export interface DiscoveryTunables {
   windowSeconds: number;
@@ -152,22 +176,206 @@ async function draw(ctx: DrawContext, purpose: string): Promise<number> {
 }
 
 /**
- * Loads the roll secret. Fails closed: without a real server secret there is no unpredictable
+ * Loads the server secret. Fails closed: without a real server secret there is no unpredictable
  * seed, so the subsystem refuses to roll rather than fall back to anything guessable (spec 55).
  */
-async function discoverySecretFor(env: RuntimeEnv): Promise<DiscoverySecret | null> {
+function serverSecretFor(env: RuntimeEnv): string | null {
   const secret = env.DISCOVERY_SECRET;
-  if (!secret || secret.length < 16) {
-    await metric(env, "discovery.roll_denied", 1, { reason: "discovery_secret_missing" });
+  return secret && secret.length >= 16 ? secret : null;
+}
+
+async function refuseWithoutSecret(env: RuntimeEnv): Promise<null> {
+  await metric(env, "discovery.roll_denied", 1, { reason: "discovery_secret_missing" });
+  console.error(
+    JSON.stringify({
+      event: "discovery.secret_missing",
+      detail: "DISCOVERY_SECRET is not configured (or too short); refusing to roll a real-value discovery",
+    }),
+  );
+  return null;
+}
+
+// --- commit-reveal RNG epochs (spec 55, 56) -------------------------------------------------------
+
+/** Bounds for the commit-reveal epoch length; a day by default, per the migration path in spec 55. */
+export const RNG_EPOCH_BOUNDS = { min: 3_600, max: 2_592_000 } as const;
+
+/**
+ * The epoch length the deployment rolls its commitments over. Configurable, because a devnet
+ * rehearsal wants minutes rather than a day, but bounded so neither an accidental zero nor an
+ * accidentally decade-long epoch can reach production.
+ */
+export function rngEpochSecondsOf(env: RuntimeEnv): number {
+  const raw = Number(env.DISCOVERY_EPOCH_SECONDS);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_EPOCH_SECONDS;
+  return Math.min(RNG_EPOCH_BOUNDS.max, Math.max(RNG_EPOCH_BOUNDS.min, Math.floor(raw)));
+}
+
+interface RngCommitmentRow {
+  epoch: number;
+  algorithm: string;
+  epoch_seconds: number;
+  starts_at: number;
+  ends_at: number;
+  commitment: string;
+  seed: string | null;
+  revealed_at: number | null;
+  created_at: number;
+}
+
+export function toRngCommitmentRecord(row: RngCommitmentRow): RngCommitmentRecord {
+  return {
+    epoch: row.epoch,
+    algorithm: row.algorithm,
+    epochSeconds: row.epoch_seconds,
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+    commitment: row.commitment,
+    seed: row.seed,
+    revealedAt: row.revealed_at,
+    createdAt: row.created_at,
+  };
+}
+
+async function loadCommitment(env: RuntimeEnv, epoch: number): Promise<RngCommitmentRow | null> {
+  return env.DB.prepare("SELECT * FROM rng_commitments WHERE epoch = ?1").bind(epoch).first<RngCommitmentRow>();
+}
+
+export interface DiscoveryRng extends DiscoverySecret {
+  kind: string;
+  epoch: number;
+  epochSeconds: number;
+  startsAt: number;
+  endsAt: number;
+  commitment: string;
+}
+
+/**
+ * Publishes `sha256(seed)` for one epoch, if it is not published already.
+ *
+ * INSERT OR IGNORE is what makes the commitment binding: the first commitment for an epoch wins
+ * forever, so the seed cannot be swapped afterwards. If the secret has changed since the
+ * commitment was published, this epoch's derived seed no longer matches it, and the call returns
+ * null so the epoch rolls nothing rather than rolling against a seed nobody committed to.
+ */
+async function ensureEpochCommitment(
+  env: RuntimeEnv,
+  serverSecret: string,
+  epoch: number,
+  epochSeconds: number,
+  now: number,
+): Promise<DiscoveryRng | null> {
+  const info = epochInfo(epoch, epochSeconds);
+  const seed = await deriveEpochSeed(serverSecret, info.epoch);
+  const commitment = await commitmentOf(seed);
+  const existing = await loadCommitment(env, info.epoch);
+  if (!existing) {
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO rng_commitments
+         (epoch, algorithm, epoch_seconds, starts_at, ends_at, commitment, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+    )
+      .bind(info.epoch, COMMIT_REVEAL_ALGORITHM, info.epochSeconds, info.startsAt, info.endsAt, commitment, now)
+      .run();
+  }
+  const row = existing ?? (await loadCommitment(env, info.epoch));
+  if (!row) return null;
+  if (row.commitment !== commitment) {
+    // The seed behind this commitment is not the one we can derive any more, so every roll of this
+    // epoch would be unverifiable. Refuse instead of publishing an outcome no one can check.
+    await metric(env, "discovery.commitment_mismatch", 1, { epoch: String(info.epoch) });
     console.error(
-      JSON.stringify({
-        event: "discovery.secret_missing",
-        detail: "DISCOVERY_SECRET is not configured (or too short); refusing to roll a real-value discovery",
-      }),
+      JSON.stringify({ event: "discovery.commitment_mismatch", epoch: info.epoch, row: row.commitment }),
     );
     return null;
   }
-  return { source: createHmacRandomSource(), secret };
+  return {
+    kind: COMMIT_REVEAL_ALGORITHM,
+    source: createCommitRevealRandomSource(info.epoch, seed),
+    secret: seed,
+    epoch: info.epoch,
+    epochSeconds: info.epochSeconds,
+    startsAt: info.startsAt,
+    endsAt: info.endsAt,
+    commitment: row.commitment,
+  };
+}
+
+/**
+ * The RNG context for a roll: the current epoch's seed and the RandomSource bound to it. The seed
+ * is derived from DISCOVERY_SECRET and the epoch, so it cannot be influenced by anything the
+ * rolling wallet does, and it is reconstructible by anyone once the epoch ends.
+ */
+export async function discoveryRngFor(
+  env: RuntimeEnv,
+  now: number,
+): Promise<DiscoveryRng | null> {
+  const serverSecret = serverSecretFor(env);
+  if (!serverSecret) return refuseWithoutSecret(env);
+  const epochSeconds = rngEpochSecondsOf(env);
+  return ensureEpochCommitment(env, serverSecret, epochOf(now, epochSeconds), epochSeconds, now);
+}
+
+export interface RngCommitmentSummary {
+  secretConfigured: boolean;
+  currentEpoch: number | null;
+  nextEpoch: number | null;
+  published: number[];
+  revealed: number[];
+}
+
+/**
+ * Publishes the commitment for the epoch in progress and for the one after it, and reveals every
+ * ended epoch whose seed is still sealed. Called from the cron trigger and from the public
+ * commitments endpoint, so the commitment for an epoch is on record before that epoch's first roll
+ * and the reveal happens without an operator doing anything.
+ */
+export async function prepublishRngCommitments(
+  env: RuntimeEnv,
+  now = Math.floor(Date.now() / 1_000),
+): Promise<RngCommitmentSummary> {
+  const serverSecret = serverSecretFor(env);
+  const epochSeconds = rngEpochSecondsOf(env);
+  const currentEpoch = epochOf(now, epochSeconds);
+  const summary: RngCommitmentSummary = {
+    secretConfigured: serverSecret !== null,
+    currentEpoch,
+    nextEpoch: currentEpoch + 1,
+    published: [],
+    revealed: [],
+  };
+  if (!serverSecret) return summary;
+
+  for (const epoch of [currentEpoch, currentEpoch + 1]) {
+    const before = await loadCommitment(env, epoch);
+    const rng = await ensureEpochCommitment(env, serverSecret, epoch, epochSeconds, now);
+    if (rng && !before) summary.published.push(epoch);
+  }
+
+  const pending = await env.DB.prepare(
+    "SELECT epoch, commitment FROM rng_commitments WHERE seed IS NULL AND ends_at <= ?1 ORDER BY epoch ASC LIMIT 50",
+  )
+    .bind(now)
+    .all<{ epoch: number; commitment: string }>();
+  for (const row of pending.results ?? []) {
+    const seed = await deriveEpochSeed(serverSecret, row.epoch);
+    if (!(await verifyCommitment(seed, row.commitment))) {
+      await metric(env, "discovery.reveal_mismatch", 1, { epoch: String(row.epoch) });
+      console.error(JSON.stringify({ event: "discovery.reveal_mismatch", epoch: row.epoch }));
+      continue;
+    }
+    // Guarded by ends_at so this UPDATE can never unseal a running epoch, whatever calls it.
+    const result = await env.DB.prepare(
+      "UPDATE rng_commitments SET seed = ?1, revealed_at = ?2 WHERE epoch = ?3 AND ends_at <= ?2 AND seed IS NULL",
+    )
+      .bind(seed, now, row.epoch)
+      .run();
+    if (result.meta.changes === 1) {
+      summary.revealed.push(row.epoch);
+      await metric(env, "discovery.seed_revealed", 1, { epoch: String(row.epoch) });
+    }
+  }
+  return summary;
 }
 
 // --- opportunity persistence ---------------------------------------------------------------------
@@ -222,7 +430,7 @@ async function loadOpportunity(
  */
 async function ensureOpportunity(
   env: RuntimeEnv,
-  secret: DiscoverySecret,
+  rng: DiscoveryRng,
   wallet: string,
   windowIndex: number,
   tunables: DiscoveryTunables,
@@ -232,7 +440,7 @@ async function ensureOpportunity(
   const eventId = discoveryEventId(wallet, windowIndex);
   const window = discoveryWindowLabel(windowIndex);
   const nonce = toHex(
-    await secret.source.deriveBytes({ serverSecret: secret.secret, eventId, accountId: wallet, window }, 16),
+    await rng.source.deriveBytes({ serverSecret: rng.secret, eventId, accountId: wallet, window }, 16),
   );
   await env.DB.prepare(
     `INSERT OR IGNORE INTO discovery_opportunities
@@ -272,11 +480,23 @@ async function consumeOpportunity(env: RuntimeEnv, opportunityId: string, now: n
 // --- budget accounting ---------------------------------------------------------------------------
 
 const COUNTED_STATUSES = "('PENDING','ELIGIBLE','CLAIMED','HELD')";
+/** Everything except a hold: the value that counts against every cap without a ceiling. */
+const UNHELD_STATUSES = "('PENDING','ELIGIBLE','CLAIMED')";
+
+interface UsageRow {
+  unheld: number;
+  held: number;
+}
 
 /**
  * Rolling value actually granted, per account, per token and globally. Only granted states count:
  * a REJECTED row never consumed budget, so counting it would let a refused attempt eat a
  * legitimate player's allowance.
+ *
+ * HELD value is counted separately and only up to the configured share of each cap
+ * (heldUsageCountedUsd), and only while the hold is inside its review window: a grant parked for
+ * review is a promise, but an uncleared backlog of them must not be able to reserve every cap and
+ * deny ordinary players their budget (spec 45, 64).
  */
 async function budgetUsage(
   env: RuntimeEnv,
@@ -288,32 +508,74 @@ async function budgetUsage(
   const day = config.time.secondsPerDay;
   const week = config.time.secondsPerWeek;
   const period = config.discovery.tokenPeriodSeconds;
+  const heldCutoff = now - config.discovery.heldGrantReviewSeconds;
   const scoped = (clause: string, value: string, since: number) =>
     env.DB.prepare(
-      `SELECT COALESCE(SUM(value_usd), 0) AS total FROM discoveries
+      `SELECT
+         COALESCE(SUM(CASE WHEN status IN ${UNHELD_STATUSES} THEN value_usd ELSE 0 END), 0) AS unheld,
+         COALESCE(SUM(CASE WHEN status = 'HELD' AND created_at >= ?3 THEN value_usd ELSE 0 END), 0) AS held
+         FROM discoveries
          WHERE ${clause} AND status IN ${COUNTED_STATUSES} AND created_at >= ?2`,
     )
-      .bind(value, since)
-      .first<{ total: number }>();
+      .bind(value, since, heldCutoff)
+      .first<UsageRow>();
+  // Held value counts against the cap it is being measured against, never above that cap's share.
+  const counted = (row: UsageRow | null, capUsd: number) =>
+    (row?.unheld ?? 0) + heldUsageCountedUsd(row?.held ?? 0, capUsd, config);
+  const rules = config.discovery;
   const [accountDaily, accountWeekly, tokenDaily, tokenPeriod, globalDaily] = await Promise.all([
     scoped("wallet = ?1", wallet, now - day),
     scoped("wallet = ?1", wallet, now - week),
     scoped("mint = ?1", mint, now - day),
     scoped("mint = ?1", mint, now - period),
     env.DB.prepare(
-      `SELECT COALESCE(SUM(value_usd), 0) AS total FROM discoveries
+      `SELECT
+         COALESCE(SUM(CASE WHEN status IN ${UNHELD_STATUSES} THEN value_usd ELSE 0 END), 0) AS unheld,
+         COALESCE(SUM(CASE WHEN status = 'HELD' AND created_at >= ?2 THEN value_usd ELSE 0 END), 0) AS held
+         FROM discoveries
          WHERE status IN ${COUNTED_STATUSES} AND created_at >= ?1`,
     )
-      .bind(now - day)
-      .first<{ total: number }>(),
+      .bind(now - day, heldCutoff)
+      .first<UsageRow>(),
   ]);
   return {
-    accountDailyUsd: accountDaily?.total ?? 0,
-    accountWeeklyUsd: accountWeekly?.total ?? 0,
-    tokenDailyUsd: tokenDaily?.total ?? 0,
-    tokenPeriodUsd: tokenPeriod?.total ?? 0,
-    globalDailyUsd: globalDaily?.total ?? 0,
+    accountDailyUsd: counted(accountDaily, rules.accountDailyCapUsd),
+    accountWeeklyUsd: counted(accountWeekly, rules.accountWeeklyCapUsd),
+    tokenDailyUsd: counted(tokenDaily, rules.tokenDailyCapUsd),
+    tokenPeriodUsd: counted(tokenPeriod, rules.tokenPeriodCapUsd),
+    globalDailyUsd: counted(globalDaily, rules.globalDailyCapUsd),
   };
+}
+
+/**
+ * Counts holds nobody cleared inside the review window (spec 45, 53, 64).
+ *
+ * A hold is a promise kept in escrow while a human (or the risk pipeline) decides, and an
+ * unresolved one must not reserve a budget slot forever - which is already true without touching
+ * it: budgetUsage() stops counting a HELD grant the moment it leaves the review window, so every
+ * cap gets that budget back on its own. What must NOT happen is the grant being resolved by the
+ * clock: a REJECTED row is irreversible and destroys a real reward a player was granted, so an
+ * unresolved hold stays HELD until a human or the risk pipeline resolves it. Nothing on the roll or
+ * claim path mutates it, which is why this only reports and counts. Guarded by a cheap existence
+ * check because it runs on the roll path.
+ */
+export async function countStaleDiscoveryHolds(
+  env: RuntimeEnv,
+  now = Math.floor(Date.now() / 1_000),
+  config: DiggoConfig = DIGGO_CONFIG,
+): Promise<number> {
+  const cutoff = now - config.discovery.heldGrantReviewSeconds;
+  const stale = await env.DB.prepare(
+    "SELECT COUNT(*) AS total FROM discoveries WHERE status = 'HELD' AND created_at <= ?1",
+  )
+    .bind(cutoff)
+    .first<{ total: number }>();
+  const waiting = Number(stale?.total ?? 0);
+  if (waiting > 0) {
+    await metric(env, "discovery.hold_awaiting_review", waiting, {});
+    console.log(JSON.stringify({ event: "discovery.hold_awaiting_review", waiting, cutoff }));
+  }
+  return waiting;
 }
 
 // --- token selection -----------------------------------------------------------------------------
@@ -321,6 +583,8 @@ async function budgetUsage(
 interface CandidateRow {
   mint: string;
   symbol: string;
+  /** LAUNCHING mines quote on the bonding curve only; anything else has a real DEX market. */
+  status: string;
   decimals: number;
   price_usd: number;
   market_cap_usd: number;
@@ -349,7 +613,7 @@ async function candidateTokens(
   config: DiggoConfig,
 ): Promise<CandidateRow[]> {
   const result = await env.DB.prepare(
-    `SELECT t.mint, t.symbol, t.decimals, t.price_usd, t.market_cap_usd, t.liquidity_usd,
+    `SELECT t.mint, t.symbol, t.status, t.decimals, t.price_usd, t.market_cap_usd, t.liquidity_usd,
             t.discovery_reserve_remaining, t.discovery_epoch_budget, t.discovery_epoch_spent,
             t.discovery_epoch_ends_at, t.mint_authority_revoked, t.freeze_authority_revoked,
             t.liquidity_locked,
@@ -385,19 +649,8 @@ export async function priceSamplesFor(
   now: number,
   config: DiggoConfig = DIGGO_CONFIG,
 ): Promise<PriceSample[]> {
-  const result = await env.DB.prepare(
-    `SELECT price_usd, volume_usd, observed_at FROM token_price_samples
-       WHERE mint = ?1 AND observed_at >= ?2
-      ORDER BY observed_at ASC
-      LIMIT 500`,
-  )
-    .bind(mint, now - config.rarity.robustPrice.lookbackSeconds)
-    .all<{ price_usd: number; volume_usd: number; observed_at: number }>();
-  return (result.results ?? []).map((row) => ({
-    priceUsd: row.price_usd,
-    volumeUsd: row.volume_usd,
-    timestamp: row.observed_at,
-  }));
+  // Owned by worker/oracle.ts now, so the roll path and the oracle read exactly one query.
+  return internalPriceSamples(env, mint, now, config);
 }
 
 /**
@@ -439,7 +692,8 @@ function healthFlagsOf(candidate: CandidateRow): TokenEligibilityInput["health"]
 
 interface GrantCandidate {
   candidate: CandidateRow;
-  price: RobustPrice;
+  /** The combined price with its source list, kept for the grant-time metric. */
+  price: OracleQuote;
   eligibility: TokenEligibilityInput;
   score: number;
 }
@@ -456,8 +710,14 @@ async function loadGrantCandidate(
   now: number,
   config: DiggoConfig,
 ): Promise<GrantCandidate | null> {
-  const samples = await priceSamplesFor(env, row.mint, now, config);
-  const price = robustPrice(samples, now, config);
+  // The median across the token's own history, its recorded trades and any external quote we hold
+  // (worker/oracle.ts). A null answer means the sources disagree, are stale or are too thin to
+  // value a real payout, and the caller then grants nothing (spec 26, 27).
+  const price = await getRobustPrice(env, row.mint, {
+    now,
+    config,
+    graduated: row.status !== "LAUNCHING",
+  });
   if (!price || price.confidence < config.discovery.minimumPriceConfidence) return null;
   const eligibility: TokenEligibilityInput = {
     liquidityUsd: row.liquidity_usd,
@@ -588,9 +848,6 @@ async function attemptRoll(
     await metric(env, "discovery.roll_denied", 1, { reason: "breaker_open" });
     return { discovery: null, opportunity: null, denied: "breaker_open" };
   }
-  const secret = await discoverySecretFor(env);
-  if (!secret) return { discovery: null, opportunity: null, denied: "discovery_secret_missing" };
-
   if (request) {
     const gate = await gateAction(env, { wallet, request, action: "discovery_roll" });
     if (!gate.allowed) {
@@ -627,8 +884,14 @@ async function attemptRoll(
     return { discovery: null, opportunity: null, denied: "not_eligible" };
   }
 
+  // Resolved here rather than on entry so a request that fails the gate, the Crew check or the
+  // eligibility rules never touches the commitment table: only an account that can actually roll
+  // causes the epoch's commitment to be written.
+  const rng = await discoveryRngFor(env, now);
+  if (!rng) return { discovery: null, opportunity: null, denied: "discovery_secret_missing" };
+
   const windowIndex = discoveryWindowIndex(now, tunables);
-  const opportunity = await ensureOpportunity(env, secret, wallet, windowIndex, tunables);
+  const opportunity = await ensureOpportunity(env, rng, wallet, windowIndex, tunables);
   if (opportunity.status === "CONSUMED" || opportunity.status === "EXPIRED") {
     await metric(env, "discovery.reroll_attempt", 1, { window: opportunity.window });
     return { discovery: null, opportunity, denied: "already_rolled" };
@@ -637,6 +900,11 @@ async function attemptRoll(
   // Account-wide and global value is authorized before the window is spent, so a cap refusal cannot
   // silently burn an opportunity the player was entitled to. The token-scoped caps cannot be
   // evaluated yet — the target is not known until after the roll — so they are checked below.
+  // Holds that have left their review window no longer reserve budget (budgetUsage reads them as
+  // released), so the budget they were holding is already back in the pool for the players who can
+  // still use it (spec 45, 64). This only counts them, so an operator can see the backlog waiting
+  // for a human decision.
+  await countStaleDiscoveryHolds(env, now, config);
   const accountUsage = await budgetUsage(env, wallet, "", now, config);
   if (discoveryBudgetRemaining(accountUsage, config) <= 0) {
     const probe = discoveryBudgetCheck(accountUsage, { requestedUsd: 0, circuitBreakerOpen: false }, config);
@@ -653,7 +921,8 @@ async function attemptRoll(
   await metric(env, "discovery.roll", 1, { window: opportunity.window });
 
   const scoped: DrawContext = {
-    ...secret,
+    source: rng.source,
+    secret: rng.secret,
     wallet,
     eventId: opportunity.event_id,
     window: opportunity.window,
@@ -681,6 +950,13 @@ async function attemptRoll(
     await metric(env, "discovery.roll_denied", 1, { reason: "price_confidence", mint: target.mint });
     return { discovery: null, opportunity, denied: "price_confidence" };
   }
+  // Which sources actually backed this valuation, so an operator can see when a grant rested on the
+  // internal history alone and when an external oracle corroborated it.
+  await metric(env, "discovery.price_sources", 1, {
+    mint: target.mint,
+    sources: grant.price.sources.join(","),
+    solUsdSource: grant.price.solUsdSource,
+  });
 
   // Now that the target is known, the per-token caps are enforceable. This is the check that stops
   // one popular mine's Discovery Reserve being drained by many accounts in one period (spec 45).
@@ -900,9 +1176,9 @@ export async function discoveryOpportunity(request: Request, env: RuntimeEnv): P
       publicMessage: "No discovery opportunity is available for this account yet.",
     });
   }
-  const secret = await discoverySecretFor(env);
-  if (!secret) return apiError("Discoveries are temporarily unavailable", 503);
-  const opportunity = await ensureOpportunity(env, secret, wallet, windowIndex, tunables);
+  const rng = await discoveryRngFor(env, now);
+  if (!rng) return apiError("Discoveries are temporarily unavailable", 503);
+  const opportunity = await ensureOpportunity(env, rng, wallet, windowIndex, tunables);
   await metric(env, "discovery.opportunity", 1, { reused: "false" });
   return json({
     opportunity: toOpportunityView(opportunity),
@@ -962,9 +1238,9 @@ export async function claimDiscoveryChallenge(request: Request, env: RuntimeEnv)
   }
   const { discoveryId } = await readJson<{ discoveryId?: string }>(request);
   if (typeof discoveryId !== "string" || discoveryId.length === 0) return apiError("Missing discovery id");
-  const discovery = await env.DB.prepare("SELECT wallet, status FROM discoveries WHERE id = ?1")
+  const discovery = await env.DB.prepare("SELECT wallet, status, mint FROM discoveries WHERE id = ?1")
     .bind(discoveryId)
-    .first<{ wallet: string; status: string }>();
+    .first<{ wallet: string; status: string; mint: string }>();
   // "Not yours" and "does not exist" answer identically, so this cannot probe other players' finds.
   if (!discovery || discovery.wallet !== wallet) return apiError("Discovery not found", 404);
   if (discovery.status === "CLAIMED") return apiError("This discovery has already been claimed", 409);
@@ -972,18 +1248,22 @@ export async function claimDiscoveryChallenge(request: Request, env: RuntimeEnv)
 
   const gate = await gateAction(env, { wallet, request, action: "claim_discovery" });
   if (!gate.allowed) return apiError(gate.publicMessage ?? "Claims are unavailable right now", 403);
-  if (await isBreakerOpen(env, "claims")) return apiError("Claims are paused for now", 503);
+  // Checked against this discovery's own mint, so a halt opened for one mine (which is what the
+  // reconciliation cron does on a reserve divergence) stops that mine's payouts and no others.
+  if (await isBreakerOpen(env, "claims", discovery.mint)) {
+    return apiError("Claims are paused for now", 503);
+  }
 
-  const nonce = crypto.randomUUID();
-  const message = [
-    "Claim Diggo discovery",
-    `Wallet: ${wallet}`,
-    `Discovery: ${discoveryId}`,
-    `Nonce: ${nonce}`,
-    "This request does not trigger a blockchain transaction.",
-  ].join("\n");
-  await storeChallenge(env, `discovery:claim:${nonce}`, { wallet, message }, 300);
-  return json({ nonce, message, expiresIn: 300 });
+  // Issued through the shared challenge helper so the nonce is bound to the wallet, the action and
+  // this exact discovery id as a structured `resource` - never re-derivable from the message text.
+  const challenge = await issueChallenge(env, {
+    wallet,
+    action: CLAIM_DISCOVERY_ACTION,
+    resource: discoveryId,
+    title: "Claim Diggo discovery",
+    ttlSeconds: CLAIM_CHALLENGE_TTL_SECONDS,
+  });
+  return json({ nonce: challenge.nonce, message: challenge.message, expiresIn: CLAIM_CHALLENGE_TTL_SECONDS });
 }
 
 /**
@@ -1001,15 +1281,48 @@ export async function claimDiscovery(request: Request, env: RuntimeEnv): Promise
   if (typeof body.discoveryId !== "string" || !body.nonce || !body.signature) {
     return apiError("Incomplete claim proof");
   }
-  const challengeKey = `discovery:claim:${body.nonce}`;
-  const challenge = await loadChallenge(env, challengeKey);
-  if (!challenge || challenge.wallet !== wallet) return apiError("Challenge expired", 401);
+  const key = challengeKey(CLAIM_DISCOVERY_ACTION, body.nonce);
+  const challenge = await loadChallenge(env, key);
+  if (!challenge || challenge.wallet !== wallet) {
+    // Nothing usable is left in KV, so the nonce table has the final word: a nonce that was already
+    // consumed is a replay, not merely a late request (spec 47).
+    const status = await consumeChallengeNonce(env, {
+      nonce: body.nonce,
+      wallet,
+      action: CLAIM_DISCOVERY_ACTION,
+      resource: body.discoveryId,
+    });
+    if (status === "replay") return apiError("Challenge already used", 409);
+    return apiError("Challenge expired", 401);
+  }
+  // The challenge names the discovery it was issued for. Comparing the bound resource - not a
+  // substring of the signed text - is what stops a signature over one discovery's challenge from
+  // being replayed as a claim for another discovery the same wallet owns.
+  if ((challenge.resource ?? "") !== body.discoveryId) {
+    await recordActivity(env, { wallet, request, action: "claim_discovery", outcome: "failed_challenge" });
+    return apiError("Challenge does not match this discovery", 401);
+  }
   if (!verifyWalletSignature(wallet, challenge.message, body.signature)) {
     await recordActivity(env, { wallet, request, action: "claim_discovery", outcome: "failed_challenge" });
     return apiError("Invalid wallet signature", 401);
   }
-  // Single-use: the nonce is consumed before anything of value happens, so a replay finds nothing.
-  await env.TOKEN_CACHE.delete(challengeKey);
+  // Single-use, in the authoritative table: the conditional UPDATE in consumeChallengeNonce is what
+  // makes the nonce spent in every colo, where deleting the KV record only clears the local cache.
+  // It happens before anything of value does, so a replay finds nothing.
+  const consumed = await consumeChallengeNonce(env, {
+    nonce: body.nonce,
+    wallet,
+    action: CLAIM_DISCOVERY_ACTION,
+    resource: body.discoveryId,
+  });
+  if (consumed !== "ok") {
+    await recordActivity(env, { wallet, request, action: "claim_discovery", outcome: "replay" });
+    return apiError(
+      consumed === "replay" ? "Challenge already used" : "Challenge expired",
+      consumed === "replay" ? 409 : 401,
+    );
+  }
+  await env.TOKEN_CACHE.delete(key);
 
   const row = await env.DB.prepare(
     "SELECT id, wallet, mint, status, tx_signature, token_amount FROM discoveries WHERE id = ?1",
@@ -1029,9 +1342,18 @@ export async function claimDiscovery(request: Request, env: RuntimeEnv): Promise
     return json({ status: "CLAIMED", txSignature: row.tx_signature, queued: false });
   }
   if (row.status === "REJECTED") return apiError("This discovery can no longer be claimed", 409);
-  if (row.status === "HELD") return apiError("This discovery is under review", 403);
+  if (row.status === "HELD") {
+    // A hold is resolved by a human or the risk pipeline, never by this request. Turning the row
+    // REJECTED here would let a player's own claim attempt - or the mere passage of the review
+    // window - destroy a reward that was already granted (spec 45, 53). Leaving the window only
+    // stops the grant from reserving budget (budgetUsage), which is not a reason to refuse it.
+    await metric(env, "discovery.claim_denied", 1, { reason: "held", mint: row.mint });
+    return apiError("This discovery is under review", 403);
+  }
 
-  if (await isBreakerOpen(env, "claims")) {
+  // This discovery's own mint, not just the scope-wide row: a mint-scoped claims halt is exactly
+  // what the reconciliation cron opens when that mine's reserve diverged (spec 65, 78).
+  if (await isBreakerOpen(env, "claims", row.mint)) {
     await metric(env, "discovery.claim_denied", 1, { reason: "breaker_open" });
     return apiError("Claims are paused for now", 503);
   }
@@ -1139,4 +1461,69 @@ export async function recoverEligibleDiscovery(env: RuntimeEnv, id: string, reas
     .bind(reason, id)
     .run();
   await metric(env, "discovery.recovered", 1, { reason, changed: String(result.meta.changes ?? 0) });
+}
+
+// --- public verifiability (spec 55) ---------------------------------------------------------------
+
+/**
+ * GET /api/discovery/commitments
+ *
+ * The RNG commitments a player needs to audit the rolls they were given: the epoch in progress, the
+ * commitment already published for the one after it, and the seeds of recently ended epochs. No
+ * authentication, because a commitment nobody can read is not a commitment.
+ *
+ * Reading this also publishes, so the commitment for an epoch exists before that epoch starts even
+ * if the cron trigger has not run.
+ */
+export async function discoveryCommitments(request: Request, env: RuntimeEnv): Promise<Response> {
+  if (!(await checkRateLimit(request, env, "discovery-commitments", 240))) {
+    return apiError("Too many requests, slow down", 429);
+  }
+  const now = Math.floor(Date.now() / 1_000);
+  const summary = await prepublishRngCommitments(env, now);
+  const current = summary.currentEpoch === null ? null : await loadCommitment(env, summary.currentEpoch);
+  const next = summary.nextEpoch === null ? null : await loadCommitment(env, summary.nextEpoch);
+  const revealed = await env.DB.prepare(
+    "SELECT * FROM rng_commitments WHERE seed IS NOT NULL AND ends_at <= ?1 ORDER BY epoch DESC LIMIT 7",
+  )
+    .bind(now)
+    .all<RngCommitmentRow>();
+  return json({
+    epochSeconds: rngEpochSecondsOf(env),
+    currentEpoch: summary.currentEpoch,
+    current: current ? commitmentView(toRngCommitmentRecord(current), now) : null,
+    next: next ? commitmentView(toRngCommitmentRecord(next), now) : null,
+    revealedEpochs: (revealed.results ?? []).map((row) => commitmentView(toRngCommitmentRecord(row), now)),
+    verification: rollVerificationRecipe(),
+  });
+}
+
+/**
+ * GET /api/discovery/commitments/:epoch
+ *
+ * One epoch's commitment, and its seed once the epoch has ended. While the epoch is running the
+ * response carries the commitment and nothing else, so the rolls of an open epoch stay
+ * unpredictable while still being bound to a promise the server can no longer change.
+ */
+export async function discoveryCommitmentReveal(
+  request: Request,
+  env: RuntimeEnv,
+  epochRaw: string,
+): Promise<Response> {
+  if (!(await checkRateLimit(request, env, "discovery-commitments", 240))) {
+    return apiError("Too many requests, slow down", 429);
+  }
+  const epoch = Number(epochRaw);
+  if (!Number.isInteger(epoch) || epoch < 0) return apiError("Unknown commitment epoch", 404);
+  const now = Math.floor(Date.now() / 1_000);
+  await prepublishRngCommitments(env, now);
+  const row = await loadCommitment(env, epoch);
+  if (!row) return apiError("Unknown commitment epoch", 404);
+  const record = toRngCommitmentRecord(row);
+  return json({
+    commitment: commitmentView(record, now),
+    // Reminder for verifiers: reconstruct the event id and window from the opportunity the API
+    // returned, take the epoch that contains the discovery's created_at, then re-derive the roll.
+    verification: rollVerificationRecipe(),
+  });
 }
