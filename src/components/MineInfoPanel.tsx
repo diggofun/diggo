@@ -97,30 +97,17 @@ export function MineInfoPanel({
   const shareLabel = mine.estimatedShare === null ? "—" : percent(mine.estimatedShare);
   const shareDetail =
     mine.estimatedRewardPerBlock === null || mine.estimatedShare === null
-      ? "sign in to see what your crew would take from the next block"
-      : "about " + tokenAmount(mine.estimatedRewardPerBlock) + " " + mine.symbol + " from the next block";
-  const powerDetail =
-    mine.playerPower === null
-      ? "connect a wallet for your share"
-      : compact(mine.playerPower) + " belongs to your crew";
+      ? "sign in to see your share"
+      : "about " + tokenAmount(mine.estimatedRewardPerBlock) + " " + mine.symbol + " per block";
+  const powerDetail = mine.playerPower === null ? "" : compact(mine.playerPower) + " yours";
 
   return (
     <section className="mine-info page-shell" id="mine-info">
       <div className="mine-info-head">
         <div>
-          <span className="mono-label">MINE INFO // {mine.symbol}</span>
           <h3>{mineName ?? mine.symbol}</h3>
         </div>
         <div className="mine-info-flags">
-          <span className={"badge " + (onCurve ? "badge-curve" : "badge-reserve")}>
-            <i aria-hidden="true" />
-            {onCurve ? "Curve emission" : "Reserve emission"}
-            <span className="sr-only">
-              {onCurve
-                ? " — blocks are paid out of the bonding curve's own token inventory"
-                : " — blocks are paid out of the Mining Reserve"}
-            </span>
-          </span>
           {paused ? (
             <span className={"badge badge-" + statusView.tone}>
               <AlertTriangle size={13} aria-hidden="true" /> {statusView.badge}
@@ -151,26 +138,26 @@ export function MineInfoPanel({
           <strong>
             {compact(mine.blockReward)} <small>{mine.symbol}</small>
           </strong>
-          <small>paid per block to every active crew, split by Mining Power</small>
+          <small>Paid to active crews for each block, split by Mining Power.</small>
         </article>
         <article className="card stat">
           <span>
             <Gauge size={13} aria-hidden="true" /> TOTAL MINING POWER
           </span>
           <strong>{compact(mine.totalMiningPower)}</strong>
-          <small>{powerDetail}</small>
+          {powerDetail && <small>{powerDetail}</small>}
         </article>
         <article className="card stat">
           <span>
-            <Layers size={13} aria-hidden="true" /> {hasCurveBudget ? "CURVE MINING BUDGET" : "REMAINING RESERVE"}
+            <Layers size={13} aria-hidden="true" /> {hasCurveBudget ? "LAUNCH CAP" : "REMAINING RESERVE"}
           </span>
           <strong>
             {compact(mine.remainingReserve)} <small>{mine.symbol}</small>
           </strong>
           <small>
             {hasCurveBudget
-              ? "of the " + compact(mine.reserveTotal) + " launch cap — the Mining Reserve is untouched until graduation"
-              : "of " + compact(mine.reserveTotal) + " allocated to mining"}
+              ? "of the " + compact(mine.reserveTotal) + " launch cap"
+              : "of " + compact(mine.reserveTotal) + " allocated"}
           </small>
         </article>
         <article className="card stat is-featured">
@@ -187,14 +174,15 @@ export function MineInfoPanel({
         <div className="reduction-schedule">
           <div className="mine-info-subhead">
             <span>
-              <Clock3 size={13} aria-hidden="true" /> {onCurve ? "EMISSION RATE" : "REDUCTION SCHEDULE"}
+              <Clock3 size={13} aria-hidden="true" /> {onCurve ? "BLOCK REWARD" : "REWARD SCHEDULE"}
             </span>
             <small>
               {onCurve
                 ? capSpent
-                  ? "cap spent — awaiting graduation"
-                  : "flat until the curve cap runs out" +
-                    (curveDaysLeft === null ? "" : " — ≈ " + runwayLabel(curveDaysLeft) + " left")
+                  ? "cap spent"
+                  : curveDaysLeft === null
+                    ? "flat rate"
+                    : "≈ " + runwayLabel(curveDaysLeft) + " left"
                 : "next reduction in " + countdown(mine.epochEndsAt, now) + ", epoch " + mine.epoch}
             </small>
           </div>
@@ -226,8 +214,8 @@ export function MineInfoPanel({
           )}
           <p>
             {onCurve
-              ? "The curve phase has no reduction schedule: its rate is fixed at launch, and what ends it is the launch cap running out rather than an epoch boundary. The epoch schedule takes over after graduation."
-              : "Every epoch cuts the block reward. A mine never mints more than its reserve, so emissions end when the reserve does."}
+              ? "The curve phase pays one fixed rate until its launch cap runs out. The epoch schedule starts after graduation."
+              : "Each epoch reduces the block reward. Mining ends when the reserve is spent."}
           </p>
         </div>
 
@@ -283,8 +271,8 @@ export function MineInfoPanel({
           {hasCurveBudget ? (
             <p>
               {curve.open
-                ? "Mining draws from the curve, not the Mining Reserve: every block takes tokens out of the curve's own inventory, so it moves the price the same way a buy does. Mining adds no SOL — the curve's SOL only ever comes from buyers, which is what caps a seller's payout."
-                : "The launch cap for curve mining is fully mined, so no further block is paid before graduation. The Mining Reserve does not stand in for it: that only starts paying once the market graduates."}
+                ? "Mining spends curve inventory, pushing the bonding-curve price like a buy, and adds no SOL. Seller payouts are limited to buyer-contributed SOL."
+                : "The launch cap is fully mined, so blocks pay nothing until graduation. The Mining Reserve does not replace it."}
             </p>
           ) : (
             <p>{accountingNote(mine.accounting)}</p>

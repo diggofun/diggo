@@ -107,24 +107,24 @@ export function describeEmissionWindow(input: {
   }
   if (curveCapSpent(curve)) {
     return {
-      label: "Emission",
+      label: "Mining status",
       value: "Awaiting graduation",
-      detail: "curve cap reached — mining resumes after graduation",
+      detail: "Launch cap reached; mining resumes after graduation",
       onCurve: true,
     };
   }
   if (daysRemaining !== null && daysRemaining > 0) {
     return {
-      label: "Curve cap runs out in",
+      label: "Mining window",
       value: "≈ " + runwayLabel(daysRemaining),
-      detail: "flat rate until graduation — the epoch schedule starts after it",
+      detail: "Fixed rate until the launch cap is used or the mine graduates",
       onCurve: true,
     };
   }
   return {
-    label: "Curve phase rate",
+    label: "Mining window",
     value: "Flat",
-    detail: "no epoch reductions until the cap runs out or the mine graduates",
+    detail: "Fixed rate until the launch cap is used or the mine graduates",
     onCurve: true,
   };
 }
