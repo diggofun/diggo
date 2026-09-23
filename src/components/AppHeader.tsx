@@ -26,13 +26,12 @@ import {
 } from "lucide-react";
 import { getChallenge, verifyWallet } from "../api";
 import { track } from "../analytics";
-import { shortAddress } from "../format";
 import { solanaClient } from "../solana";
+import { displayName, useUsername } from "../username";
 import { OPEN_WALLET_EVENT, useDiggoWallet } from "../wallet";
 import { disconnectWalletConnect, openWalletConnect } from "../walletConnect";
-import { GameArt } from "./MineScene";
 import { NotificationsBell } from "./NotificationsBell";
-import { SoundToggle } from "./SoundToggle";
+import { UsernameEditor } from "./UsernameEditor";
 
 export type PageId =
   | "home"
@@ -85,43 +84,15 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
 const TAB_BAR: PageId[] = ["mine", "crew", "discoveries", "explore", "trade"];
 const ALL_ITEMS = NAV_GROUPS.flatMap((group) => group.items);
 
-/** The drawn brand, used until (and instead of) the generated lockup or icon. */
-const BRAND_FALLBACK = (
-  <>
-    <span className="brand-mark" aria-hidden="true">
-      <Pickaxe size={19} strokeWidth={2.8} />
-    </span>
-    <span aria-hidden="true">
-      DIGGO<span className="brand-dot">.FUN</span>
-    </span>
-  </>
-);
-
 export function BrandMark() {
   return (
     <a className="brand" href="/" aria-label="Diggo.fun home">
-      {/* The generated lockup with room to breathe, the square icon in the narrow header. */}
+      {/* The lockup when there is room, the square mark in the narrow header. */}
       <span className="brand-slot brand-slot-wide">
-        <GameArt
-          name="logo"
-          alt="Diggo.fun"
-          width={1024}
-          height={476}
-          className="brand-art"
-          eager
-          fallback={BRAND_FALLBACK}
-        />
+        <img className="brand-art" src="/assets/brand/logo.svg" alt="Diggo" width={598} height={140} />
       </span>
       <span className="brand-slot brand-slot-icon">
-        <GameArt
-          name="logo-icon"
-          alt="Diggo.fun"
-          width={512}
-          height={512}
-          className="brand-art brand-art-icon"
-          eager
-          fallback={BRAND_FALLBACK}
-        />
+        <img className="brand-art brand-art-icon" src="/assets/brand/logo-mark.svg" alt="Diggo" width={64} height={64} />
       </span>
     </a>
   );
