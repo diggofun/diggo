@@ -344,6 +344,10 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
             <Wallet size={16} /> Connect Wallet
           </button>
           <small>WalletConnect covers phones and any wallet not detected above.</small>
+          <small className="wallet-menu-legal">
+            By connecting you confirm you are not in a restricted jurisdiction (see{" "}
+            <a href="/terms">Terms</a>).
+          </small>
           {walletConnectError && <p className="wallet-menu-error" role="alert">{walletConnectError}</p>}
         </div>
       )}
