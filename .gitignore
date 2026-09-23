@@ -15,3 +15,12 @@ target/
 test-ledger/
 *.so
 *.keypair.json
+
+# Playwright end-to-end suite (see playwright.config.ts)
+e2e/.report/
+e2e/.artifacts/
+.e2e-logs/
+# Output of a `npm run dev:local` restarted as a hidden background process.
+dev-local.*.log
+test-results/
+playwright-report/
