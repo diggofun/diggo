@@ -79,11 +79,14 @@ export class SqliteD1Statement {
   }
 
   /**
-   * D1's batch reports each statement's rows *and* its meta, so this reads the rows and then asks
-   * SQLite for the change count. Reading rows is what makes a batched SELECT usable (the breaker
-   * check batches its SELECTs); without it a batch would silently look like it matched nothing.
+   * Runs the statement without yielding, reporting its rows *and* its meta the way D1's batch does:
+   * reading the rows is what makes a batched SELECT usable (the breaker check batches its SELECTs),
+   * and asking SQLite for the change count is what makes a batched UPDATE assertable. batch() uses
+   * this because D1 executes a batch as one implicit transaction, so no other caller's statement may
+   * land between two statements of the same batch - a test that interleaved them would be exercising
+   * an interleaving D1 cannot produce.
    */
-  async allWithMeta<T>(): Promise<D1ResultLike<T>> {
+  runSync<T>(): D1ResultLike<T> {
     const rows = this.db.prepare(this.sql).all(...this.params) as T[];
     const changes = this.db.prepare("SELECT changes() AS c").get() as { c: number } | undefined;
     return {
@@ -101,10 +104,21 @@ export class SqliteD1 {
     return new SqliteD1Statement(this.db, sql);
   }
 
+  /**
+   * D1 runs a batch as a single transaction, so this double does too - and it runs the statements
+   * without yielding between them, which is what makes a read-then-write pair inside one batch
+   * atomic against another caller's batch (worker/mining.ts armPosition depends on exactly that).
+   */
   async batch(statements: readonly SqliteD1Statement[]): Promise<D1ResultLike<never>[]> {
-    const results: D1ResultLike<never>[] = [];
-    for (const statement of statements) results.push(await statement.allWithMeta());
-    return results;
+    this.db.exec("BEGIN");
+    try {
+      const results = statements.map((statement) => statement.runSync<never>());
+      this.db.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   async exec(sql: string): Promise<{ count: number; duration: number }> {
@@ -156,13 +170,19 @@ export class FakeKv {
 /** Captures queue jobs, so a test can assert what a handler handed to the keeper pipeline. */
 export class FakeQueue {
   readonly messages: IndexingEvent[] = [];
+  /** The delay each message asked for, in the order the messages were sent. */
+  readonly delays: (number | undefined)[] = [];
 
-  async send(body: IndexingEvent): Promise<void> {
+  async send(body: IndexingEvent, options?: { delaySeconds?: number }): Promise<void> {
     this.messages.push(body);
+    this.delays.push(options?.delaySeconds);
   }
 
   async sendBatch(batch: readonly { body: IndexingEvent }[]): Promise<void> {
-    for (const item of batch) this.messages.push(item.body);
+    for (const item of batch) {
+      this.messages.push(item.body);
+      this.delays.push(undefined);
+    }
   }
 }
 

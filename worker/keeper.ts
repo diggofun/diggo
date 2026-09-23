@@ -5,6 +5,11 @@
  * can never move the launch market, the treasury, or a player's claimable mining rewards — see
  * docs/CUSTODY.md.
  *
+ * It also has one permissionless job: once a bonding curve has reached its graduation target it
+ * calls graduate_market, which moves the curve's entire liquidity into the program-owned
+ * constant-product pool (spec 36). The keeper pays only the pool's rent — it signs for nothing in
+ * the pool afterwards, and no instruction, keeper included, can withdraw that liquidity.
+ *
  * Two on-chain hardening rules shape how it calls the program: Crew Power is bounded by
  * ProtocolConfig.max_crew_power and by a per-call increase bound, so a large Crew upgrade is
  * pushed as the largest step the program accepts; and every discovery payout must carry a unique
@@ -33,14 +38,21 @@ import {
 import {
   deriveProtocolPda,
   deriveMineAddresses,
+  derivePoolAddresses,
   derivePlayerPda,
   derivePositionPda,
   deriveAssociatedTokenAddress,
   deriveDiscoveryReceiptPda,
   buildSyncCrewPowerInstruction,
+  buildAdvanceMineInstruction,
   buildClaimDiscoveryInstruction,
+  buildGraduateMarketInstruction,
+  decodeMine,
   decodePlayer,
   decodeProtocolConfig,
+  decodeLaunchMarket,
+  decodeLiquidityPool,
+  type DecodedLiquidityPool,
 } from "../shared/program";
 import { getChainRpc } from "./chain";
 
@@ -193,6 +205,101 @@ export async function keeperClaimDiscovery(
   return signSendConfirm(rpc, keeper, [instruction]);
 }
 
+/**
+ * Graduates a market whose bonding curve has reached its target, moving the curve's whole
+ * SOL and token liquidity into the program-owned constant-product pool (spec 36).
+ *
+ * The instruction is permissionless and the keeper only pays the pool's rent. This is a
+ * deliberate no-op — returning null, not throwing — in every case where there is nothing
+ * to do: no market account, an already graduated market, a market that has not reached its
+ * target, or a pool that already exists. That way the caller can run it on every indexing
+ * pass without turning a normal state into an error.
+ *
+ * The program never flips the graduated flag on a buy: the flag and the pool are created
+ * together here, so a market can never end up graduated with its liquidity stranded in
+ * neither venue.
+ */
+export async function keeperGraduateMarket(env: KeeperEnv, mint: string): Promise<string | null> {
+  const rpc = getChainRpc(env);
+  const programAddress = address(env.DIGGO_PROGRAM_ID);
+  const mintAddress = address(mint);
+  const { mine, market, marketVault } = await deriveMineAddresses(programAddress, mintAddress);
+  const poolAddresses = await derivePoolAddresses(programAddress, mintAddress);
+
+  const [marketInfo, poolInfo] = await Promise.all([
+    rpc.getAccountInfo(market, { commitment: "confirmed", encoding: "base64" }).send(),
+    rpc.getAccountInfo(poolAddresses.pool, { commitment: "confirmed" }).send(),
+  ]);
+  if (!marketInfo.value || poolInfo.value) return null;
+
+  const decoded = decodeLaunchMarket(base64ToBytes(marketInfo.value.data[0]));
+  if (decoded.graduated || decoded.solReserve < decoded.graduationTarget) return null;
+
+  const keeper = await getKeeperSigner(env);
+  const instruction = buildGraduateMarketInstruction({
+    programAddress,
+    payer: keeper.address,
+    mint: mintAddress,
+    mine,
+    market,
+    marketVault,
+    pool: poolAddresses.pool,
+    poolTokenVault: poolAddresses.poolTokenVault,
+    poolSolVault: poolAddresses.poolSolVault,
+  });
+  const signature = await signSendConfirm(rpc, keeper, [instruction]);
+  console.log(
+    JSON.stringify({
+      event: "keeper.market_graduated",
+      mint,
+      pool: poolAddresses.pool,
+      solReserve: decoded.solReserve.toString(),
+      tokenReserve: decoded.tokenReserve.toString(),
+      signature,
+    }),
+  );
+  return signature;
+}
+
+/** Where a mine's market is currently trading, and the reserves of that venue. */
+export interface MarketVenue {
+  graduated: boolean;
+  /** The bonding curve's reserves; both zero once the market has graduated. */
+  market: ReturnType<typeof decodeLaunchMarket>;
+  /** The locked pool, or null while the market is still on the curve. */
+  pool: DecodedLiquidityPool | null;
+}
+
+/**
+ * Reads the venue a market is trading on, so the off-chain price and index paths read the
+ * reserves that actually back the price. Returns null only when the market account itself
+ * is missing.
+ *
+ * After graduation market.tokenReserve and market.solReserve are both zero by design — the
+ * liquidity lives in the pool — so a caller that reads the market alone would price every
+ * graduated token at zero. Use this to pick the right reserves.
+ */
+export async function keeperReadVenue(env: KeeperEnv, mint: string): Promise<MarketVenue | null> {
+  const rpc = getChainRpc(env);
+  const programAddress = address(env.DIGGO_PROGRAM_ID);
+  const mintAddress = address(mint);
+  const { market } = await deriveMineAddresses(programAddress, mintAddress);
+  const { pool } = await derivePoolAddresses(programAddress, mintAddress);
+
+  const [marketInfo, poolInfo] = await Promise.all([
+    rpc.getAccountInfo(market, { commitment: "confirmed", encoding: "base64" }).send(),
+    rpc.getAccountInfo(pool, { commitment: "confirmed", encoding: "base64" }).send(),
+  ]);
+  if (!marketInfo.value) return null;
+
+  const decodedMarket = decodeLaunchMarket(base64ToBytes(marketInfo.value.data[0]));
+  return {
+    graduated: decodedMarket.graduated,
+    market: decodedMarket,
+    pool: poolInfo.value ? decodeLiquidityPool(base64ToBytes(poolInfo.value.data[0])) : null,
+  };
+}
+
 // --- bounded keeper power (mirrors validate_power_update in the program) ---------------
 
 /**
@@ -271,4 +378,114 @@ function fnv1a64(value: string): bigint {
 
 function base64ToBytes(base64: string): Uint8Array {
   return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+}
+
+// --- permissionless ledger catch-up (spec 57, 78) ---------------------------------------
+
+/** Segments one advance_mine call walks on chain. Mirrors MAX_SYNC_SEGMENTS in the program. */
+export const MINE_ADVANCE_SEGMENTS_PER_CALL = 64;
+
+/**
+ * How many advance_mine calls one indexing tick may spend on a single mine.
+ *
+ * A catch-up is charged per call rather than per mine, so a mine that has been idle for days costs a
+ * few transactions on this tick and the rest on the next one instead of an unbounded burst. Each
+ * call commits its own progress on chain, so stopping between them is always safe.
+ */
+export const MINE_ADVANCE_CALLS_PER_TICK = 4;
+
+/** Where a mine's on-chain mining ledger currently is. */
+export interface MineAdvanceCursor {
+  /** Mine.next_block_at: the timestamp of the block the ledger owes next. */
+  nextBlockAt: number;
+  /** Mine.block_interval, the seconds between blocks. */
+  blockInterval: number;
+}
+
+/**
+ * The two chain operations the catch-up loop needs, as an interface: a read of the ledger's cursor
+ * and one permissionless advance_mine transaction. Injected so the loop can be driven by a crafted
+ * chain, and so the loop's own arithmetic is testable without an RPC.
+ */
+export interface MineAdvancer {
+  readCursor(mint: string): Promise<MineAdvanceCursor | null>;
+  advance(mint: string): Promise<string>;
+}
+
+/**
+ * How many segments (one block interval each) a mine's ledger is behind `now`.
+ *
+ * Zero when the mine is at or ahead of the present, and zero when the cursor cannot describe a
+ * schedule at all: a mine the program will not advance is not one the keeper should keep paying to
+ * advance.
+ */
+export function mineSegmentsBehind(cursor: MineAdvanceCursor, now: number): number {
+  if (!(cursor.blockInterval > 0) || !(cursor.nextBlockAt > 0)) return 0;
+  if (now <= cursor.nextBlockAt) return 0;
+  return Math.ceil((now - cursor.nextBlockAt) / cursor.blockInterval);
+}
+
+/** The production advancer: the mine account itself, and the permissionless advance_mine call. */
+export function createChainMineAdvancer(env: KeeperEnv): MineAdvancer {
+  return {
+    async readCursor(mint: string): Promise<MineAdvanceCursor | null> {
+      const rpc = getChainRpc(env);
+      const programAddress = address(env.DIGGO_PROGRAM_ID);
+      const { mine } = await deriveMineAddresses(programAddress, address(mint));
+      const info = await rpc.getAccountInfo(mine, { commitment: "confirmed", encoding: "base64" }).send();
+      if (!info.value) return null;
+      const decoded = decodeMine(base64ToBytes(info.value.data[0]));
+      return { nextBlockAt: Number(decoded.nextBlockAt), blockInterval: Number(decoded.blockInterval) };
+    },
+    async advance(mint: string): Promise<string> {
+      const rpc = getChainRpc(env);
+      const programAddress = address(env.DIGGO_PROGRAM_ID);
+      const { mine } = await deriveMineAddresses(programAddress, address(mint));
+      const keeper = await getKeeperSigner(env);
+      return signSendConfirm(rpc, keeper, [buildAdvanceMineInstruction({ programAddress, mine })]);
+    },
+  };
+}
+
+export interface AdvanceMineReport {
+  mint: string;
+  /** Segments the ledger was behind when this tick started. Zero means nothing to do. */
+  behindSegments: number;
+  /** The advance_mine transactions this tick sent, in order. */
+  signatures: string[];
+  /** True when the ledger had reached the present by the end of this tick. */
+  caughtUp: boolean;
+}
+
+/**
+ * Catches one mine's on-chain ledger up to the present, at most `maxCalls` advance_mine calls per
+ * tick (spec 78).
+ *
+ * A mine that fell more than MAX_SYNC_SEGMENTS segments behind refuses claim_rewards and
+ * assign_power with SyncBehind until somebody advances it; the instruction is permissionless, so
+ * this loop is what stops a player's claim being blocked by a mine nobody was watching. A mine that
+ * is already caught up costs one account read and sends nothing.
+ */
+export async function keeperAdvanceMine(
+  env: KeeperEnv,
+  mint: string,
+  options: { maxCalls?: number; now?: number; advancer?: MineAdvancer } = {},
+): Promise<AdvanceMineReport> {
+  const maxCalls = Math.max(0, options.maxCalls ?? MINE_ADVANCE_CALLS_PER_TICK);
+  const now = options.now ?? Math.floor(Date.now() / 1_000);
+  const advancer = options.advancer ?? createChainMineAdvancer(env);
+  const cursor = await advancer.readCursor(mint);
+  // No mine account on chain means there is no ledger to advance - not a failure to report.
+  if (!cursor) return { mint, behindSegments: 0, signatures: [], caughtUp: true };
+
+  const behindSegments = mineSegmentsBehind(cursor, now);
+  const signatures: string[] = [];
+  let latest = cursor;
+  while (signatures.length < maxCalls && mineSegmentsBehind(latest, now) > 0) {
+    signatures.push(await advancer.advance(mint));
+    // Re-read rather than assuming one call closed the whole gap: the program is the authority on
+    // where the ledger landed, and the next read is also what ends the loop early.
+    latest = (await advancer.readCursor(mint)) ?? latest;
+  }
+  return { mint, behindSegments, signatures, caughtUp: mineSegmentsBehind(latest, now) === 0 };
 }
