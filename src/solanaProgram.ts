@@ -871,7 +871,10 @@ export async function assignPowerOnChain(
 ): Promise<string> {
   await ensurePlayerInitialized(programAddress, owner);
   const playerPda = await derivePlayerPda(programAddress, owner.address);
-  const { mine } = await deriveMineAddresses(programAddress, mint);
+  // The market PDA is derived from the mint and always passed: a mine still on its curve can
+  // only settle its due blocks out of the curve's own inventory, which lives on the market
+  // account, so an assign_power built without it comes back SyncBehind.
+  const { mine, market } = await deriveMineAddresses(programAddress, mint);
   const positionPda = await derivePositionPda(programAddress, mine, owner.address);
   const instruction = buildAssignPowerInstruction({
     programAddress,
@@ -879,6 +882,8 @@ export async function assignPowerOnChain(
     player: playerPda,
     mine,
     position: positionPda,
+    mint,
+    market,
   });
   return signSendConfirm(owner, [instruction]);
 }

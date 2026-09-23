@@ -34,6 +34,21 @@ export const TOKEN_PROGRAM_ADDRESS = address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9S
 export const ASSOCIATED_TOKEN_PROGRAM_ADDRESS = address("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 export const BPF_LOADER_UPGRADEABLE_ADDRESS = address("BPFLoaderUpgradeab1e11111111111111111111111");
 
+/**
+ * Anchor's own base for `#[error_code]` enums: every variant is this plus its declaration index.
+ * The program pins the index it relies on in a Rust test (lib.rs:
+ * sync_behind_is_the_error_code_the_worker_matches), so the two can only drift deliberately.
+ */
+export const ERROR_CODE_OFFSET = 6_000;
+
+/**
+ * `DiggoError::SyncBehind` (variant 44): the program's retryable "this mine's ledger is still
+ * behind" refusal. It is the authority a caller reacts to rather than a condition to predict:
+ * the keeper attempts graduate_market and treats this answer as "advance the mine and ask
+ * again", instead of guessing from its own model whether the mine is caught up.
+ */
+export const SYNC_BEHIND_ERROR_CODE = ERROR_CODE_OFFSET + 44;
+
 const DISCRIMINATOR = {
   initializeProtocol: [188, 233, 252, 106, 134, 146, 202, 91],
   rotateKeeper: [201, 88, 117, 249, 81, 101, 255, 55],
@@ -73,8 +88,39 @@ const DISCRIMINATOR = {
  * Appended layout version stamped into ProtocolConfig, Mine and LaunchMarket. It is the
  * last field of each of those structs, so an account written before it existed still
  * decodes for every other field and reads back as version 0.
+ *
+ * Version 2 appends the curve-mining ledger to LaunchMarket and the curve-phase flag to
+ * Mine *after* the version byte, so a version 1 account still decodes and reads every
+ * field added since as its safe default. Nothing is appended between the old fields and
+ * the version byte, which is what keeps that possible.
+ *
+ * Version 3 appends Mine's second phase flag, `graduated`, after the curve-phase flag. It is
+ * the mirror the mining ledger reads to decide which side pays a block - the market's curve
+ * inventory before graduation, the mine's Mining Reserve after it - so that decision never
+ * depends on whether an optional market account was handed over. A version 2 account reads it
+ * as false, which is the safe default: a walk without the market refuses rather than paying
+ * out of the reserve.
+ *
+ * Version 4 appends Mine's graduation cursor, `curvePhaseEndsAt`, after that flag: the instant
+ * the curve phase ended, written by graduate_market in the same transaction it flips
+ * `graduated`, and zero for a mine that has not graduated. The program classifies every block
+ * that landed before it as curve-phase for good, so an un-walked stretch can never be paid out
+ * of the Mining Reserve; graduation walks the ledger to that instant before it flips anything.
+ * A version 3 account reads it as zero, which means no cursor and the phase following
+ * `graduated` alone.
  */
-export const ACCOUNT_VERSION = 1;
+export const ACCOUNT_VERSION = 4;
+
+/**
+ * Launch defaults and bounds for curve-phase mining, mirroring DEFAULT_CURVE_MINING_BPS,
+ * MAX_CURVE_MINING_BPS, DEFAULT_CURVE_MINING_RUNWAY_DAYS and MAX_CURVE_MINING_RUNWAY_DAYS in
+ * programs/diggo-protocol/src/lib.rs. A launch that does not name a share gets the default
+ * one; shared/curve.test.ts pins that DIGGO_CONFIG.curve agrees with these.
+ */
+export const DEFAULT_CURVE_MINING_BPS = 500;
+export const MAX_CURVE_MINING_BPS = 1_000;
+export const DEFAULT_CURVE_MINING_RUNWAY_DAYS = 30;
+export const MAX_CURVE_MINING_RUNWAY_DAYS = 3_650;
 
 /** Account kinds accepted by migrate_account (mirrors ACCOUNT_KIND_* in lib.rs). */
 export const MIGRATABLE_ACCOUNT_KIND = {
@@ -151,6 +197,19 @@ export function findProgramAddressSync(seeds: Uint8Array[], programAddress: Addr
 /** The protocol config PDA, resolved without awaiting — see findProgramAddressSync. */
 export function deriveProtocolPdaSync(programAddress: Address): Address {
   return findProgramAddressSync([constSeed("protocol")], programAddress);
+}
+
+/** The market PDA, resolved without awaiting — see findProgramAddressSync. */
+export function deriveMarketPdaSync(programAddress: Address, mint: Address): Address {
+  return findProgramAddressSync([constSeed("market"), Uint8Array.from(accountSeed(mint))], programAddress);
+}
+
+/** The market's token vault PDA, resolved without awaiting. */
+export function deriveMarketVaultPdaSync(programAddress: Address, mint: Address): Address {
+  return findProgramAddressSync(
+    [constSeed("market-vault"), Uint8Array.from(accountSeed(mint))],
+    programAddress,
+  );
 }
 
 export async function deriveProgramDataAddress(programAddress: Address): Promise<Address> {
@@ -360,6 +419,15 @@ export interface LaunchTokenArgs {
   virtualSolReserve: bigint;
   graduationTarget: bigint;
   discoveryReserveBps: number;
+  /**
+   * Share of the curve's initial token inventory that pre-graduation mining may emit, in
+   * bps. Optional so an existing launch call keeps working: omitted means the protocol
+   * default (DEFAULT_CURVE_MINING_BPS), and 0 is legal and switches curve-phase mining off.
+   * The program rejects anything above MAX_CURVE_MINING_BPS.
+   */
+  curveMiningBps?: number;
+  /** Runway, in whole days, over which that budget is spread. Omitted means the default. */
+  curveMiningRunwayDays?: number;
 }
 
 export function buildLaunchTokenInstruction(params: {
@@ -388,6 +456,8 @@ export function buildLaunchTokenInstruction(params: {
     u64(a.virtualSolReserve),
     u64(a.graduationTarget),
     u16(a.discoveryReserveBps),
+    u16(a.curveMiningBps ?? DEFAULT_CURVE_MINING_BPS),
+    u16(a.curveMiningRunwayDays ?? DEFAULT_CURVE_MINING_RUNWAY_DAYS),
   );
   return {
     programAddress: params.programAddress,
@@ -474,10 +544,30 @@ export function buildAssignPowerInstruction(params: {
   player: Address;
   mine: Address;
   position: Address;
+  /**
+   * The mine's mint, from which the market PDA is derived. Required, and the market account is
+   * always appended: while a market is still on its curve only the curve's own token inventory
+   * may pay a block, and the market account is the only place that ledger lives, so a walk
+   * without it cannot settle a curve-phase block at all — the program refuses with SyncBehind
+   * and the assignment stays unsettled until somebody walks the mine with advance_mine. Making
+   * the mint a required parameter is what keeps that refusal out of the client and keeper
+   * paths: there is no way to build an assign_power that a pre-graduation mine cannot settle.
+   */
+  mint: Address;
+  /** Optional override; must be the market PDA derived from `mint`. */
+  market?: Address;
 }): IInstruction {
+  const market = params.market ?? deriveMarketPdaSync(params.programAddress, params.mint);
   return {
     programAddress: params.programAddress,
-    accounts: [ws(params.owner), w(params.player), w(params.mine), w(params.position), r(SYSTEM_PROGRAM_ADDRESS)],
+    accounts: [
+      ws(params.owner),
+      w(params.player),
+      w(params.mine),
+      w(params.position),
+      r(SYSTEM_PROGRAM_ADDRESS),
+      w(market),
+    ],
     data: Uint8Array.from(DISCRIMINATOR.assignPower),
   };
 }
@@ -488,10 +578,26 @@ export function buildRemovePowerInstruction(params: {
   player: Address;
   mine: Address;
   position: Address;
+  /**
+   * See buildAssignPowerInstruction: the mint is required and the market account is always
+   * appended, because a mine whose curve phase is still open cannot settle its due blocks
+   * without it.
+   */
+  mint: Address;
+  /** Optional override; must be the market PDA derived from `mint`. */
+  market?: Address;
 }): IInstruction {
+  const market = params.market ?? deriveMarketPdaSync(params.programAddress, params.mint);
   return {
     programAddress: params.programAddress,
-    accounts: [ws(params.owner), w(params.player), w(params.mine), w(params.position), r(SYSTEM_PROGRAM_ADDRESS)],
+    accounts: [
+      ws(params.owner),
+      w(params.player),
+      w(params.mine),
+      w(params.position),
+      r(SYSTEM_PROGRAM_ADDRESS),
+      w(market),
+    ],
     data: Uint8Array.from(DISCRIMINATOR.removePower),
   };
 }
@@ -506,7 +612,15 @@ export function buildClaimRewardsInstruction(params: {
   position: Address;
   /** Optional override; the protocol PDA is derived synchronously when omitted. */
   protocol?: Address;
+  /** Optional overrides; both PDAs are derived synchronously from the mint when omitted. */
+  market?: Address;
+  marketVault?: Address;
 }): IInstruction {
+  // A claim pays the curve's share out of the market vault and the rest out of the Mining
+  // Reserve, so both are required by the program. They are derived from the mint here rather
+  // than asked of the caller, because the mint is the one thing every claim already knows.
+  const market = params.market ?? deriveMarketPdaSync(params.programAddress, params.mint);
+  const marketVault = params.marketVault ?? deriveMarketVaultPdaSync(params.programAddress, params.mint);
   return {
     programAddress: params.programAddress,
     accounts: [
@@ -515,6 +629,8 @@ export function buildClaimRewardsInstruction(params: {
       w(params.mine),
       r(params.mint),
       w(params.reserveVault),
+      w(market),
+      w(marketVault),
       w(params.ownerTokens),
       w(params.position),
       r(TOKEN_PROGRAM_ADDRESS),
@@ -534,16 +650,23 @@ export function buildClaimRewardsInstruction(params: {
  * unblock any mine - which is exactly why the keeper runs it on the indexing tick instead of waiting
  * for a player to hit SyncBehind.
  *
- * Accounts, in order, exactly as `AdvanceMine` in programs/diggo-protocol declares them: the mine,
- * writable, and nothing else.
+ * Accounts, in order, exactly as `AdvanceMine` in programs/diggo-protocol declares them: the mine
+ * and its market, both writable. The market is what the walk reads to decide which side of the
+ * mine pays the blocks it is about to credit, so it is required here — advance_mine is the one
+ * caller that always holds the mint the market PDA is derived from.
  */
 export function buildAdvanceMineInstruction(params: {
   programAddress: Address;
   mine: Address;
+  /** The mine's market PDA; derived from `mint` when omitted. */
+  market?: Address;
+  mint?: Address;
 }): IInstruction {
+  const market = params.market ?? (params.mint ? deriveMarketPdaSync(params.programAddress, params.mint) : undefined);
+  if (!market) throw new Error("buildAdvanceMineInstruction needs the mine's market or its mint");
   return {
     programAddress: params.programAddress,
-    accounts: [w(params.mine)],
+    accounts: [w(params.mine), w(market)],
     data: Uint8Array.from(DISCRIMINATOR.advanceMine),
   };
 }
@@ -560,6 +683,7 @@ export function buildSyncCrewPowerInstruction(params: {
   position: Address;
   newPower: bigint;
 }): IInstruction {
+  const market = deriveMarketPdaSync(params.programAddress, params.mint);
   return {
     programAddress: params.programAddress,
     accounts: [
@@ -569,6 +693,7 @@ export function buildSyncCrewPowerInstruction(params: {
       w(params.player),
       w(params.mine),
       r(params.mint),
+      w(market),
       w(params.position),
     ],
     data: concatBytes(Uint8Array.from(DISCRIMINATOR.syncCrewPower), u64(params.newPower)),
@@ -669,6 +794,28 @@ class ByteReader {
     if (this.offset + 1 > this.data.length) return null;
     return this.u8();
   }
+  /**
+   * A trailing optional u64, for the fields an upgrade appended after the version byte.
+   * A market written before the curve-mining ledger existed simply runs out of data, and
+   * every one of those fields then reads as its safe default.
+   */
+  tryU64(): bigint | null {
+    if (this.offset + 8 > this.data.length) return null;
+    return this.u64();
+  }
+  /**
+   * A trailing optional i64, for a field an upgrade appended after the version byte. An
+   * account written before the field existed simply runs out of data and reads back as null,
+   * so the caller can substitute the safe default.
+   */
+  tryI64(): bigint | null {
+    if (this.offset + 8 > this.data.length) return null;
+    return this.i64();
+  }
+  tryBool(): boolean | null {
+    const value = this.tryU8();
+    return value === null ? null : value !== 0;
+  }
   skipDiscriminator(): void {
     this.offset += 8;
   }
@@ -709,6 +856,34 @@ export interface DecodedMine {
   bump: number;
   /** 0 on an account written before the version byte existed; see migrate_account. */
   version: number;
+  /**
+   * True while this mine's block rewards are paid out of its market's curve token
+   * inventory rather than its own Mining Reserve (see shared/curve.ts). False on an
+   * account written before the field existed, which is the pre-curve behaviour of a mine
+   * that only emits once it has graduated.
+   */
+  curveMiningOpen: boolean;
+  /**
+   * True once this mine's market has graduated into its locked pool. Appended after the
+   * curve-phase flag, so a version 2 account reads it as false.
+   *
+   * Together with curveMiningOpen this is the phase the mining ledger decides from, and it is
+   * a fact about the mine rather than about an optional account: before graduation only the
+   * curve's inventory may pay a block, after it only the Mining Reserve may. A caller that
+   * holds the market reads the market's own flag instead - the two are written together from
+   * one read - and a caller that does not reads this one.
+   */
+  graduated: boolean;
+  /**
+   * The instant this mine's curve phase ended: the graduation timestamp, written by
+   * graduate_market at the same moment it flips `graduated`, and 0n for a mine that has not
+   * graduated (or for an account written before the field existed).
+   *
+   * Every block that landed before it is curve-phase for good, so it is the second half of the
+   * phase decision: the program reads it alongside `graduated` rather than trusting the flag
+   * alone, which is what keeps an un-walked stretch from being paid out of the Mining Reserve.
+   */
+  curvePhaseEndsAt: bigint;
 }
 
 export function decodeMine(data: Uint8Array): DecodedMine {
@@ -746,12 +921,15 @@ export function decodeMine(data: Uint8Array): DecodedMine {
   const discoveryPaused = r.bool();
   const bump = r.u8();
   const version = r.tryU8() ?? 0;
+  const curveMiningOpen = r.tryBool() ?? false;
+  const graduated = r.tryBool() ?? false;
+  const curvePhaseEndsAt = r.tryI64() ?? 0n;
   return {
     mint, creator, reserveVault, discoveryVault, marketVault, feeVault, totalSupply, remainingReserve,
     remainingDiscoveryReserve, cumulativeDistributed, totalPower, rewardIndex, currentBlockReward,
     blockInterval, nextBlockAt, epoch, epochLength, epochEndsAt, reductionBps, minimumReward, status,
     name, symbol, uri, discoveryReserveTotal, discoveryEpochBudget, discoveryEpochSpent,
-    discoveryEpochEndsAt, discoveryPaused, bump, version,
+    discoveryEpochEndsAt, discoveryPaused, bump, version, curveMiningOpen, graduated, curvePhaseEndsAt,
   };
 }
 
@@ -769,6 +947,20 @@ export interface DecodedLaunchMarket {
   bump: number;
   /** 0 on an account written before the version byte existed; see migrate_account. */
   version: number;
+  /**
+   * The curve-mining ledger, appended after the version byte. A market written before it
+   * existed reads as cap 0 / mined 0, i.e. no pre-graduation emission at all, because a
+   * migration can never hand a legacy market an allowance it was not launched with.
+   *
+   * curveMiningCap is immutable after launch; curveMiningMined may never pass it;
+   * curveMiningUnpaid is the part of it that the reward index has credited to positions
+   * but no claimer has taken yet, and it is what graduation deliberately leaves in the
+   * market vault.
+   */
+  curveMiningCap: bigint;
+  curveMiningMined: bigint;
+  curveMiningUnpaid: bigint;
+  curveMiningBlockReward: bigint;
 }
 
 export function decodeLaunchMarket(data: Uint8Array): DecodedLaunchMarket {
@@ -787,6 +979,10 @@ export function decodeLaunchMarket(data: Uint8Array): DecodedLaunchMarket {
     platformFeeBps: r.u16(),
     bump: r.u8(),
     version: r.tryU8() ?? 0,
+    curveMiningCap: r.tryU64() ?? 0n,
+    curveMiningMined: r.tryU64() ?? 0n,
+    curveMiningUnpaid: r.tryU64() ?? 0n,
+    curveMiningBlockReward: r.tryU64() ?? 0n,
   };
 }
 

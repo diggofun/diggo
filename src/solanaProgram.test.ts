@@ -49,6 +49,11 @@ function market(overrides: Partial<DecodedLaunchMarket> = {}): DecodedLaunchMark
     platformFeeBps: 50,
     bump: 255,
     version: 1,
+    // A market launched without a pre-graduation budget: the documented legacy default.
+    curveMiningCap: 0n,
+    curveMiningMined: 0n,
+    curveMiningUnpaid: 0n,
+    curveMiningBlockReward: 0n,
     ...overrides,
   };
 }
