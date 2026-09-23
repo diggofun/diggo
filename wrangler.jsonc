@@ -97,12 +97,13 @@
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
-  "analytics_engine_datasets": [
-    {
-      "binding": "DIGGO_METRICS",
-      "dataset": "diggo_metrics"
-    }
-  ],
+  // Analytics Engine is deliberately NOT bound: the Cloudflare account this Worker deploys to
+  // has Analytics Engine disabled, and a deploy that declares an analytics_engine_datasets
+  // binding is rejected outright with error 10089 ("Analytics Engine is not enabled for this
+  // account"). worker/telemetry.ts reads the dataset through metricsDatasetBinding() and no-ops
+  // when it is absent, so every counter still lands in the authoritative D1 metrics_counters
+  // table - only the SQL-mirror for dashboards is missing. docs/DEPLOYMENT.md, "Observability
+  // and alerts", documents how to turn the mirror back on.
   "ratelimits": [
     {
       "name": "RATE_LIMITER",
@@ -223,12 +224,8 @@
         // Staging runs the same five-minute sweep so cron paths are exercised before production.
         "crons": ["*/5 * * * *"]
       },
-      "analytics_engine_datasets": [
-        {
-          "binding": "DIGGO_METRICS",
-          "dataset": "diggo_metrics_staging"
-        }
-      ],
+      // Same account-level Analytics Engine restriction as production; see the comment above
+      // the production block. Staging metrics stay in the staging D1 database.
       "ratelimits": [
         {
           "name": "RATE_LIMITER",
