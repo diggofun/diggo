@@ -6,18 +6,24 @@
   "scripts": {
     "dev": "vite",
     "dev:worker": "wrangler dev",
+    "dev:local": "npm run db:local && node scripts/dev-local.mjs",
     "build": "tsc -b && vite build",
-    "check": "npm run typecheck && npm run test && npm run build && wrangler deploy --dry-run",
+    "check": "npm run types && npm run typecheck && npm run lint && npm run test && npm run build && wrangler deploy --dry-run",
     "typecheck": "tsc -b --pretty false",
+    "lint": "eslint src worker shared",
     "test": "vitest run",
     "types": "wrangler types",
-    "db:local": "wrangler d1 migrations apply diggo-db --local"
+    "db:local": "wrangler d1 migrations apply diggo-db --local",
+    "seed:local": "npm run db:local && wrangler d1 execute diggo-db --local --file=scripts/dev-seed.sql"
   },
   "dependencies": {
     "@noble/curves": "latest",
+    "@reown/appkit": "^1.8.23",
+    "@reown/appkit-adapter-solana": "^1.8.23",
     "@solana/kit": "^8.3.0",
     "@solana/kit-plugin-wallet": "^0.20.0",
     "@solana/react": "^8.3.0",
+    "@solana/web3.js": "^1.99.0",
     "bs58": "latest",
     "lightweight-charts": "^4.2.3",
     "lucide-react": "latest",
@@ -27,11 +33,16 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "latest",
+    "@eslint/js": "^10.0.1",
     "@types/node": "^26.5.1",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "@vitejs/plugin-react": "latest",
+    "eslint": "^10.11.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.12.0",
     "typescript": "latest",
+    "typescript-eslint": "^8.70.1",
     "vite": "latest",
     "vitest": "latest",
     "wrangler": "latest"

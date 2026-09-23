@@ -1,0 +1,41 @@
+# Local Worker secrets. Copy to .dev.vars and edit - .dev.vars is git-ignored and must never be
+# committed. `wrangler dev` and `wrangler d1 ... --local` both read this file.
+#
+# Only DISCOVERY_SECRET is needed for the game loop to work locally. Everything else is optional
+# and only matters for the feature that reads it, so leave the rest commented out until you need it.
+# See docs/DEPLOYMENT.md ("Local development") for the full walkthrough.
+
+# --- Discovery RNG (required for the discovery subsystem) -------------------------------------
+# Server-only HMAC secret every discovery roll is derived from. Unset, the subsystem fails closed
+# and rolls nothing (spec 55) - safe, but it makes local testing dull.
+DISCOVERY_SECRET=local-dev-discovery-secret-change-me
+
+# --- Anti-abuse fingerprint salt ---------------------------------------------------------------
+# Salts the IP/device/network hashes in worker/signals.ts. Any stable local value works; the hashes
+# are only ever compared with each other, never reversed.
+DIGGO_DEVICE_SALT=local-dev-device-salt
+
+# --- Admin surface -----------------------------------------------------------------------------
+# Comma-separated wallet addresses allowed to call /api/admin/*. An admin session still has to be a
+# real signed wallet session; this list only decides which wallets may try.
+ADMIN_WALLETS=
+
+# --- Optional tuning ---------------------------------------------------------------------------
+# Discovery window length in seconds and roll chance in basis points. Both are clamped by
+# DISCOVERY_TUNABLE_BOUNDS (shared/config.ts), so a typo cannot open the floodgates.
+# Uncomment both for local play: a one-minute window at a 100% chance makes every activation roll.
+#DISCOVERY_WINDOW_SECONDS=60
+#DISCOVERY_ROLL_CHANCE_BPS=10000
+
+# --- Optional integrations ---------------------------------------------------------------------
+# Devnet RPC. A Helius endpoint raises the rate limit; unset falls back to the public devnet RPC.
+#DIGGO_RPC_URL=
+# Keeper signer: a base58-encoded 64-byte secret key, JSON-array-stringified (docs/CUSTODY.md).
+# Only needed for on-chain sync_crew_power / claim_discovery.
+#DIGGO_KEEPER_SECRET_KEY=
+# Turnstile secret. On localhost, wrangler dev plus the dev site key accept the token "dev-bypass".
+#TURNSTILE_SECRET=
+# Helius webhook authorization header, compared in constant time.
+#HELIUS_WEBHOOK_AUTH=
+# Supabase service role key, for private token-artwork uploads.
+#SUPABASE_SERVICE_ROLE_KEY=

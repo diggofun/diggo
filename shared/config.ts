@@ -1,0 +1,659 @@
+/**
+ * Central Diggo configuration.
+ *
+ * Every gameplay, economic and anti-abuse parameter lives here with a default.
+ * No other module hardcodes magic numbers: functions accept an optional
+ * DiggoConfig argument that defaults to DIGGO_CONFIG.
+ *
+ * DIGGO_CONFIG is deeply frozen. Use createDiggoConfig(overrides) to derive a
+ * tuned config (tests, per-environment tuning) without mutating the defaults.
+ *
+ * Deployment-time tuning goes through configFromEnv(), the single override layer
+ * between the frozen defaults and a Worker environment: an operator tunes
+ * parameters with environment variables, and every value is clamped to a sane
+ * range here rather than trusted at the call site (spec 15, 80).
+ */
+
+export const BPS_DENOMINATOR = 10_000;
+
+export type DeepPartial<T> = T extends readonly (infer U)[]
+  ? readonly DeepPartial<U>[]
+  : T extends object
+    ? { readonly [K in keyof T]?: DeepPartial<T[K]> }
+    : T;
+
+export type CrewComponent = "miners" | "drills" | "carts" | "foreman" | "storage";
+
+export interface CrewLevels {
+  miners: number;
+  drills: number;
+  carts: number;
+  foreman: number;
+  storage: number;
+}
+
+export type DiscoveryRarity = "common" | "uncommon" | "rare" | "epic" | "legendary" | "mythic";
+
+export type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
+
+export type RewardState = "NORMAL" | "UNDER_REVIEW" | "HELD" | "BLOCKED";
+
+/**
+ * Progressive anti-abuse responses, in escalation order (spec 63). "ban" is only
+ * reachable with strong multi-signal evidence.
+ */
+export type RiskResponse =
+  | "observe"
+  | "rate_limit"
+  | "challenge"
+  | "discovery_restrict"
+  | "hold"
+  | "review"
+  | "ban";
+
+export type RiskSignalName =
+  | "walletsPerDeviceCluster"
+  | "accountsPerNetworkCluster"
+  | "activationTimingRegularity"
+  | "activationSynchrony"
+  | "burstActions"
+  | "switchingPatternSimilarity"
+  | "claimBurst"
+  | "creationCluster"
+  | "linkedAbuseHistory";
+
+export type OreSource =
+  | "active_mine"
+  | "activation"
+  | "streak_milestone"
+  | "achievement"
+  | "level_up"
+  | "quest"
+  | "season";
+
+export interface TimeConfig {
+  secondsPerMinute: number;
+  secondsPerHour: number;
+  secondsPerDay: number;
+  secondsPerWeek: number;
+}
+
+export interface StreakMilestoneConfig {
+  day: number;
+  ore: number;
+  xp: number;
+  badges: readonly string[];
+  titles: readonly string[];
+  freezes: number;
+}
+
+export interface StreakConfig {
+  activationSeconds: number;
+  graceSeconds: number;
+  minimumReactivationSeconds: number;
+  /** Hard cap on banked Streak Freezes. */
+  freezeCap: number;
+  freezeEarnIntervalDays: number;
+  /** How many extra missed activation windows a single freeze can cover. */
+  freezeCoveredWindows: number;
+  milestones: readonly StreakMilestoneConfig[];
+}
+
+export interface MaturityRampPoint {
+  /** The maturity band applies while account age in days is strictly below this value. */
+  upToDay: number;
+  bps: number;
+}
+
+export interface OreConfig {
+  baseOrePerActiveHour: number;
+  activationBonusOre: number;
+  maturityRamp: readonly MaturityRampPoint[];
+  /** Carts are the logistics branch: ORE efficiency, never mining power. */
+  cartsEfficiencyGain: number;
+  cartsEfficiencyScale: number;
+  /** Foreman is the organisation branch: ORE efficiency and cheaper upgrades. */
+  foremanEfficiencyGain: number;
+  foremanEfficiencyScale: number;
+  /** Storage is the offline branch: ORE capacity plus offline hours. */
+  storageBaseCapacity: number;
+  storageCapacityScale: number;
+  storageCapacityExponent: number;
+  cartsCapacityScale: number;
+  offlineHoursBase: number;
+  offlineHoursPerStorageLevel: number;
+  offlineHoursCap: number;
+  levelUpBaseOre: number;
+  levelUpOrePerLevel: number;
+  levelUpOreExponent: number;
+  achievementOre: Readonly<Record<string, number>>;
+  /** Quest and season grants are supplied per event but always capped here. */
+  questOreCap: number;
+  seasonOreCap: number;
+  /** A single accrual window is clamped to this many seconds (one activation). */
+  maxAccrualSeconds: number;
+}
+
+export interface CrewTierConfig {
+  tier: number;
+  name: string;
+  minTotalLevel: number;
+}
+
+export interface CrewConfig {
+  minLevel: number;
+  /** Levels run minLevel..maxLevel; maxLevel cannot be upgraded past. */
+  maxLevel: number;
+  starterLevels: CrewLevels;
+  starterPower: number;
+  /** Sub-linear miners curve: the main source of diminishing returns (spec 12). */
+  minerPowerExponent: number;
+  /** Drills multiply Miner output instead of adding flat power (spec 10). */
+  drillEfficiencyGain: number;
+  drillEfficiencyScale: number;
+  /** Foreman reduces upgrade costs, it does not add mining power (spec 10). */
+  foremanDiscountGain: number;
+  foremanDiscountScale: number;
+  minimumUpgradeCostMultiplier: number;
+  upgradeCostBase: Readonly<Record<CrewComponent, number>>;
+  upgradeCostExponent: number;
+  upgradeCostMaxLevel: number;
+  /** Bound on a max-level crew versus a starter crew (spec 12). */
+  maxVeteranPowerRatio: number;
+  tiers: readonly CrewTierConfig[];
+}
+
+export interface EconomyConfig {
+  rewardReductionBps: number;
+  minimumReducedReward: number;
+  /** Fixed-point scale for the cumulative reward index (spec 17). */
+  rewardIndexScale: number;
+  /** Block rewards are capped at the remaining reserve (spec 19, 20). */
+  enforceReserveCap: boolean;
+}
+
+export interface DiscoveryConfig {
+  minimumMarketCapUsd: number;
+  minimumLiquidityUsd: number;
+  minimumVolume24hUsd: number;
+  minimumPriceConfidence: number;
+  minimumAccountAgeDays: number;
+  minimumActiveDays: number;
+  minimumValidActivations: number;
+  minimumCrewTier: number;
+  minimumMaturityBps: number;
+  accountDailyCapUsd: number;
+  accountWeeklyCapUsd: number;
+  tokenDailyCapUsd: number;
+  tokenPeriodCapUsd: number;
+  tokenPeriodSeconds: number;
+  globalDailyCapUsd: number;
+  /** No single discovery request may exceed this USD value (spec 64). */
+  perRequestCapUsd: number;
+  activityWindowSeconds: number;
+  cappedRarityByBudget: boolean;
+  /**
+   * Length of one discovery opportunity window in seconds (spec 56). Bounded by
+   * DISCOVERY_TUNABLE_BOUNDS.windowSeconds; override with DISCOVERY_WINDOW_SECONDS.
+   */
+  windowSeconds: number;
+  /**
+   * Chance in basis points that an eligible active window yields a discovery. Bounded by
+   * DISCOVERY_TUNABLE_BOUNDS.rollChanceBps; override with DISCOVERY_ROLL_CHANCE_BPS.
+   */
+  rollChanceBps: number;
+}
+
+export interface RarityTierConfig {
+  rarity: DiscoveryRarity;
+  /** Cumulative probability upper bound in [0, 1), rolled against a uniform draw. */
+  cumulativeChance: number;
+  /** Target USD-equivalent value of the reward before caps are applied. */
+  valueUsd: number;
+  minEligibilityScore: number;
+  minLiquidityUsd: number;
+  minVolume24hUsd: number;
+}
+
+export interface RarityEligibilityWeights {
+  liquidity: number;
+  volume: number;
+  activity: number;
+  health: number;
+  reserve: number;
+  priceConfidence: number;
+}
+
+export interface RobustPriceConfig {
+  lookbackSeconds: number;
+  minimumSamples: number;
+  maxDeviationBps: number;
+  volumeWeighted: boolean;
+}
+
+export interface RarityConfig {
+  tiers: readonly RarityTierConfig[];
+  weights: RarityEligibilityWeights;
+  references: {
+    liquidityUsd: number;
+    volume24hUsd: number;
+    tradeCount24h: number;
+    reserveUsd: number;
+  };
+  healthFlagPenalty: number;
+  robustPrice: RobustPriceConfig;
+  amountDecimals: number;
+}
+
+export interface RiskSignalConfig {
+  weight: number;
+  /** Raw signal value at which the signal contributes its full weight. */
+  saturation: number;
+  /**
+   * Raw value at or above which the signal counts as strong, corroborating
+   * evidence. Below this value the signal is weak evidence.
+   */
+  strongAt: number;
+}
+
+export interface RiskResponseConfig {
+  minScore: number;
+  response: RiskResponse;
+}
+
+export interface TrustConfig {
+  weights: {
+    age: number;
+    validActivations: number;
+    streakConsistency: number;
+    validClaims: number;
+    absenceOfAbuse: number;
+  };
+  fullAgeDays: number;
+  fullValidActivations: number;
+  fullValidClaims: number;
+  abuseFlagsForZeroTrust: number;
+  /**
+   * Documented invariant: SOL balance is never a trust input (spec 60).
+   */
+  solBalanceIsNotAnInput: boolean;
+}
+
+export interface RiskConfig {
+  signals: Readonly<Record<RiskSignalName, RiskSignalConfig>>;
+  /** A single weak signal can never push an account above this score. */
+  weakEvidenceScoreCeiling: number;
+  maxSingleWeakSignalScore: number;
+  lowMaxScore: number;
+  mediumMaxScore: number;
+  banMinimumStrongSignals: number;
+  banMinimumScore: number;
+  responses: readonly RiskResponseConfig[];
+  rewardStates: Readonly<Record<RiskLevel, RewardState>>;
+  /** Neutral, detail-free user-facing copy (spec 62). */
+  publicStatus: Readonly<Record<RewardState, string>>;
+  trust: TrustConfig;
+}
+
+export interface DiggoConfig {
+  time: TimeConfig;
+  streak: StreakConfig;
+  ore: OreConfig;
+  crew: CrewConfig;
+  economy: EconomyConfig;
+  discovery: DiscoveryConfig;
+  rarity: RarityConfig;
+  risk: RiskConfig;
+}
+
+export const DIGGO_CONFIG_DEFAULTS: DiggoConfig = {
+  time: {
+    secondsPerMinute: 60,
+    secondsPerHour: 3_600,
+    secondsPerDay: 86_400,
+    secondsPerWeek: 604_800,
+  },
+  streak: {
+    activationSeconds: 86_400,
+    graceSeconds: 43_200,
+    minimumReactivationSeconds: 72_000,
+    freezeCap: 3,
+    freezeEarnIntervalDays: 7,
+    freezeCoveredWindows: 1,
+    milestones: [
+      { day: 3, ore: 75, xp: 25, badges: ["FIRST_STEPS"], titles: [], freezes: 0 },
+      { day: 7, ore: 250, xp: 75, badges: ["WEEK_ONE"], titles: ["Steady Digger"], freezes: 0 },
+      { day: 14, ore: 500, xp: 150, badges: ["FORTNIGHT"], titles: [], freezes: 0 },
+      { day: 30, ore: 1_200, xp: 350, badges: ["MONTH_ONE"], titles: ["Foreman Material"], freezes: 1 },
+      { day: 60, ore: 2_500, xp: 700, badges: ["TWO_MONTHS"], titles: [], freezes: 0 },
+      { day: 100, ore: 5_000, xp: 1_200, badges: ["CENTURY"], titles: ["Century Miner"], freezes: 1 },
+      { day: 365, ore: 25_000, xp: 5_000, badges: ["YEAR_ONE"], titles: ["Legendary Diggo"], freezes: 3 },
+    ],
+  },
+  ore: {
+    baseOrePerActiveHour: 20,
+    activationBonusOre: 50,
+    maturityRamp: [
+      { upToDay: 1, bps: 2_000 },
+      { upToDay: 3, bps: 3_500 },
+      { upToDay: 7, bps: 5_000 },
+      { upToDay: Number.POSITIVE_INFINITY, bps: 10_000 },
+    ],
+    cartsEfficiencyGain: 0.35,
+    cartsEfficiencyScale: 14,
+    foremanEfficiencyGain: 0.2,
+    foremanEfficiencyScale: 18,
+    storageBaseCapacity: 480,
+    storageCapacityScale: 240,
+    storageCapacityExponent: 0.78,
+    cartsCapacityScale: 80,
+    offlineHoursBase: 12,
+    offlineHoursPerStorageLevel: 1.5,
+    offlineHoursCap: 72,
+    levelUpBaseOre: 60,
+    levelUpOrePerLevel: 1.25,
+    levelUpOreExponent: 1,
+    achievementOre: {
+      FIRST_ACTIVATION: 25,
+      FIRST_BLOCK: 40,
+      TEN_BLOCKS: 120,
+      FIRST_DISCOVERY: 200,
+      CREW_TIER_3: 400,
+      FIRST_MINE_SWITCH: 60,
+      FULLY_MINED_WITNESS: 300,
+    },
+    questOreCap: 5_000,
+    seasonOreCap: 25_000,
+    maxAccrualSeconds: 86_400,
+  },
+  crew: {
+    minLevel: 1,
+    maxLevel: 100,
+    starterLevels: { miners: 2, drills: 1, carts: 1, foreman: 1, storage: 1 },
+    starterPower: 100,
+    minerPowerExponent: 0.62,
+    drillEfficiencyGain: 0.3,
+    drillEfficiencyScale: 12,
+    foremanDiscountGain: 0.3,
+    foremanDiscountScale: 15,
+    minimumUpgradeCostMultiplier: 0.4,
+    upgradeCostBase: { miners: 120, drills: 160, carts: 140, foreman: 220, storage: 180 },
+    upgradeCostExponent: 1.72,
+    upgradeCostMaxLevel: 100,
+    maxVeteranPowerRatio: 25,
+    tiers: [
+      { tier: 1, name: "Backyard Diggers", minTotalLevel: 5 },
+      { tier: 2, name: "Small Mining Crew", minTotalLevel: 15 },
+      { tier: 3, name: "Industrial Crew", minTotalLevel: 35 },
+      { tier: 4, name: "Deep Mine Division", minTotalLevel: 75 },
+      { tier: 5, name: "Mega Mining Operation", minTotalLevel: 150 },
+      { tier: 6, name: "Legendary Diggo Crew", minTotalLevel: 300 },
+    ],
+  },
+  economy: {
+    rewardReductionBps: 2_500,
+    minimumReducedReward: 1,
+    rewardIndexScale: 1_000_000_000_000,
+    enforceReserveCap: true,
+  },
+  discovery: {
+    minimumMarketCapUsd: 250_000,
+    minimumLiquidityUsd: 10_000,
+    minimumVolume24hUsd: 5_000,
+    minimumPriceConfidence: 0.6,
+    minimumAccountAgeDays: 7,
+    minimumActiveDays: 5,
+    minimumValidActivations: 5,
+    minimumCrewTier: 2,
+    minimumMaturityBps: 5_000,
+    accountDailyCapUsd: 0.5,
+    accountWeeklyCapUsd: 2.5,
+    tokenDailyCapUsd: 25,
+    tokenPeriodCapUsd: 100,
+    tokenPeriodSeconds: 604_800,
+    globalDailyCapUsd: 500,
+    perRequestCapUsd: 20,
+    activityWindowSeconds: 86_400,
+    cappedRarityByBudget: true,
+    windowSeconds: 3_600,
+    rollChanceBps: 250,
+  },
+  rarity: {
+    tiers: [
+      { rarity: "common", cumulativeChance: 0.7, valueUsd: 0.05, minEligibilityScore: 0, minLiquidityUsd: 0, minVolume24hUsd: 0 },
+      { rarity: "uncommon", cumulativeChance: 0.9, valueUsd: 0.15, minEligibilityScore: 20, minLiquidityUsd: 2_500, minVolume24hUsd: 500 },
+      { rarity: "rare", cumulativeChance: 0.97, valueUsd: 0.5, minEligibilityScore: 40, minLiquidityUsd: 10_000, minVolume24hUsd: 2_500 },
+      { rarity: "epic", cumulativeChance: 0.995, valueUsd: 1.5, minEligibilityScore: 60, minLiquidityUsd: 50_000, minVolume24hUsd: 10_000 },
+      { rarity: "legendary", cumulativeChance: 0.9995, valueUsd: 5, minEligibilityScore: 80, minLiquidityUsd: 250_000, minVolume24hUsd: 50_000 },
+      { rarity: "mythic", cumulativeChance: 1, valueUsd: 20, minEligibilityScore: 92, minLiquidityUsd: 1_000_000, minVolume24hUsd: 200_000 },
+    ],
+    weights: {
+      liquidity: 0.25,
+      volume: 0.2,
+      activity: 0.15,
+      health: 0.15,
+      reserve: 0.15,
+      priceConfidence: 0.1,
+    },
+    references: {
+      liquidityUsd: 250_000,
+      volume24hUsd: 100_000,
+      tradeCount24h: 500,
+      reserveUsd: 5_000,
+    },
+    healthFlagPenalty: 0.25,
+    robustPrice: {
+      lookbackSeconds: 3_600,
+      minimumSamples: 3,
+      maxDeviationBps: 1_500,
+      volumeWeighted: true,
+    },
+    amountDecimals: 6,
+  },
+  risk: {
+    signals: {
+      walletsPerDeviceCluster: { weight: 18, saturation: 25, strongAt: 50 },
+      accountsPerNetworkCluster: { weight: 14, saturation: 40, strongAt: 200 },
+      activationTimingRegularity: { weight: 12, saturation: 1, strongAt: 1.5 },
+      activationSynchrony: { weight: 14, saturation: 1, strongAt: 0.98 },
+      burstActions: { weight: 12, saturation: 20, strongAt: 120 },
+      switchingPatternSimilarity: { weight: 10, saturation: 1, strongAt: 1.5 },
+      claimBurst: { weight: 12, saturation: 15, strongAt: 120 },
+      creationCluster: { weight: 12, saturation: 20, strongAt: 150 },
+      linkedAbuseHistory: { weight: 30, saturation: 1, strongAt: 0.5 },
+    },
+    weakEvidenceScoreCeiling: 60,
+    maxSingleWeakSignalScore: 20,
+    lowMaxScore: 25,
+    mediumMaxScore: 60,
+    banMinimumStrongSignals: 2,
+    banMinimumScore: 90,
+    responses: [
+      { minScore: 0, response: "observe" },
+      { minScore: 20, response: "rate_limit" },
+      { minScore: 35, response: "challenge" },
+      { minScore: 45, response: "discovery_restrict" },
+      { minScore: 70, response: "hold" },
+      { minScore: 82, response: "review" },
+      { minScore: 90, response: "ban" },
+    ],
+    rewardStates: {
+      LOW: "NORMAL",
+      MEDIUM: "UNDER_REVIEW",
+      HIGH: "HELD",
+    },
+    publicStatus: {
+      NORMAL: "Everything looks normal.",
+      UNDER_REVIEW: "Additional verification required.",
+      HELD: "Rewards are being reviewed before they can be collected.",
+      BLOCKED: "Rewards are temporarily unavailable for this account.",
+    },
+    trust: {
+      weights: {
+        age: 0.2,
+        validActivations: 0.25,
+        streakConsistency: 0.2,
+        validClaims: 0.2,
+        absenceOfAbuse: 0.15,
+      },
+      fullAgeDays: 30,
+      fullValidActivations: 30,
+      fullValidClaims: 30,
+      abuseFlagsForZeroTrust: 3,
+      solBalanceIsNotAnInput: true,
+    },
+  },
+};
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function mergeInto<T>(base: T, override: unknown): T {
+  if (override === undefined) return base;
+  if (Array.isArray(override)) return override as unknown as T;
+  if (isPlainObject(base) && isPlainObject(override)) {
+    const merged: Record<string, unknown> = { ...(base as Record<string, unknown>) };
+    for (const key of Object.keys(override)) {
+      merged[key] = mergeInto(merged[key], override[key]);
+    }
+    return merged as unknown as T;
+  }
+  return override as T;
+}
+
+export function deepFreeze<T>(value: T): T {
+  if (isPlainObject(value) || Array.isArray(value)) {
+    if (!Object.isFrozen(value)) Object.freeze(value);
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      deepFreeze((value as Record<string, unknown>)[key]);
+    }
+  }
+  return value;
+}
+
+export const DIGGO_CONFIG: DiggoConfig = deepFreeze(DIGGO_CONFIG_DEFAULTS);
+
+/** Derives a tuned config from the defaults. Arrays are replaced wholesale. */
+export function createDiggoConfig(overrides: DeepPartial<DiggoConfig> = {}): DiggoConfig {
+  return deepFreeze(mergeInto(DIGGO_CONFIG_DEFAULTS, overrides));
+}
+
+// --- environment override layer ---------------------------------------------------------
+
+/**
+ * Every tunable that may be overridden per deployment, with the range it is clamped to.
+ * Bounds are deliberately narrow: a mistyped environment variable must be able to neither
+ * open the floodgates (a window of one second, a 100% roll chance) nor stop the subsystem
+ * outright (a window of a year).
+ */
+export const DISCOVERY_TUNABLE_BOUNDS = Object.freeze({
+  windowSeconds: Object.freeze({ min: 60, max: 86_400 }),
+  rollChanceBps: Object.freeze({ min: 0, max: BPS_DENOMINATOR }),
+});
+
+/**
+ * The environment variables the override layer reads. Structural on purpose, so both a Worker
+ * RuntimeEnv and a plain test object satisfy it without dragging bindings into shared/.
+ */
+export interface ConfigEnvSource {
+  /** Discovery opportunity window in seconds. */
+  DISCOVERY_WINDOW_SECONDS?: string;
+  /** Discovery roll chance in basis points (0-10000). */
+  DISCOVERY_ROLL_CHANCE_BPS?: string;
+}
+
+/** Floors a possibly-stringly numeric value and clamps it into `bounds`. */
+export function clampToBounds(
+  value: unknown,
+  bounds: { min: number; max: number },
+  fallback: number,
+): number {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "string" && value.trim().length === 0) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(bounds.max, Math.max(bounds.min, Math.floor(parsed)));
+}
+
+/** The two discovery tunables, with whatever was supplied clamped into their bounds. */
+export function clampDiscoveryTunables(
+  input: { windowSeconds?: unknown; rollChanceBps?: unknown },
+  base: DiscoveryConfig = DIGGO_CONFIG.discovery,
+): { windowSeconds: number; rollChanceBps: number } {
+  return {
+    windowSeconds: clampToBounds(input.windowSeconds, DISCOVERY_TUNABLE_BOUNDS.windowSeconds, base.windowSeconds),
+    rollChanceBps: clampToBounds(input.rollChanceBps, DISCOVERY_TUNABLE_BOUNDS.rollChanceBps, base.rollChanceBps),
+  };
+}
+
+/**
+ * The one place an environment variable becomes configuration: applies the override layer on
+ * top of `base` (DIGGO_CONFIG by default) and returns a frozen config.
+ *
+ * Callers resolve this per request rather than caching a module-level mutable copy, because a
+ * Worker isolate's environment is stable while its imported modules are shared.
+ */
+export function configFromEnv(
+  source: ConfigEnvSource,
+  base: DiggoConfig = DIGGO_CONFIG,
+): DiggoConfig {
+  const { windowSeconds, rollChanceBps } = clampDiscoveryTunables(
+    {
+      windowSeconds: source.DISCOVERY_WINDOW_SECONDS,
+      rollChanceBps: source.DISCOVERY_ROLL_CHANCE_BPS,
+    },
+    base.discovery,
+  );
+  if (
+    windowSeconds === base.discovery.windowSeconds &&
+    rollChanceBps === base.discovery.rollChanceBps
+  ) {
+    return base;
+  }
+  return deepFreeze(
+    mergeInto(base, { discovery: { ...base.discovery, windowSeconds, rollChanceBps } }),
+  );
+}
+
+/**
+ * Legacy flat view of gameplay defaults. Kept for backwards compatibility with
+ * worker/src call sites; prefer DIGGO_CONFIG in new code.
+ */
+export interface GameplayDefaults {
+  activationSeconds: number;
+  graceSeconds: number;
+  minimumReactivationSeconds: number;
+  baseOrePerHour: number;
+  activationOre: number;
+  starterPower: number;
+  discoveryMinimumAgeDays: number;
+  discoveryMinimumActiveDays: number;
+}
+
+export const GAMEPLAY_DEFAULTS: GameplayDefaults = Object.freeze({
+  activationSeconds: DIGGO_CONFIG.streak.activationSeconds,
+  graceSeconds: DIGGO_CONFIG.streak.graceSeconds,
+  minimumReactivationSeconds: DIGGO_CONFIG.streak.minimumReactivationSeconds,
+  baseOrePerHour: DIGGO_CONFIG.ore.baseOrePerActiveHour,
+  activationOre: DIGGO_CONFIG.ore.activationBonusOre,
+  starterPower: DIGGO_CONFIG.crew.starterPower,
+  discoveryMinimumAgeDays: DIGGO_CONFIG.discovery.minimumAccountAgeDays,
+  discoveryMinimumActiveDays: DIGGO_CONFIG.discovery.minimumActiveDays,
+});
+
+export interface DiscoveryDefaults {
+  minimumMarketCapUsd: number;
+  accountDailyCapUsd: number;
+  accountWeeklyCapUsd: number;
+  tokenDailyCapUsd: number;
+  globalDailyCapUsd: number;
+}
+
+export const DISCOVERY_DEFAULTS: DiscoveryDefaults = Object.freeze({
+  minimumMarketCapUsd: DIGGO_CONFIG.discovery.minimumMarketCapUsd,
+  accountDailyCapUsd: DIGGO_CONFIG.discovery.accountDailyCapUsd,
+  accountWeeklyCapUsd: DIGGO_CONFIG.discovery.accountWeeklyCapUsd,
+  tokenDailyCapUsd: DIGGO_CONFIG.discovery.tokenDailyCapUsd,
+  globalDailyCapUsd: DIGGO_CONFIG.discovery.globalDailyCapUsd,
+});

@@ -1,5 +1,31 @@
 # Deployment checklist
 
+## Local development
+
+```bash
+npm install
+cp .dev.vars.example .dev.vars     # then edit it; .dev.vars is git-ignored
+npm run dev:local                 # migrations, then Worker (:8787) + client (:5173)
+```
+
+`dev:local` applies the local D1 migrations and then runs both processes in one terminal with
+prefixed output: `wrangler dev` serves the Worker on `:8787`, and `vite` serves the client on
+`:5173` with `/api`, `/media` and `/webhooks` proxied to it (see `vite.config.ts`). Ctrl-C stops
+both. `npm run dev:worker` and `npm run dev` still run either side on its own.
+
+Only `DISCOVERY_SECRET` is needed for the game loop to work: without it the discovery subsystem
+fails closed and rolls nothing. `DIGGO_DEVICE_SALT` and `ADMIN_WALLETS` are the other two values
+worth setting locally; the rest of `.dev.vars.example` is optional and documented in place. For
+local play, uncommenting `DISCOVERY_WINDOW_SECONDS=60` and `DISCOVERY_ROLL_CHANCE_BPS=10000` makes
+every activation roll a discovery.
+
+There is no devnet dependency for the mining loop. `npm run seed:local` inserts three demo mines
+(FROG, DOGGO, MOLE) with `synced_at = 0`, so the Worker treats them as `OFFCHAIN` mines and D1 is
+the accounting source: activation, streak, block rewards, ORE, Crew upgrades and discoveries all
+work without a chain. The seed is a plain SQL file under `scripts/`, applied with
+`wrangler d1 execute --local`, and deliberately **not** part of `migrations/` — production must
+never ship demo tokens. `npm run dev:local -- --seed` seeds as part of startup.
+
 ## Cloudflare resources
 
 Wrangler declares the following bindings and validates them in dry-run mode:
@@ -18,9 +44,21 @@ Create a queue named `diggo-indexing-dlq` before production deployment if automa
 
 ## Required secrets
 
+- `DISCOVERY_SECRET`: server-only HMAC secret every discovery roll is derived from. Without it the
+  discovery subsystem fails closed and grants nothing (spec 55).
+- `DIGGO_DEVICE_SALT`: server-side salt for the IP/device/network hashes in `worker/signals.ts`.
+- `ADMIN_WALLETS`: comma-separated wallet addresses allowed to use `/api/admin/*`. An admin session
+  still has to be a real signed wallet session; the list only decides which wallets may try.
 - `TURNSTILE_SECRET`: private key for the production Turnstile widget.
 - `HELIUS_WEBHOOK_AUTH`: exact authorization header configured in Helius, including `Bearer `.
 - `SUPABASE_SERVICE_ROLE_KEY`: Supabase secret key used only by the Worker to upload and retrieve private artwork.
+- `DIGGO_RPC_URL` (optional): devnet RPC endpoint; falls back to the public devnet RPC.
+- `DIGGO_KEEPER_SECRET_KEY` (optional): the keeper signer, needed only for `sync_crew_power` and
+  `claim_discovery`. See `docs/CUSTODY.md` for how it must be held.
+
+Set every production value with `wrangler secret put <NAME>`. `DISCOVERY_WINDOW_SECONDS` and
+`DISCOVERY_ROLL_CHANCE_BPS` are ordinary vars: they are clamped by `DISCOVERY_TUNABLE_BOUNDS` in
+`shared/config.ts`, so a bad value cannot open the floodgates or stop the subsystem.
 
 The repository contains only Cloudflare's public always-pass development site key. Replace it before using a production hostname.
 

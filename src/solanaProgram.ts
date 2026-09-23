@@ -26,6 +26,9 @@ import {
   type TransactionSigner,
   type Instruction,
 } from "@solana/kit";
+import { Buffer } from "buffer";
+import { PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
+import type { Provider as WalletConnectSolanaProvider } from "@reown/appkit-adapter-solana/react";
 
 type IInstruction = Instruction;
 import {
@@ -121,6 +124,56 @@ export async function fetchTokenBalance(owner: Address, mint: Address): Promise<
   }
 }
 
+/**
+ * A WalletConnect-paired Solana wallet, wrapped to carry its own address alongside the Reown
+ * `Provider` object (whose signing methods take @solana/web3.js Transactions, unlike the
+ * @solana/kit TransactionSigner used for Wallet Standard wallets — see signSendConfirm below).
+ */
+export interface WalletConnectHandle {
+  kind: "walletconnect";
+  address: Address;
+  provider: WalletConnectSolanaProvider;
+}
+
+/**
+ * Every on-chain action in this module accepts either connection method. Wallet Standard
+ * (desktop extensions, most mobile in-app browsers) is a plain @solana/kit TransactionSigner;
+ * WalletConnect (QR-paired wallets) is the handle above. Both expose `.address`, so PDA
+ * derivation call sites never need to branch — only signSendConfirm does.
+ */
+export type DiggoWallet = TransactionSigner | WalletConnectHandle;
+
+function isWalletConnectHandle(wallet: DiggoWallet): wallet is WalletConnectHandle {
+  return (wallet as WalletConnectHandle).kind === "walletconnect";
+}
+
+function toWeb3Instruction(ix: IInstruction): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: new PublicKey(ix.programAddress),
+    keys: (ix.accounts ?? []).map((account) => ({
+      pubkey: new PublicKey(account.address),
+      // @solana/kit's AccountRole is bit-flagged: bit0=writable, bit1=signer — see shared/program.ts.
+      isSigner: (account.role & 2) !== 0,
+      isWritable: (account.role & 1) !== 0,
+    })),
+    data: Buffer.from(ix.data ?? new Uint8Array()),
+  });
+}
+
+async function signSendConfirmWalletConnect(
+  wallet: WalletConnectHandle,
+  instructions: IInstruction[],
+): Promise<string> {
+  const { value: latestBlockhash } = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send();
+  const tx = new Transaction();
+  tx.feePayer = new PublicKey(wallet.address);
+  tx.recentBlockhash = latestBlockhash.blockhash;
+  for (const ix of instructions) tx.add(toWeb3Instruction(ix));
+  const signature = await wallet.provider.signAndSendTransaction(tx);
+  await pollForConfirmation(signature, 60_000);
+  return signature;
+}
+
 async function pollForConfirmation(signature: string, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -134,9 +187,12 @@ async function pollForConfirmation(signature: string, timeoutMs = 30_000): Promi
 }
 
 async function signSendConfirm(
-  feePayer: TransactionSigner,
+  feePayer: DiggoWallet,
   instructions: IInstruction[],
 ): Promise<string> {
+  if (isWalletConnectHandle(feePayer)) {
+    return signSendConfirmWalletConnect(feePayer, instructions);
+  }
   const { value: latestBlockhash } = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send();
   const message = pipe(
     // Legacy messages are intentionally used here. The program does not need address lookup
@@ -151,7 +207,12 @@ async function signSendConfirm(
 
   if (isTransactionSendingSigner(feePayer)) {
     const signatureBytes = await signAndSendTransactionMessageWithSigners(message);
-    return getBase58Decoder().decode(signatureBytes) as string;
+    const signature = getBase58Decoder().decode(signatureBytes) as string;
+    // Wallet Standard's send-capable signers return as soon as the RPC accepts the transaction.
+    // The following API call reads the newly-created PDAs, so wait for confirmed state rather
+    // than racing the indexer and leaving an already-launched coin invisible in the dashboard.
+    await pollForConfirmation(signature, 60_000);
+    return signature;
   }
 
   const signedTx = await signTransactionMessageWithSigners(message);
@@ -196,7 +257,7 @@ const solToLamports = (sol: number) => BigInt(Math.round(sol * 1_000_000_000));
  */
 export async function launchCoinOnChain(
   programAddress: Address,
-  creator: TransactionSigner,
+  creator: DiggoWallet,
   treasury: Address,
   protocolReserveBps: number,
   protocolDiscoveryReserveBps: number,
@@ -259,7 +320,7 @@ export interface BuyResult {
 /** Buys `solIn` SOL worth of tokens on a mine's bonding curve. This is the real liquidity path. */
 export async function buyOnChain(
   programAddress: Address,
-  buyer: TransactionSigner,
+  buyer: DiggoWallet,
   mint: Address,
   solIn: number,
   minTokensOutRaw: bigint = 0n,
@@ -281,7 +342,7 @@ export async function buyOnChain(
 /** Sells `tokensInRaw` base units of a mine's token back into its bonding curve for SOL. */
 export async function sellOnChain(
   programAddress: Address,
-  seller: TransactionSigner,
+  seller: DiggoWallet,
   mint: Address,
   tokensInRaw: bigint,
   minSolOutLamports: bigint = 0n,
@@ -306,7 +367,7 @@ export async function fetchAccountExists(pda: Address): Promise<boolean> {
 }
 
 /** Idempotent: only sends initialize_player if the Player PDA doesn't already exist. */
-export async function ensurePlayerInitialized(programAddress: Address, owner: TransactionSigner): Promise<void> {
+export async function ensurePlayerInitialized(programAddress: Address, owner: DiggoWallet): Promise<void> {
   const playerPda = await derivePlayerPda(programAddress, owner.address);
   if (await fetchAccountExists(playerPda)) return;
   const instruction = buildInitializePlayerInstruction({ programAddress, owner: owner.address, player: playerPda });
@@ -316,7 +377,7 @@ export async function ensurePlayerInitialized(programAddress: Address, owner: Tr
 /** Assigns the player's on-chain Mining Power to `mint`'s mine (no tokens are spent). */
 export async function assignPowerOnChain(
   programAddress: Address,
-  owner: TransactionSigner,
+  owner: DiggoWallet,
   mint: Address,
 ): Promise<string> {
   await ensurePlayerInitialized(programAddress, owner);
@@ -336,7 +397,7 @@ export async function assignPowerOnChain(
 /** Claims accumulated real block rewards for `mint`'s mine into the player's own token account. */
 export async function claimRewardsOnChain(
   programAddress: Address,
-  owner: TransactionSigner,
+  owner: DiggoWallet,
   mint: Address,
 ): Promise<string> {
   const { mine, reserveVault } = await deriveMineAddresses(programAddress, mint);
