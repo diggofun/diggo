@@ -133,7 +133,7 @@ export function PushToggle({ variant = "section" }: PushToggleProps): ReactEleme
   const on = status === "on";
   // A device that is already subscribed can always be switched off, even if the server has since
   // lost its VAPID keys - otherwise the player would be stuck with alerts they cannot stop.
-  const blocked = status === "unsupported" || status === "blocked" || (serverConfigured === false && !on);
+  const blocked = status === "unsupported" || status === "blocked";
 
   const toggle = useCallback(async () => {
     setError("");
@@ -154,23 +154,22 @@ export function PushToggle({ variant = "section" }: PushToggleProps): ReactEleme
   if (status === "checking") return null;
 
   /**
-   * Why the switch is where it is. The compact wording is for the bell dropdown; the section keeps
-   * the fuller sentence, including the part that says what turning alerts on does not affect.
+   * A server with no push configuration has nothing to offer here. The block is hidden outright
+   * rather than rendered as a dead switch with a developer-facing explanation on it.
    */
+  if (serverConfigured === false && !on) return null;
+
   function statusNote(compact: boolean): string {
     if (status === "unsupported") {
       return compact ? "This browser cannot show push alerts." : "This browser cannot show push alerts.";
     }
     if (status === "blocked") return "Your browser is blocking notifications for this site.";
-    if (serverConfigured === false) return "Push alerts are not configured on the server yet.";
     if (compact) {
-      return on
-        ? "On for this browser. A short alert when a mining window is closing or a discovery is waiting."
-        : "Off by default. Turn on for a short alert when your mining window is closing or a discovery is waiting.";
+      return on ? "On for this browser." : "Off. One alert when a window closes or a discovery lands.";
     }
     return on
-      ? "On for this browser: a short alert when a mining window is about to close or a discovery is waiting. Turn it off at any time."
-      : "Off by default. Turning this on lets Diggo send one short alert when your mining window is closing or a discovery is waiting. Your wallet, rewards and ORE are not affected either way.";
+      ? "On for this browser: a short alert when a mining window is about to close or a discovery is waiting."
+      : "One short alert when your mining window is closing or a discovery is waiting.";
   }
 
   if (inline) {

@@ -15,7 +15,7 @@
  */
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
-import { Check, Radio, TrendingUp, Wallet, Zap } from "lucide-react";
+import { Check, Radio, Wallet, Zap } from "lucide-react";
 import type { MarketTrade, TokenSummary } from "../../shared/types";
 import { recordTrade } from "../api";
 import { track } from "../analytics";
@@ -244,14 +244,11 @@ export function SwapPanel({
   return (
     <section className="swap-terminal page-shell" id="swap">
       <div className="section-heading">
-        <div><div className="eyebrow"><TrendingUp size={14} /> DiggoSwap</div><h2>TRADE<br />${token.symbol}.</h2></div>
+        <div><h2>TRADE<br />${token.symbol}.</h2></div>
         <div className="swap-price-tag">
           <span>SPOT PRICE</span>
           <strong>{spotPriceSol < 0.000001 ? spotPriceSol.toExponential(3) : spotPriceSol.toFixed(9)} SOL</strong>
           <span>{onCurve ? "BONDING CURVE" : "LOCKED POOL · GRADUATED"}</span>
-          <span className={"badge " + (onCurve ? "badge-curve" : "badge-reserve")}>
-            <i aria-hidden="true" /> {onCurve ? "Curve emission" : "Reserve emission"}
-          </span>
         </div>
       </div>
       <div className="swap-grid">
@@ -259,7 +256,7 @@ export function SwapPanel({
           <div ref={chartContainerRef} className="swap-chart" />
           {tradeCount < 2 && (
             <div className="swap-chart-empty">
-              <Radio size={16} /> Not enough trade history yet — every real buy/sell plots here live.
+              <Radio size={16} /> No trades yet
             </div>
           )}
           <div className="trade-tape">
@@ -336,31 +333,17 @@ export function SwapPanel({
           )}
           {onCurve && (
             <div className="swap-capacity">
-              <span>SOL AVAILABLE TO SELLERS ON THE CURVE</span>
-              <strong>
-                {solAmount(token.sellCapacity.sol)} <small>SOL</small>
-              </strong>
-              <p>Before graduation, sells are limited to the SOL buyers have put into the curve.</p>
+              <span>SELLS LIMITED TO BUYER-CONTRIBUTED SOL</span>
+              <strong>{solAmount(token.sellCapacity.sol)} <small>SOL</small></strong>
               {token.sellCapacity.tokens !== null && (
-                <small>
-                  about {compact(token.sellCapacity.tokens)} ${token.symbol} would take all of it
-                </small>
+                <small>About {compact(token.sellCapacity.tokens)} ${token.symbol} at current prices.</small>
               )}
             </div>
           )}
           <p className="swap-note">
-            {venue === "pool" ? (
-              <>
-                This market has graduated: its liquidity now sits in a program-owned constant-product
-                pool that no key can withdraw from, and every trade is priced by x*y=k against those
-                reserves. Nothing here is simulated.
-              </>
-            ) : (
-              <>
-                Real SOL moves through the mine's own bonding curve — this is the same liquidity a
-                graduation threshold is measured against. Nothing here is simulated.
-              </>
-            )}
+            {venue === "pool"
+              ? "This graduated market trades against a program-owned pool that no key can withdraw from. Prices follow the pool's reserves."
+              : "Real SOL trades through this mine's bonding curve. The same liquidity is measured against the graduation threshold."}
           </p>
         </form>
       </div>

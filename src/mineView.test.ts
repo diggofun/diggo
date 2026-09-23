@@ -98,7 +98,7 @@ describe("describeEmissionWindow", () => {
       epochEndsAt: NOW_S + 6 * 86_400,
       now: NOW_MS,
     });
-    expect(window.label).toBe("Curve cap runs out in");
+    expect(window.label).toBe("Mining window");
     expect(window.value).toBe("≈ 12 days");
     expect(window.onCurve).toBe(true);
   });
@@ -111,7 +111,7 @@ describe("describeEmissionWindow", () => {
       now: NOW_MS,
     });
     expect(window.value).toBe("Flat");
-    expect(window.detail).toContain("no epoch reductions");
+    expect(window.detail).toContain("Fixed rate");
   });
 
   it("reports the spent cap as awaiting graduation", () => {
@@ -122,7 +122,7 @@ describe("describeEmissionWindow", () => {
       now: NOW_MS,
     });
     expect(window.value).toBe("Awaiting graduation");
-    expect(window.detail).toBe("curve cap reached — mining resumes after graduation");
+    expect(window.detail).toBe("Launch cap reached; mining resumes after graduation");
   });
 });
 

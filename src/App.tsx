@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import bs58 from "bs58";
 import "./walletConnect";
-import { ArrowUpRight, Hammer, Plus } from "lucide-react";
+import { ArrowUpRight, Hammer } from "lucide-react";
 
 import type { DiscoveryOpportunity, DiscoveryRecord, MineInfo, MiningReport, PlayerProfile, TokenSummary } from "../shared/types";
 import {
@@ -738,7 +738,6 @@ export default function App() {
           {page === "create" && (
             <section className="create-coin-page page-shell">
               <div>
-                <span className="eyebrow"><Plus size={14} /> Create a new coin</span>
                 <h1>START A<br /><span>NEW MINE.</span></h1>
                 <p>Create a fixed-supply Solana devnet coin, allocate its mining reserve, and optionally make the first real buy into its bonding curve.</p>
               </div>

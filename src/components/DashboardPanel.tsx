@@ -76,9 +76,6 @@ export function DashboardPanel({
     <section className={"dashboard-panel page-shell" + (celebrating ? " is-celebrating" : "")} id="mine" aria-labelledby="dashboard-title">
       <div className="dashboard-head">
         <div>
-          <span className="eyebrow">
-            <Pickaxe size={14} /> Mining dashboard
-          </span>
           <h1 id="dashboard-title">
             YOUR CREW IS
             <br />
@@ -195,7 +192,7 @@ export function DashboardPanel({
                 <small>
                   {mineInfo
                     ? percentOf(player.power, mineInfo.totalMiningPower) + " of this mine · " + compact(mineInfo.totalMiningPower) + " total"
-                    : "share loads with the mine"}
+                    : "Crew share pending"}
                 </small>
               </article>
               <article>
@@ -220,7 +217,7 @@ export function DashboardPanel({
                   <i style={{ width: Math.min(100, (player.oreBalance / Math.max(1, player.oreCapacity)) * 100) + "%" }} />
                 </div>
                 <small>
-                  progress currency · {player.oreOverflow ? oreAmount(player.oreOverflow) + " overflowed" : "storage clear"}
+                  Game currency · {player.oreOverflow ? oreAmount(player.oreOverflow) + " overflowed" : "storage clear"}
                 </small>
               </article>
               <article>
@@ -253,7 +250,6 @@ export function DashboardPanel({
       {connected && player && !active && (
         <div className="dash-paused">
           <div className="paused-copy">
-            <span className="mono-label">WHILE PAUSED</span>
             <h3>No ORE, no rewards, no discoveries.</h3>
             <p>
               Activating covers the next {WINDOW_HOURS} hours and your crew keeps working while you

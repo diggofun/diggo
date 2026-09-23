@@ -18,7 +18,6 @@ import {
   Gauge,
   Gem,
   Hammer,
-  HardHat,
   LockKeyhole,
   Minus,
   Pickaxe,
@@ -26,7 +25,6 @@ import {
   Radio,
   ShieldCheck,
   TrendingUp,
-  Users,
 } from "lucide-react";
 import type { MineInfo, PlayerProfile, TokenSummary } from "../../shared/types";
 import { GAMEPLAY_DEFAULTS } from "../../shared/economics";
@@ -227,7 +225,6 @@ export function ExploreBoard({ tokens, limit, onLaunch }: { tokens: TokenSummary
     <section className="discover page-shell" id="explore" aria-labelledby="explore-title">
       <div className="section-heading">
         <div>
-          <div className="eyebrow"><TrendingUp size={14} /> Mine board</div>
           <h2 id="explore-title">FIND YOUR<br />NEXT MINE.</h2>
         </div>
         {tokens.length > 1 && (
@@ -256,8 +253,7 @@ export function ExploreBoard({ tokens, limit, onLaunch }: { tokens: TokenSummary
           title="No mines to explore yet"
           action={<button className="btn btn-primary" onClick={onLaunch}>Launch a coin <Plus size={17} /></button>}
         >
-          Every coin launched through the protocol shows up here with its live price, unmined reserve
-          and network power — straight from the chain, never seeded.
+          Launched coins appear here with their live price and network power.
         </EmptyState>
       )}
     </section>
@@ -311,8 +307,8 @@ function TokenCard({ token }: { token: TokenSummary }) {
           <div className="progress is-curve" aria-hidden="true"><i style={{ width: percent(curve.progress) }} /></div>
           <p className="card-curve-line">
             {curve.open
-              ? compact(curve.mined) + " of " + compact(curve.cap) + " $" + token.symbol + " mined from the curve, which moves the price like a buy"
-              : compact(curve.mined) + " of " + compact(curve.cap) + " $" + token.symbol + " mined — the curve cap is spent, so blocks pay nothing until graduation"}
+              ? compact(curve.mined) + " of " + compact(curve.cap) + " $" + token.symbol + " mined from the curve"
+              : compact(curve.mined) + " of " + compact(curve.cap) + " $" + token.symbol + " mined · cap spent"}
           </p>
         </>
       ) : (
@@ -326,9 +322,6 @@ function TokenCard({ token }: { token: TokenSummary }) {
       )}
       <div className="card-foot">
         <span><Gauge size={13} /> {compact(token.networkPower)} power</span>
-        <span className={"badge " + (onCurve ? "badge-curve" : "badge-reserve")}>
-          <i aria-hidden="true" /> {onCurve ? "Curve emission" : "Reserve emission"}
-        </span>
         <span className="card-cta" aria-hidden="true">Mine <ChevronRight size={14} /></span>
       </div>
     </a>
@@ -379,12 +372,6 @@ export function SelectedMine({
     <section className="selected-mine page-shell" id="mines">
       <div className="selected-heading">
         <div>
-          <div className="selected-flags">
-            <span className="mono-label">SELECTED MINE // ${token.symbol}</span>
-            <span className={"badge " + (onCurve ? "badge-curve" : "badge-reserve")}>
-              <i aria-hidden="true" /> {onCurve ? "Curve emission" : "Reserve emission"}
-            </span>
-          </div>
           <h1 className="selected-title">{token.name}</h1>
         </div>
         <div className="selected-heading-actions">
@@ -417,11 +404,7 @@ export function SelectedMine({
           <Gauge />
           <span>Network power</span>
           <strong>{networkPower === null ? "—" : compact(networkPower)}</strong>
-          <small>
-            {networkPower === null
-              ? "not reported yet — opening the mine's own figure"
-              : "total crew power on this mine"}
-          </small>
+          {networkPower !== null && <small>total on this mine</small>}
         </div>
         <div className="metric-panel">
           <Clock3 />
@@ -429,12 +412,16 @@ export function SelectedMine({
           <strong className={emission.onCurve ? "is-phrase" : undefined}>{emission.value}</strong>
           <small>{emission.detail}</small>
         </div>
-        <div className="metric-panel"><Users /><span>Custody</span><strong>NON-CUSTODIAL</strong><small>only the LP is program-controlled</small></div>
+        <div className="metric-panel">
+          <LockKeyhole />
+          <span>Wallet custody</span>
+          <strong>YOU KEEP CONTROL</strong>
+          <small>Your wallet signs; Diggo never holds funds. Trading liquidity is program-controlled.</small>
+        </div>
       </div>
       {hasCurveBudget && (
         <div className="selected-curve">
           <div className="selected-curve-head">
-            <span className="mono-label">CURVE MINING // PRE-GRADUATION</span>
             <span>{percent(curve.progress)} of the launch cap mined</span>
           </div>
           <div
@@ -455,10 +442,8 @@ export function SelectedMine({
             </div>
           </div>
           <p>
-            Mining is paid out of the curve's own token inventory, not the Mining Reserve, so every
-            block moves the price the same way a buy does. Mining adds no SOL: before graduation a
-            seller can only take out what buyers have put into the curve, which is the sell capacity
-            above.
+            Mining before graduation spends curve inventory, pushing the bonding-curve price like a
+            buy, and adds no SOL. Sells are limited to the SOL buyers have contributed.
           </p>
         </div>
       )}
@@ -472,10 +457,9 @@ export function HowItWorks() {
       <div className="page-shell">
         <div className="section-heading light">
           <div>
-            <div className="eyebrow"><HardHat size={14} /> The core loop</div>
             <h2>ACTIVATE. DIG.<br />UPGRADE.</h2>
           </div>
-          <p>No magic yield. Each mine has a finite, transparent reserve shared by crew Mining Power, and your crew only grows by playing.</p>
+          <p>No guaranteed yield. Each mine has a finite, transparent reserve shared by crew Mining Power.</p>
         </div>
         <div className="steps">
           <article><b>01</b><span className="step-icon"><Pickaxe /></span><h3>Activate your crew</h3><p>One signature opens a 24h shift. Your crew keeps digging while you are offline.</p></article>
@@ -492,7 +476,7 @@ export function FinalCta({ onLaunch }: { onLaunch(): void }) {
     <section className="final-cta">
       <div className="page-shell">
         <span className="huge-pick" aria-hidden="true"><Pickaxe /></span>
-        <div><span>THE NEXT MEME IS UNDERGROUND.</span><h2>START DIGGING.</h2></div>
+        <div><h2>START DIGGING.</h2></div>
         <button className="btn btn-dark btn-lg" onClick={onLaunch}>Launch your coin <ArrowUpRight size={18} /></button>
       </div>
     </section>
