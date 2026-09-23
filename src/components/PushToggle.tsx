@@ -8,12 +8,24 @@
  *
  * Turning it off is the same click: src/push.ts deletes the server row, then drops the browser
  * subscription, so nothing is left receiving alerts.
+ *
+ * One switch, two presentations. "section" is the standalone block on the page; "inline" is the
+ * compact row the notification bell renders inside its dropdown, so the opt-in sits next to the
+ * alerts it controls. Both read and write the same state through src/push.ts, and both stay silent
+ * about the wallet, the rewards and the ORE balance.
  */
 import { useCallback, useEffect, useState, type CSSProperties, type ReactElement } from "react";
 import { Bell, BellOff } from "lucide-react";
-import { disablePush, enablePush, pushState, watchSubscriptionRotations, type PushState } from "../push";
+import { alertsAvailable, disablePush, enablePush, pushState, watchSubscriptionRotations, type PushState } from "../push";
 
 type Status = PushState | "checking";
+
+export interface PushToggleProps {
+  /**
+   * "section" renders the standalone page block, "inline" the compact row inside the bell dropdown.
+   */
+  variant?: "section" | "inline";
+}
 
 const SECTION_STYLE: CSSProperties = {
   display: "flex",
@@ -41,10 +53,49 @@ const ERROR_STYLE: CSSProperties = {
   fontWeight: 700,
 };
 
-export function PushToggle(): ReactElement | null {
+/** Pinned to the bottom of the bell dropdown so the opt-in stays reachable under a long list. */
+const INLINE_ROW_STYLE: CSSProperties = {
+  position: "sticky",
+  bottom: 0,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "var(--space-3)",
+  padding: "var(--space-4)",
+  background: "var(--paper)",
+  borderTop: "1px solid var(--ink)",
+};
+
+const INLINE_TEXT_STYLE: CSSProperties = {
+  display: "grid",
+  gap: "2px",
+  minWidth: 0,
+};
+
+const INLINE_TITLE_STYLE: CSSProperties = {
+  font: "900 10px monospace",
+  textTransform: "uppercase",
+  letterSpacing: ".08em",
+};
+
+const INLINE_NOTE_STYLE: CSSProperties = {
+  color: "var(--muted)",
+  font: "700 9px monospace",
+  lineHeight: 1.5,
+};
+
+const INLINE_ERROR_STYLE: CSSProperties = {
+  color: "var(--danger)",
+  font: "700 9px monospace",
+};
+
+export function PushToggle({ variant = "section" }: PushToggleProps): ReactElement | null {
   const [status, setStatus] = useState<Status>("checking");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  // null until known: a failed probe leaves the switch usable and lets the click report the reason.
+  const [serverConfigured, setServerConfigured] = useState<boolean | null>(null);
+  const inline = variant === "inline";
 
   useEffect(() => {
     let active = true;
@@ -54,6 +105,13 @@ export function PushToggle(): ReactElement | null {
       })
       .catch(() => {
         if (active) setStatus("off");
+      });
+    void alertsAvailable()
+      .then((key) => {
+        if (active) setServerConfigured(key.enabled);
+      })
+      .catch(() => {
+        if (active) setServerConfigured(null);
       });
     return () => {
       active = false;
@@ -73,6 +131,9 @@ export function PushToggle(): ReactElement | null {
   );
 
   const on = status === "on";
+  // A device that is already subscribed can always be switched off, even if the server has since
+  // lost its VAPID keys - otherwise the player would be stuck with alerts they cannot stop.
+  const blocked = status === "unsupported" || status === "blocked" || (serverConfigured === false && !on);
 
   const toggle = useCallback(async () => {
     setError("");
@@ -90,8 +151,56 @@ export function PushToggle(): ReactElement | null {
     }
   }, [on]);
 
-  // Nothing to offer when the browser cannot deliver a push at all.
-  if (status === "checking" || status === "unsupported") return null;
+  if (status === "checking") return null;
+
+  /**
+   * Why the switch is where it is. The compact wording is for the bell dropdown; the section keeps
+   * the fuller sentence, including the part that says what turning alerts on does not affect.
+   */
+  function statusNote(compact: boolean): string {
+    if (status === "unsupported") {
+      return compact ? "This browser cannot show push alerts." : "This browser cannot show push alerts.";
+    }
+    if (status === "blocked") return "Your browser is blocking notifications for this site.";
+    if (serverConfigured === false) return "Push alerts are not configured on the server yet.";
+    if (compact) {
+      return on
+        ? "On for this browser. A short alert when a mining window is closing or a discovery is waiting."
+        : "Off by default. Turn on for a short alert when your mining window is closing or a discovery is waiting.";
+    }
+    return on
+      ? "On for this browser: a short alert when a mining window is about to close or a discovery is waiting. Turn it off at any time."
+      : "Off by default. Turning this on lets Diggo send one short alert when your mining window is closing or a discovery is waiting. Your wallet, rewards and ORE are not affected either way.";
+  }
+
+  if (inline) {
+    return (
+      <div className="notifications-push" style={INLINE_ROW_STYLE}>
+        <div style={INLINE_TEXT_STYLE}>
+          <strong style={INLINE_TITLE_STYLE}>Push alerts</strong>
+          <span style={INLINE_NOTE_STYLE}>{statusNote(true)}</span>
+          {error.length > 0 && (
+            <span role="alert" style={INLINE_ERROR_STYLE}>
+              {error}
+            </span>
+          )}
+        </div>
+        <button
+          type="button"
+          className={on ? "btn btn-ghost" : "btn btn-primary"}
+          aria-pressed={on}
+          disabled={pending || blocked}
+          onClick={() => void toggle()}
+        >
+          {on ? <BellOff size={13} /> : <Bell size={13} />}
+          {pending ? "Working..." : on ? "Off" : "On"}
+        </button>
+      </div>
+    );
+  }
+
+  // Nothing to offer as a page section when the browser cannot deliver a push at all.
+  if (status === "unsupported") return null;
 
   return (
     <section id="alerts" className="page-shell push-toggle" style={SECTION_STYLE} aria-labelledby="push-toggle-title">
@@ -99,11 +208,7 @@ export function PushToggle(): ReactElement | null {
         <h2 id="push-toggle-title" style={{ margin: "0 0 var(--space-2)", fontSize: "var(--text-lg)" }}>
           Alerts on this device
         </h2>
-        <p style={COPY_STYLE}>
-          {on
-            ? "On for this browser: a short alert when a mining window is about to close or a discovery is waiting. Turn it off at any time."
-            : "Off by default. Turning this on lets Diggo send one short alert when your mining window is closing or a discovery is waiting. Your wallet, rewards and ORE are not affected either way."}
-        </p>
+        <p style={COPY_STYLE}>{statusNote(false)}</p>
         {error.length > 0 && (
           <p role="alert" style={ERROR_STYLE}>
             {error}
@@ -114,7 +219,7 @@ export function PushToggle(): ReactElement | null {
         type="button"
         className={on ? "btn btn-ghost" : "btn btn-primary"}
         aria-pressed={on}
-        disabled={pending}
+        disabled={pending || blocked}
         onClick={() => void toggle()}
       >
         {on ? <BellOff size={16} /> : <Bell size={16} />}

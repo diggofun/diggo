@@ -8,14 +8,22 @@
  *
  * Only accounts in the NORMAL reward state are swept: an account under review or held must not be
  * nudged to chase rewards (spec 53, 63).
+ *
+ * Generation is server-driven: nothing on the client decides that a notification exists. The
+ * scheduled trigger (worker/index.ts) calls runSocialCron, which sweeps every account that has a
+ * notification due and not yet stored - whether or not that player has the app open. GET
+ * /api/notifications also generates on read, so a player who opens the bell between two cron ticks
+ * still sees what is due, but the client never invents a row.
  */
 import type { TokenStatus } from "../shared/types";
 import {
   NOTIFICATION_THRESHOLDS,
+  RARE_RARITIES,
   computeNotifications,
   type GeneratedNotification,
   type NotificationKind,
 } from "../shared/social";
+import { DIGGO_CONFIG } from "../shared/config";
 import { sessionWallet } from "./auth";
 import { recomputeSeasonalPoints, syncAchievements, syncCosmeticUnlocks } from "./cosmetics";
 import type { RuntimeEnv } from "./env";
@@ -25,8 +33,13 @@ import { deliverNotifications, deliveryConfigured } from "./push";
 
 const NOTIFICATION_LIST_LIMIT = 50;
 const READ_BATCH_LIMIT = 100;
+/**
+ * How many accounts one sweep generates for. Every candidate costs a handful of D1 statements, so
+ * the sweep stays inside the Worker's subrequest budget the way worker/reconcile.ts bounds its own
+ * scan. The candidate query below only returns accounts that still owe a notification, so a backlog
+ * larger than this drains over consecutive cron ticks instead of starving anyone.
+ */
 const SWEEP_WALLET_LIMIT = 200;
-const SWEEP_ACTIVE_WINDOW_SECONDS = 30 * 86_400;
 /** Most alerts one generation pass hands to a push channel; anything older waits for the next one. */
 const MAX_DELIVERY_BATCH = 5;
 
@@ -103,6 +116,22 @@ export interface NotificationInsertResult {
   readonly inserted: number;
 }
 
+/**
+ * The dedupe key as it is stored: namespaced by wallet.
+ *
+ * shared/social.ts keys a notification by the event it describes - `MINE_EXPIRES_3H:<expiresAt>`,
+ * `TOKEN_ALMOST_FULLY_MINED:<mint>`, `STREAK_AT_RISK:<deadline>`. None of those values is unique
+ * across players: two wallets can be in the same mine, and two wallets can activate in the same
+ * second. notifications.dedupe_key is UNIQUE across the whole table, so storing the bare key would
+ * let whichever account the sweep reached first claim the row and silently deny the very same
+ * notification to every other player it was due for. Prefixing the wallet keeps the UNIQUE index as
+ * the dedupe mechanism while making each event per-player, which is what 'every relevant player
+ * gets their notification' actually requires.
+ */
+export function storedDedupeKey(wallet: string, dedupeKey: string): string {
+  return wallet + ":" + dedupeKey;
+}
+
 /** Generates and stores the notifications due for one wallet. Safe to call on every request. */
 export async function generateNotifications(
   env: RuntimeEnv,
@@ -117,7 +146,13 @@ export async function generateNotifications(
     generated.map((entry) =>
       env.DB.prepare(
         "INSERT OR IGNORE INTO notifications (wallet, kind, payload, dedupe_key, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-      ).bind(wallet, entry.kind, JSON.stringify(entry.payload), entry.dedupeKey, entry.createdAt),
+      ).bind(
+        wallet,
+        entry.kind,
+        JSON.stringify(entry.payload),
+        storedDedupeKey(wallet, entry.dedupeKey),
+        entry.createdAt,
+      ),
     ),
   );
   const inserted = results.reduce((total, result) => total + (result.meta?.changes ?? 0), 0);
@@ -148,7 +183,7 @@ async function deliverGenerated(
       " AND NOT EXISTS (SELECT 1 FROM push_deliveries d WHERE d.notification_id = n.id)" +
       " ORDER BY n.id DESC LIMIT ?" + (generated.length + 2),
   )
-    .bind(wallet, ...generated.map((entry) => entry.dedupeKey), MAX_DELIVERY_BATCH)
+    .bind(wallet, ...generated.map((entry) => storedDedupeKey(wallet, entry.dedupeKey)), MAX_DELIVERY_BATCH)
     .all<DeliveryRow>();
   if (rows.results.length === 0) return;
   try {
@@ -248,14 +283,126 @@ export async function markNotificationsRead(request: Request, env: RuntimeEnv): 
   return json({ updated: results.reduce((total, result) => total + (result.meta?.changes ?? 0), 0), unread: listed.unread });
 }
 
-/** Recently active NORMAL accounts. Restricted states are never swept (spec 53, 63). */
+/**
+ * The accounts a sweep still owes a notification to, most urgent first.
+ *
+ * One OR-branch per notification kind, each asking both halves of the question shared/social.ts asks
+ * before it emits: is the condition true, and is that row not stored yet? The second half is what
+ * makes this a work queue rather than a filter. Selecting on recency alone re-selects the same
+ * already-notified accounts on every tick, so the LIMIT starves everyone behind them; selecting on
+ * "due and not yet stored" makes the candidate set exactly the outstanding work, and it drains as
+ * those rows are written. A backlog larger than the limit is therefore picked up by the following
+ * ticks rather than dropped.
+ *
+ * The predicates mirror computeNotifications and are deliberately a small superset of it: the
+ * reserve bands are widened by one basis point because computeNotifications rounds where SQL
+ * truncates, and the streak window's lower bound is exact. The pure function remains the only
+ * authority on what is emitted, so a candidate that turns out not to be due simply generates
+ * nothing.
+ *
+ * Restricted states are never swept (spec 53, 63).
+ */
+export function dueCandidatesQuery(now: number, limit: number): { sql: string; params: (number | string)[] } {
+  const params: (number | string)[] = [];
+  const bind = (value: number | string): string => {
+    params.push(value);
+    return "?" + params.length;
+  };
+  const streakWindow = DIGGO_CONFIG.streak.activationSeconds + DIGGO_CONFIG.streak.graceSeconds;
+  const almostBps = NOTIFICATION_THRESHOLDS.tokenAlmostFullyMinedBps + 1;
+  const leadBps = NOTIFICATION_THRESHOLDS.rewardReductionLeadBps;
+  // Written as an ordered list of fragments so that the bind() calls happen in exactly the order the
+  // placeholders appear in the finished statement.
+  const parts: string[] = [];
+
+  parts.push("SELECT p.wallet FROM players p WHERE p.risk_state = 'NORMAL' AND (");
+
+  // MINE_EXPIRES_3H / MINE_EXPIRED: the activation window closes within three hours, or closed
+  // inside the last week and has not been reported yet.
+  parts.push(
+    " (p.activation_expires_at IS NOT NULL" +
+      " AND p.activation_expires_at BETWEEN " + bind(now - NOTIFICATION_THRESHOLDS.expiredFreshnessSeconds) +
+      " AND " + bind(now + NOTIFICATION_THRESHOLDS.mineExpiringSeconds) +
+      " AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.wallet = p.wallet AND n.dedupe_key IN (" +
+      "p.wallet || ':MINE_EXPIRES_3H:' || p.activation_expires_at," +
+      " p.wallet || ':MINE_EXPIRED:' || p.activation_expires_at)))",
+  );
+
+  // STREAK_AT_RISK: the streak deadline falls inside the warning window. deadline is
+  // last_activation_at + activationSeconds + graceSeconds (shared/streak.ts).
+  parts.push(
+    " OR (p.streak >= " + bind(NOTIFICATION_THRESHOLDS.minStreakForRisk) +
+      " AND p.last_activation_at IS NOT NULL" +
+      " AND p.last_activation_at > " + bind(now - streakWindow) +
+      " AND p.last_activation_at <= " + bind(now - streakWindow + NOTIFICATION_THRESHOLDS.streakAtRiskSeconds) +
+      " AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.wallet = p.wallet" +
+      " AND n.dedupe_key = p.wallet || ':STREAK_AT_RISK:' || (p.last_activation_at + " + bind(streakWindow) + ")))",
+  );
+
+  // STREAK_7_DAY: the milestone is reached and has not been announced.
+  parts.push(
+    " OR (p.streak = " + bind(NOTIFICATION_THRESHOLDS.sevenDayStreak) +
+      " AND p.last_activation_at IS NOT NULL" +
+      " AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.wallet = p.wallet" +
+      " AND n.dedupe_key = p.wallet || ':STREAK_7_DAY:' || p.last_activation_at))",
+  );
+
+  // RARE_DISCOVERY_FOUND: one of the newest rare discoveries inside the freshness window is still
+  // unannounced. The inner select repeats the same newest-first cap computeNotifications applies, so
+  // a player with more rare finds than the cap stops being a candidate once the newest ones are
+  // stored rather than being re-selected forever.
+  parts.push(
+    " OR EXISTS (SELECT 1 FROM discoveries d WHERE d.wallet = p.wallet AND d.id IN (" +
+      "SELECT d2.id FROM discoveries d2 WHERE d2.wallet = p.wallet" +
+      " AND d2.created_at >= " + bind(now - NOTIFICATION_THRESHOLDS.rareDiscoveryWindowSeconds) +
+      " AND d2.created_at <= " + bind(now) +
+      " AND d2.rarity IN (" + RARE_RARITIES.map((rarity) => bind(rarity)).join(", ") + ")" +
+      " ORDER BY d2.created_at DESC, d2.id ASC LIMIT " + bind(NOTIFICATION_THRESHOLDS.maxRareDiscoveryNotifications) +
+      ") AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.wallet = p.wallet" +
+      " AND n.dedupe_key = p.wallet || ':RARE_DISCOVERY_FOUND:' || d.id))",
+  );
+
+  // TOKEN_ALMOST_FULLY_MINED and REWARD_REDUCTION_APPROACHING: the active mine is inside one of the
+  // reward bands. Each band is the boundary plus the lead distance, so at most one can match, and
+  // the boundary is carried in the dedupe key exactly as computeNotifications writes it.
+  const bands = [
+    " (t.reserve_remaining * 10000 / t.reserve_total <= " + bind(almostBps) +
+      " AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.wallet = p.wallet" +
+      " AND n.dedupe_key = p.wallet || ':TOKEN_ALMOST_FULLY_MINED:' || p.active_mint))",
+    ...NOTIFICATION_THRESHOLDS.rewardReductionBoundariesBps
+      .filter((boundary) => boundary > 0)
+      .map((boundary) =>
+        " (t.reserve_remaining * 10000 / t.reserve_total >= " + bind(boundary) +
+        " AND t.reserve_remaining * 10000 / t.reserve_total <= " + bind(boundary + leadBps + 1) +
+        " AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.wallet = p.wallet" +
+        " AND n.dedupe_key = p.wallet || ':REWARD_REDUCTION_APPROACHING:' || p.active_mint || ':' || " +
+        bind(boundary) + "))",
+      ),
+  ];
+  parts.push(
+    " OR (p.active_mint IS NOT NULL AND EXISTS (SELECT 1 FROM tokens t" +
+      " WHERE t.mint = p.active_mint AND t.reserve_total > 0 AND (" + bands.join(" OR ") + ")))",
+  );
+
+  // Closes the risk_state group opened above.
+  parts.push(")");
+
+  // Soonest closing window first: an expiry or streak deadline cannot be regenerated once it has
+  // passed, while a milestone, discovery or reserve band stays available on later ticks.
+  parts.push(
+    " ORDER BY MIN(COALESCE(p.activation_expires_at, 9223372036854775807)," +
+      " COALESCE(p.last_activation_at + " + bind(streakWindow) + ", 9223372036854775807)) ASC," +
+      " COALESCE(p.last_activation_at, p.created_at) DESC" +
+      " LIMIT " + bind(limit),
+  );
+
+  return { sql: parts.join(""), params };
+}
+
+/** The NORMAL accounts a sweep still owes a notification to. */
 async function sweepCandidates(env: RuntimeEnv, now: number, limit: number): Promise<string[]> {
-  const rows = await env.DB.prepare(
-    "SELECT wallet FROM players WHERE risk_state = 'NORMAL' AND COALESCE(last_activation_at, created_at) >= ?1" +
-      " ORDER BY COALESCE(last_activation_at, created_at) DESC LIMIT ?2",
-  )
-    .bind(now - SWEEP_ACTIVE_WINDOW_SECONDS, limit)
-    .all<{ wallet: string }>();
+  const { sql, params } = dueCandidatesQuery(now, limit);
+  const rows = await env.DB.prepare(sql).bind(...params).all<{ wallet: string }>();
   return rows.results.map((row) => row.wallet);
 }
 
