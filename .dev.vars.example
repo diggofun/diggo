@@ -26,6 +26,22 @@ ADMIN_WALLETS=
 # Uncomment both for local play: a one-minute window at a 100% chance makes every activation roll.
 #DISCOVERY_WINDOW_SECONDS=60
 #DISCOVERY_ROLL_CHANCE_BPS=10000
+# Commit-reveal RNG epoch length in seconds, bounded to [3600, 2592000]. Unset means a day, which
+# is the production schedule; set it to 3600 locally to watch a commitment roll over and reveal.
+#DISCOVERY_EPOCH_SECONDS=3600
+
+# --- Price oracle ------------------------------------------------------------------------------
+# Every one of these has a working default (the public Jupiter and Pyth endpoints and the published
+# SOL/USD feed id), so an empty file still reads a real price. Listed here to make the knobs
+# discoverable; see docs/SECURITY.md "Price oracle" for the policy they configure.
+#JUPITER_PRICE_URL=
+#JUPITER_PRICE_V2_URL=
+#PYTH_HERMES_URL=
+#PYTH_SOL_USD_FEED_ID=
+# Raise to 1 to require at least one external source before a price counts as corroborated.
+#ORACLE_MIN_EXTERNAL_SOURCES=0
+# Pins SOL/USD instead of reading an oracle. Display convenience only, never a settlement input.
+#ORACLE_SOL_USD_OVERRIDE=150
 
 # --- Optional integrations ---------------------------------------------------------------------
 # Devnet RPC. A Helius endpoint raises the rate limit; unset falls back to the public devnet RPC.
@@ -35,7 +51,41 @@ ADMIN_WALLETS=
 #DIGGO_KEEPER_SECRET_KEY=
 # Turnstile secret. On localhost, wrangler dev plus the dev site key accept the token "dev-bypass".
 #TURNSTILE_SECRET=
+# Hostnames a Turnstile token is allowed to have been solved on, comma-separated. The request's own
+# host is always allowed, so this is only needed for the extra hosts one deployment answers on
+# (apex, www, a preview host). A token solved on somebody else's page is refused whatever this says.
+#TURNSTILE_ALLOWED_HOSTNAMES=diggo.fun,www.diggo.fun
+# Actions this deployment expects on its Turnstile widgets, comma-separated, lower-case. Leave it
+# unset if the widgets declare no action: with the list empty every action is accepted, and with it
+# set a token carrying an action that is not in the list is refused.
+#TURNSTILE_ACTIONS=
 # Helius webhook authorization header, compared in constant time.
 #HELIUS_WEBHOOK_AUTH=
 # Supabase service role key, for private token-artwork uploads.
 #SUPABASE_SERVICE_ROLE_KEY=
+
+# --- Operations: alerts and error reporting (worker/telemetry.ts) ------------------------------
+# Discord/Slack-compatible incoming webhook. Unset means fired alerts stay in the structured log
+# and the D1 counters only - the game runs either way.
+#ALERT_WEBHOOK_URL=
+# Seconds an identical alert name stays suppressed after a successful delivery (default 1800).
+#ALERT_DEDUPE_SECONDS=1800
+# Sentry DSN, sent as a plain envelope over fetch (no SDK). Unset disables reporting entirely.
+#SENTRY_DSN=
+# Release tag sent with Sentry events; falls back to the deployed Worker name.
+#SENTRY_RELEASE=
+
+# --- Web push (worker/push.ts, RFC 8291/8292) --------------------------------------------------
+# Generate once with `npx web-push generate-vapid-keys`. All three unset means the push channel
+# reports itself unavailable and the notification bell stays empty. Keep the pair stable across
+# deployments: rotating it invalidates every browser subscription already registered.
+#VAPID_PUBLIC_KEY=
+#VAPID_PRIVATE_KEY=
+#VAPID_SUBJECT=mailto:ops@diggo.fun
+
+# --- Telegram fallback channel (worker/push.ts) ------------------------------------------------
+# The token is the only required part; the username is what a player is shown when linking.
+#TELEGRAM_BOT_TOKEN=
+#TELEGRAM_BOT_USERNAME=diggo_bot
+# Authenticates Telegram's calls into /webhooks/telegram, which fail closed when unset or wrong.
+#TELEGRAM_WEBHOOK_SECRET=

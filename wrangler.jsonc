@@ -26,7 +26,20 @@
     "DIGGO_PROGRAM_ID": "48WgfSPnEPitiasXV5B3aLpeAWtUisSt6YSR6djDZebC",
     "DIGGO_TREASURY": "3YwWHow5jFCtE3vQGadPiLi83eNRwDaEmCZebuEx71PQ",
     "DIGGO_KEEPER": "G3QELLuGprfRBYxoh3P5v4ZkGFyNXGLjATsNYZx6xWu8",
-    "VANITY_SUFFIX": "diggo"
+    "VANITY_SUFFIX": "diggo",
+    // Price oracle (worker/oracle.ts, docs/SECURITY.md "Price oracle"). Every one of these has a
+    // working default - the public Jupiter and Pyth endpoints and the published SOL/USD feed id -
+    // so they are listed rather than set: an empty string is not an override, it just falls back.
+    // API keys belong in `wrangler secret put JUPITER_API_KEY` / `PYTH_API_KEY`, never here.
+    //JUPITER_PRICE_URL: "",
+    //JUPITER_PRICE_V2_URL: "",
+    //PYTH_HERMES_URL: "",
+    //PYTH_SOL_USD_FEED_ID: "",
+    //ORACLE_MIN_EXTERNAL_SOURCES: "0",
+    //ORACLE_SOL_USD_OVERRIDE: "",
+    // Commit-reveal RNG epoch length in seconds, bounded to [3600, 2592000] by RNG_EPOCH_BOUNDS.
+    // Pinned to the shipped default so the schedule is a deployment decision, not a code default.
+    "DISCOVERY_EPOCH_SECONDS": "86400"
   },
   "d1_databases": [
     {
@@ -47,6 +60,10 @@
       {
         "name": "MARKETS",
         "class_name": "TokenMarket"
+      },
+      {
+        "name": "PLAYER_LOCK",
+        "class_name": "PlayerLock"
       }
     ]
   },
@@ -54,6 +71,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["TokenMarket"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["PlayerLock"]
     }
   ],
   "queues": {
@@ -76,8 +97,153 @@
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
+  "analytics_engine_datasets": [
+    {
+      "binding": "DIGGO_METRICS",
+      "dataset": "diggo_metrics"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 500,
+        "period": 60
+      }
+    }
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
+  },
+  "env": {
+    // Staging mirrors production bindings but every resource name, dataset and rate-limit
+    // namespace is its own. Anything marked TODO(staging) still points at a placeholder id and
+    // must be replaced with the real id created by `wrangler d1 create` / `wrangler kv namespace
+    // create` before the first `npm run deploy:staging`.
+    //
+    // Named environments do not inherit bindings, vars, assets, routes, Durable Objects, queues,
+    // rate limits or Analytics Engine datasets from the top level, so each block is repeated here
+    // on purpose. Staging deliberately declares no custom-domain route: it stays on workers.dev.
+    "staging": {
+      "name": "diggo-fun-staging",
+      "compatibility_date": "2026-09-13",
+      "compatibility_flags": ["nodejs_compat"],
+      // Routes are one of the few fields a named environment DOES inherit, so this has to be
+      // cleared explicitly: without it a staging deploy would move the diggo.fun custom domain
+      // off the production Worker. Staging therefore stays on its workers.dev hostname.
+      "routes": [],
+      "assets": {
+        "directory": "./dist",
+        "binding": "ASSETS",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/api/*", "/media/*", "/webhooks/*", "/ARCHITECTURE.md"]
+      },
+      "vars": {
+        "ENVIRONMENT": "staging",
+        // Devnet only. Staging must never point at a mainnet program id or RPC.
+        "SOLANA_CLUSTER": "devnet",
+        "POSTHOG_API_KEY": "phc_rUmzX7ft4ue8iLqACMEe8NgaJphvWYVD9WtwRGfC6nQK",
+        "POSTHOG_HOST": "https://us.i.posthog.com",
+        "SUPABASE_URL": "https://mtkvvcybpasehmscueox.supabase.co",
+        "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+        "DIGGO_PROGRAM_ID": "48WgfSPnEPitiasXV5B3aLpeAWtUisSt6YSR6djDZebC",
+        "DIGGO_TREASURY": "3YwWHow5jFCtE3vQGadPiLi83eNRwDaEmCZebuEx71PQ",
+        "DIGGO_KEEPER": "G3QELLuGprfRBYxoh3P5v4ZkGFyNXGLjATsNYZx6xWu8",
+        "VANITY_SUFFIX": "diggo",
+        // Same oracle and RNG knobs as production, listed for discoverability. Staging keeps the
+        // day-long epoch so its commitment schedule matches production; only the API keys differ,
+        // and those are per-environment secrets.
+        //JUPITER_PRICE_URL: "",
+        //JUPITER_PRICE_V2_URL: "",
+        //PYTH_HERMES_URL: "",
+        //PYTH_SOL_USD_FEED_ID: "",
+        //ORACLE_MIN_EXTERNAL_SOURCES: "0",
+        //ORACLE_SOL_USD_OVERRIDE: "",
+        "DISCOVERY_EPOCH_SECONDS": "86400"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "diggo-db-staging",
+          // TODO(staging): replace with the id from `wrangler d1 create diggo-db-staging`.
+          "database_id": "00000000-0000-0000-0000-000000000000",
+          "migrations_dir": "./migrations"
+        }
+      ],
+      "kv_namespaces": [
+        {
+          "binding": "TOKEN_CACHE",
+          // TODO(staging): replace with the id from `wrangler kv namespace create TOKEN_CACHE --env staging`.
+          "id": "00000000000000000000000000000000"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "MARKETS",
+            "class_name": "TokenMarket"
+          },
+          {
+            "name": "PLAYER_LOCK",
+            "class_name": "PlayerLock"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1",
+          "new_sqlite_classes": ["TokenMarket"]
+        },
+        {
+          "tag": "v2",
+          "new_sqlite_classes": ["PlayerLock"]
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "INDEXING_QUEUE",
+            // TODO(staging): `wrangler queues create diggo-indexing-staging` (and the -dlq queue).
+            "queue": "diggo-indexing-staging"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "diggo-indexing-staging",
+            "max_batch_size": 20,
+            "max_batch_timeout": 5,
+            "max_retries": 3,
+            "dead_letter_queue": "diggo-indexing-staging-dlq"
+          }
+        ]
+      },
+      "triggers": {
+        // Staging runs the same five-minute sweep so cron paths are exercised before production.
+        "crons": ["*/5 * * * *"]
+      },
+      "analytics_engine_datasets": [
+        {
+          "binding": "DIGGO_METRICS",
+          "dataset": "diggo_metrics_staging"
+        }
+      ],
+      "ratelimits": [
+        {
+          "name": "RATE_LIMITER",
+          // Distinct namespace id so staging traffic can never consume production budget.
+          "namespace_id": "2001",
+          "simple": {
+            "limit": 500,
+            "period": 60
+          }
+        }
+      ],
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1
+      }
+    }
   }
 }

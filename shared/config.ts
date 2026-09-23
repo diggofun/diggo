@@ -105,6 +105,34 @@ export interface MaturityRampPoint {
   bps: number;
 }
 
+/**
+ * Price-oracle bounds (worker/oracle.ts): how long a quote may be cached, how stale an observation
+ * may be before it stops counting, and how much external corroboration a price needs.
+ */
+export interface OracleConfig {
+  quoteTtlSeconds: number;
+  solTtlSeconds: number;
+  maxStalenessSeconds: number;
+  freshSeconds: number;
+  minimumConfidence: number;
+  minimumExternalSources: number;
+  externalRefreshSeconds: number;
+  fetchTimeoutMs: number;
+}
+
+/**
+ * Generic ramp lookup for maturity-style curves (spec 40, 42, 58): the first band whose
+ * `upToDay` is greater than the age wins, so a ramp always ends in an
+ * `upToDay: Number.POSITIVE_INFINITY` band.
+ */
+export function rampBps(ramp: readonly MaturityRampPoint[], days: number): number {
+  if (!Number.isFinite(days) || days < 0 || ramp.length === 0) return 0;
+  for (const point of ramp) {
+    if (days < point.upToDay) return point.bps;
+  }
+  return ramp[ramp.length - 1].bps;
+}
+
 export interface OreConfig {
   baseOrePerActiveHour: number;
   activationBonusOre: number;
@@ -164,12 +192,95 @@ export interface CrewConfig {
 }
 
 export interface EconomyConfig {
+  /** How a mine's block reward is scheduled down over its life (spec 21). */
+  emission: EmissionConfig;
   rewardReductionBps: number;
   minimumReducedReward: number;
   /** Fixed-point scale for the cumulative reward index (spec 17). */
   rewardIndexScale: number;
   /** Block rewards are capped at the remaining reserve (spec 19, 20). */
   enforceReserveCap: boolean;
+}
+
+/**
+ * How a mine's block reward is scheduled (spec 20, 21).
+ *
+ * `reserve_runway` (the default) derives each epoch's block reward from the reserve that is still
+ * inside the mine: the remaining reserve is paid out evenly over the blocks left of the configured
+ * target lifetime, never above the reward declared at launch and never above the epoch before it,
+ * with a floor that keeps paying until the reserve is empty. That is what makes the whole Mining
+ * Reserve distributable whatever the launch parameters are - a fixed geometric decay reaches a
+ * hard cap (epochs x epoch length of reward) and then sits on locked tokens forever.
+ *
+ * `epoch_reduction` is the legacy fixed-percentage step (spec 21's 10,000 -> 7,500 -> 5,625
+ * example), kept for mines that want a pure decay curve. It cannot promise that a reserve is fully
+ * distributable, which is why it is not the default.
+ */
+export type EmissionScheduleKind = "reserve_runway" | "epoch_reduction";
+
+export interface EmissionConfig {
+  schedule: EmissionScheduleKind;
+  /** Days over which one mine's whole Mining Reserve is meant to be distributed. */
+  targetLifetimeDays: number;
+  /**
+   * Floor on the scheduled block reward, applied until the reserve is exhausted. It is what stops
+   * the schedule from decaying towards zero and never reaching FULLY_MINED.
+   */
+  minimumRewardPerBlock: number;
+  /** A scheduled reward never exceeds the reward the mine declared at launch. */
+  /**
+   * The scheduled reward never rises from one epoch to the next. A mine that sat idle longer than
+   * planned therefore stretches its runway instead of paying a catch-up burst; either way the
+   * tokens stay in the reserve and the floor keeps them distributable (spec 21).
+   */
+  nonIncreasing: boolean;
+}
+
+export interface ClusterDampingConfig {
+  /** Wallets one device may hold before damping starts (a household is not a farm). */
+  deviceAllowance: number;
+  /** Share of the previous factor each further wallet on the same device keeps, in bps. */
+  deviceDecayBps: number;
+  /** Wallets one network environment may hold before damping starts. */
+  networkAllowance: number;
+  /** Share of the previous factor each further wallet on the same network keeps, in bps. */
+  networkDecayBps: number;
+  /**
+   * Floor on the network factor alone, independent of the combined floor. A big honest network - a
+   * dorm, an office, a carrier-grade NAT - is slowed, never crippled, by an address cluster that no
+   * single person controls (spec 48, 51).
+   */
+  minimumNetworkFactorBps: number;
+  /** Floor on the combined factor: a cluster is throttled hard but never zeroed (spec 63). */
+  minimumFactorBps: number;
+}
+
+/**
+ * How much of its crew's Mining Power an account actually brings to a block (spec 40, 53, 58, 61,
+ * 64): the account-maturity ramp, the device/network cluster damping read from the existing
+ * cluster signals, and a per-account ceiling on one block's eligible power.
+ *
+ * All three are applied when a position is armed, which is the only moment a cumulative reward
+ * index can apply them: the armed power *is* the block share.
+ */
+export interface EffectivePowerConfig {
+  maturityRamp: readonly MaturityRampPoint[];
+  /**
+   * Largest share of one block's eligible power one *cluster* may hold, in bps (0 disables it),
+   * measured against the power the mine carries outside that cluster (shared/crew.ts
+   * effectiveMiningPower). It is a cluster ceiling rather than a per-account one so that splitting
+   * a farm across more wallets cannot compound it.
+   */
+  perAccountBlockShareCapBps: number;
+  /**
+   * Power the share cap never cuts a cluster below, before it is divided over the cluster's
+   * wallets. It sits above the strongest reachable crew, so the ceiling is inert for one account
+   * however strong that account is - a small or brand-new mine is left alone, and only a cluster is
+   * ever bounded (spec 63). `shared/crew.test.ts` pins that relationship, so moving the crew curve
+   * cannot silently turn this floor into a per-crew ceiling.
+   */
+  shareCapFloorPower: number;
+  cluster: ClusterDampingConfig;
 }
 
 export interface DiscoveryConfig {
@@ -192,6 +303,19 @@ export interface DiscoveryConfig {
   perRequestCapUsd: number;
   activityWindowSeconds: number;
   cappedRarityByBudget: boolean;
+  /**
+   * Share of each discovery cap, in basis points, that grants parked in HELD (under review, not yet
+   * released) may reserve. Held value is real value the backend has promised, so it has to count -
+   * but without this ceiling a held farm could commit the whole daily budget and starve ordinary
+   * players of it (spec 45, 64).
+   */
+  heldBudgetShareBps: number;
+  /**
+   * How long a HELD discovery keeps its share of the budget without being cleared. On expiry the
+   * grant is released: it stops counting against every cap and is marked REJECTED, so an unresolved
+   * review cannot hold a budget slot (or the reward) open indefinitely (spec 53, 64).
+   */
+  heldGrantReviewSeconds: number;
   /**
    * Length of one discovery opportunity window in seconds (spec 56). Bounded by
    * DISCOVERY_TUNABLE_BOUNDS.windowSeconds; override with DISCOVERY_WINDOW_SECONDS.
@@ -297,10 +421,13 @@ export interface RiskConfig {
 
 export interface DiggoConfig {
   time: TimeConfig;
+  /** Price-oracle freshness, cache and confidence bounds (worker/oracle.ts). */
+  oracle: OracleConfig;
   streak: StreakConfig;
   ore: OreConfig;
   crew: CrewConfig;
   economy: EconomyConfig;
+  effectivePower: EffectivePowerConfig;
   discovery: DiscoveryConfig;
   rarity: RarityConfig;
   risk: RiskConfig;
@@ -312,6 +439,26 @@ export const DIGGO_CONFIG_DEFAULTS: DiggoConfig = {
     secondsPerHour: 3_600,
     secondsPerDay: 86_400,
     secondsPerWeek: 604_800,
+  },
+  // The price oracle's bounds live here with every other tunable, so one config object describes the
+  // whole economy: a deployment cannot be running an oracle policy nobody can see from DIGGO_CONFIG.
+  oracle: {
+    /** How long a combined quote may be served from cache. */
+    quoteTtlSeconds: 60,
+    /** How long a SOL/USD read may be served from cache. */
+    solTtlSeconds: 120,
+    /** Hard staleness limit for a single source observation. */
+    maxStalenessSeconds: 900,
+    /** Age up to which an observation counts as fully fresh. */
+    freshSeconds: 300,
+    /** Confidence below which no price is returned. */
+    minimumConfidence: 0.6,
+    /** Default external-source requirement; 0 keeps a credential-less deployment working. */
+    minimumExternalSources: 0,
+    /** Do not re-fetch one mint's external quote more often than this. */
+    externalRefreshSeconds: 120,
+    /** Timeout for one third-party call. */
+    fetchTimeoutMs: 4_000,
   },
   streak: {
     activationSeconds: 86_400,
@@ -331,7 +478,7 @@ export const DIGGO_CONFIG_DEFAULTS: DiggoConfig = {
     ],
   },
   ore: {
-    baseOrePerActiveHour: 20,
+    baseOrePerActiveHour: 30,
     activationBonusOre: 50,
     maturityRamp: [
       { upToDay: 1, bps: 2_000 },
@@ -343,13 +490,13 @@ export const DIGGO_CONFIG_DEFAULTS: DiggoConfig = {
     cartsEfficiencyScale: 14,
     foremanEfficiencyGain: 0.2,
     foremanEfficiencyScale: 18,
-    storageBaseCapacity: 480,
-    storageCapacityScale: 240,
+    storageBaseCapacity: 1_800,
+    storageCapacityScale: 420,
     storageCapacityExponent: 0.78,
-    cartsCapacityScale: 80,
-    offlineHoursBase: 12,
-    offlineHoursPerStorageLevel: 1.5,
-    offlineHoursCap: 72,
+    cartsCapacityScale: 120,
+    offlineHoursBase: 24,
+    offlineHoursPerStorageLevel: 4,
+    offlineHoursCap: 168,
     levelUpBaseOre: 60,
     levelUpOrePerLevel: 1.25,
     levelUpOreExponent: 1,
@@ -377,8 +524,8 @@ export const DIGGO_CONFIG_DEFAULTS: DiggoConfig = {
     foremanDiscountGain: 0.3,
     foremanDiscountScale: 15,
     minimumUpgradeCostMultiplier: 0.4,
-    upgradeCostBase: { miners: 120, drills: 160, carts: 140, foreman: 220, storage: 180 },
-    upgradeCostExponent: 1.72,
+    upgradeCostBase: { miners: 80, drills: 115, carts: 120, foreman: 190, storage: 150 },
+    upgradeCostExponent: 1.4,
     upgradeCostMaxLevel: 100,
     maxVeteranPowerRatio: 25,
     tiers: [
@@ -391,10 +538,45 @@ export const DIGGO_CONFIG_DEFAULTS: DiggoConfig = {
     ],
   },
   economy: {
+    emission: {
+      schedule: "reserve_runway",
+      targetLifetimeDays: 365,
+      minimumRewardPerBlock: 1,
+      nonIncreasing: true,
+    },
     rewardReductionBps: 2_500,
     minimumReducedReward: 1,
     rewardIndexScale: 1_000_000_000_000,
     enforceReserveCap: true,
+  },
+  // Time is the anti-sybil resource (spec 40, 58): a wallet that was created a minute ago brings a
+  // fifth of its crew's power to a block, and a wallet sitting in a large device cluster brings a
+  // fifth of that again. Neither is a paywall (spec 41) and neither is permanent (spec 63).
+  effectivePower: {
+    maturityRamp: [
+      { upToDay: 1, bps: 2_000 },
+      { upToDay: 3, bps: 4_000 },
+      { upToDay: 7, bps: 7_000 },
+      { upToDay: Number.POSITIVE_INFINITY, bps: 10_000 },
+    ],
+    perAccountBlockShareCapBps: 200,
+    // Above the strongest reachable crew: a maxed veteran (every branch at maxLevel) brings 2,259
+    // power, so a cluster ceiling with this floor can never shrink a single crew.
+    // Above the strongest reachable crew: a maxed veteran (every branch at maxLevel) brings 2,259
+    // power, so a cluster ceiling with this floor can never shrink a single crew.
+    shareCapFloorPower: 2_500,
+  cluster: {
+      deviceAllowance: 4,
+      // A household keeps its whole share; each further wallet on one device keeps 60% of what the
+      // previous one kept, so a farm quickly lands on the floor. The network allowance is generous
+      // on purpose: a dorm, an office or a carrier-grade NAT must never be throttled hard, so the
+      // network factor only bites for genuinely large address clusters (spec 48, 51, 64).
+      deviceDecayBps: 7_000,
+      networkAllowance: 50,
+      networkDecayBps: 9_700,
+      minimumNetworkFactorBps: 5_000,
+      minimumFactorBps: 150,
+    },
   },
   discovery: {
     minimumMarketCapUsd: 250_000,
@@ -415,6 +597,12 @@ export const DIGGO_CONFIG_DEFAULTS: DiggoConfig = {
     perRequestCapUsd: 20,
     activityWindowSeconds: 86_400,
     cappedRarityByBudget: true,
+    // A fifth of every cap at most: enough for a genuine review queue, far too little for a held
+    // farm to lock up the day (or the week) for everyone else.
+    heldBudgetShareBps: 2_000,
+    // One day: long enough for a review to be worked, short enough that an uncleared hold stops
+    // reserving the weekly and per-token-period budgets on day two.
+    heldGrantReviewSeconds: 86_400,
     windowSeconds: 3_600,
     rollChanceBps: 250,
   },
@@ -552,6 +740,13 @@ export const DISCOVERY_TUNABLE_BOUNDS = Object.freeze({
   rollChanceBps: Object.freeze({ min: 0, max: BPS_DENOMINATOR }),
 });
 
+/** Bounds for the held-grant tunables, clamped the same way every other discovery tunable is. */
+export const DISCOVERY_HELD_TUNABLE_BOUNDS = Object.freeze({
+  heldBudgetShareBps: Object.freeze({ min: 0, max: BPS_DENOMINATOR }),
+  /** Five minutes at the fastest, a month at the slowest. */
+  heldGrantReviewSeconds: Object.freeze({ min: 300, max: 30 * 86_400 }),
+});
+
 /**
  * The environment variables the override layer reads. Structural on purpose, so both a Worker
  * RuntimeEnv and a plain test object satisfy it without dragging bindings into shared/.
@@ -561,6 +756,10 @@ export interface ConfigEnvSource {
   DISCOVERY_WINDOW_SECONDS?: string;
   /** Discovery roll chance in basis points (0-10000). */
   DISCOVERY_ROLL_CHANCE_BPS?: string;
+  /** Share of every discovery cap held grants may reserve, in basis points (0-10000). */
+  DISCOVERY_HELD_BUDGET_SHARE_BPS?: string;
+  /** Seconds a held discovery keeps its budget slot before it is released, 300-2592000. */
+  DISCOVERY_HELD_REVIEW_SECONDS?: string;
 }
 
 /** Floors a possibly-stringly numeric value and clamps it into `bounds`. */
@@ -587,6 +786,25 @@ export function clampDiscoveryTunables(
   };
 }
 
+/** The held-grant tunables, clamped into DISCOVERY_HELD_TUNABLE_BOUNDS. */
+export function clampHeldBudgetTunables(
+  input: { heldBudgetShareBps?: unknown; heldGrantReviewSeconds?: unknown },
+  base: DiscoveryConfig = DIGGO_CONFIG.discovery,
+): { heldBudgetShareBps: number; heldGrantReviewSeconds: number } {
+  return {
+    heldBudgetShareBps: clampToBounds(
+      input.heldBudgetShareBps,
+      DISCOVERY_HELD_TUNABLE_BOUNDS.heldBudgetShareBps,
+      base.heldBudgetShareBps,
+    ),
+    heldGrantReviewSeconds: clampToBounds(
+      input.heldGrantReviewSeconds,
+      DISCOVERY_HELD_TUNABLE_BOUNDS.heldGrantReviewSeconds,
+      base.heldGrantReviewSeconds,
+    ),
+  };
+}
+
 /**
  * The one place an environment variable becomes configuration: applies the override layer on
  * top of `base` (DIGGO_CONFIG by default) and returns a frozen config.
@@ -605,14 +823,31 @@ export function configFromEnv(
     },
     base.discovery,
   );
+  const { heldBudgetShareBps, heldGrantReviewSeconds } = clampHeldBudgetTunables(
+    {
+      heldBudgetShareBps: source.DISCOVERY_HELD_BUDGET_SHARE_BPS,
+      heldGrantReviewSeconds: source.DISCOVERY_HELD_REVIEW_SECONDS,
+    },
+    base.discovery,
+  );
   if (
     windowSeconds === base.discovery.windowSeconds &&
-    rollChanceBps === base.discovery.rollChanceBps
+    rollChanceBps === base.discovery.rollChanceBps &&
+    heldBudgetShareBps === base.discovery.heldBudgetShareBps &&
+    heldGrantReviewSeconds === base.discovery.heldGrantReviewSeconds
   ) {
     return base;
   }
   return deepFreeze(
-    mergeInto(base, { discovery: { ...base.discovery, windowSeconds, rollChanceBps } }),
+    mergeInto(base, {
+      discovery: {
+        ...base.discovery,
+        windowSeconds,
+        rollChanceBps,
+        heldBudgetShareBps,
+        heldGrantReviewSeconds,
+      },
+    }),
   );
 }
 
