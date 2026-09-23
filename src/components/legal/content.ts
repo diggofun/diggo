@@ -34,12 +34,17 @@ export const PRIVACY_CONTACT = "[privacy@example.com - replace with a monitored 
 export const GOVERNING_LAW_PLACEHOLDER = "[GOVERNING LAW AND COURTS - to be confirmed]";
 
 export const UPDATED = "22 September 2026";
+/** The Terms were revised on their own date; the other documents were not revised with them. */
+export const TERMS_UPDATED = "23 September 2026";
+/** The operator fills this in with the jurisdictions its counsel has cleared or excluded. */
+export const RESTRICTED_JURISDICTIONS_PLACEHOLDER = "[RESTRICTED JURISDICTIONS LIST]";
 
 const TERMS: LegalDocument = {
   id: "terms",
   title: "Terms of Service",
-  summary: "The rules for using Diggo.fun: your wallet, your crown, and what ORE is and is not.",
-  updated: UPDATED,
+  summary:
+    "The rules for using Diggo.fun: who may use it, your wallet, your crown, and what ORE is and is not.",
+  updated: TERMS_UPDATED,
   sections: [
     {
       heading: "1. Who we are",
@@ -60,14 +65,45 @@ const TERMS: LegalDocument = {
       ],
     },
     {
-      heading: "3. Eligibility",
+      heading: "3. Eligibility and legal capacity",
       paragraphs: [
-        "You must be at least 18 years old and legally able to enter into these Terms. You must not be in a jurisdiction where using the Service would be unlawful, and you must not be subject to sanctions or acting for someone who is.",
+        "You must be at least 18 years old, or older if the age of majority where you live is higher than 18, and you must have the legal capacity to enter into a binding contract. If you are younger than that, or if you lack that capacity, you may not use the Service.",
+        "You use the Service for yourself and on your own behalf. If you use it for a company or for someone else, you confirm that you are authorised to bind them to these Terms and that they satisfy every requirement in this section and in sections 4, 5 and 6.",
         "The Service is a game with fictional framing, not a promise of income. If you are looking for a guaranteed return, the Service is not for you.",
       ],
     },
     {
-      heading: "4. Your wallet, your keys, your responsibility",
+      heading: "4. Restricted jurisdictions",
+      paragraphs: [
+        "You represent and warrant that each of the following is true every time you access or use the Service:",
+      ],
+      bullets: [
+        "You are not located in, resident in, or organised under the laws of a country or territory that is subject to comprehensive sanctions, such as Cuba, Iran, North Korea, Syria, or the Crimea, so-called Donetsk or so-called Luhansk regions of Ukraine.",
+        "You are not a person named on a sanctions list, including the OFAC Specially Designated Nationals list or an equivalent list maintained by the European Union, the United Kingdom or the United Nations, and you are not owned or controlled by, or acting on behalf of, anyone who is.",
+        "You are not in a jurisdiction where accessing or using the Service, dealing in cryptoassets, launching or trading tokens, or taking part in prize-based or reward-based features is prohibited, or needs a licence, registration, authorisation or exemption that we do not hold. Our current list of restricted jurisdictions is " +
+          RESTRICTED_JURISDICTIONS_PLACEHOLDER +
+          ", and we may add to or change that list at any time. It is not a substitute for your own legal advice.",
+        "You are not using the Service for anyone who does not satisfy the points above.",
+      ],
+    },
+    {
+      heading: "5. No circumventing the restrictions",
+      paragraphs: [
+        "You must not use a virtual private network, a proxy, a relay, an anonymising service, false location data, an untrue statement about where you are, or any other means to get around the restrictions in section 4 or any other requirement of these Terms, and you must not help anyone else to do so.",
+        "Doing any of that is a material breach of these Terms and of the representations you made. Where we consider that you have done it, we may restrict, suspend or end your access, and we may decline to process a claim you made while the breach continued.",
+        "We do not block access by location. The fact that the Service does not detect where you are, or that it lets you in, is not permission to use it from a place where you may not, and it is not a waiver of any of our rights.",
+      ],
+    },
+    {
+      heading: "6. Your responsibility to comply with the law that applies to you",
+      paragraphs: [
+        "You are solely responsible for finding out which laws apply to you and for complying with them, wherever you are, including the rules on cryptoassets and trading, gambling and prize promotions, sanctions and export control, and taxation. You use the Service on your own initiative and at your own risk.",
+        "We make no representation and give no warranty that the Service, or any part of it, is appropriate, lawful or available for use in any location. Nothing we publish is an offer, solicitation or invitation to use the Service where that would be unlawful.",
+        "You must not use the Service after we have ended your access, and you must not help anyone whose access we have ended to use it.",
+      ],
+    },
+    {
+      heading: "7. Your wallet, your keys, your responsibility",
       paragraphs: [
         "The Service has no passwords and no accounts in the ordinary sense: your wallet address is your identifier, and you prove control of it by signing a message. We never ask for your seed phrase or private key, and anyone who does is not us.",
         "You are responsible for everything signed from your wallet and for keeping your keys safe. If you lose access to your wallet, we cannot recover it, your ORE or your rewards - nobody can.",
@@ -78,7 +114,7 @@ const TERMS: LegalDocument = {
       ],
     },
     {
-      heading: "5. Mining Power and ORE are earned, never bought",
+      heading: "8. Mining Power and ORE are earned, never bought",
       paragraphs: [
         "Mining Power and ORE are earned through play: daily activation, streaks, crew upgrades, achievements, quests, seasonal progress and discoveries. There is no way to buy them. No payment, deposit, purchase, trade, subscription or donation can purchase Mining Power, ORE, rarity, or a better chance of any outcome.",
         "ORE is non-transferable. It stays attached to the wallet that earned it, cannot be sent to another wallet, cannot be traded on any market, and cannot be withdrawn, redeemed or exchanged for fiat money or for any cryptoasset. It confers no ownership, equity, dividend, revenue share or profit participation in anything.",
@@ -86,7 +122,7 @@ const TERMS: LegalDocument = {
       ],
     },
     {
-      heading: "6. Rewards, reserves and claims",
+      heading: "9. Rewards, reserves and claims",
       paragraphs: [
         "Every mine has a reward reserve that its creator committed at launch. That reserve is finite and its size is public. Rewards are paid only out of it, and the reserve leaves it only through a valid mining report or discovery claim that passes the checks described below. There is no other path.",
         "Reward rates step down as the reserve is depleted, according to the published schedule. A larger reserve does not mean a promised return, and a reward rate is not a yield, an interest rate or a forecast. In most mines the reserve will be mined out, and the mine will then be finished.",
@@ -94,14 +130,14 @@ const TERMS: LegalDocument = {
       ],
     },
     {
-      heading: "7. Fairness and randomness",
+      heading: "10. Fairness and randomness",
       paragraphs: [
         "Outcomes that involve chance or payout size - discovery rolls, rarities, reward amounts - are decided on the server and settled on-chain. The browser never decides an outcome and never sees the seed in advance.",
         "Each rolling epoch is committed in advance as a hash and revealed once the epoch has ended, so any player can recompute the rolls after the fact (see docs/ARCHITECTURE.md for the commitment and reveal flow). If a commitment is missing, the affected rolls do not happen.",
       ],
     },
     {
-      heading: "8. Anti-abuse, restrictions and appeals",
+      heading: "11. Anti-abuse, restrictions and appeals",
       paragraphs: [
         "To protect the reserves and everyone playing honestly, the Service scores activity for abuse: many wallets on one device or network, automation, scripted play, coordinated claiming and similar patterns. Signals are stored as salted hashes, never as raw addresses of other people.",
         "A flagged account can be placed under review, held, or blocked from earning. Where that happens the interface shows a neutral status message, and you can file an appeal in the app for a human to look at. Appeals are reviewed by a person; a decision can lift a restriction but never moves value by itself.",
@@ -109,14 +145,21 @@ const TERMS: LegalDocument = {
       ],
     },
     {
-      heading: "9. No advice, no expectation of profit",
+      heading: "12. No advice, no expectation of profit",
       paragraphs: [
         "Nothing in the Service or in any of our communications is financial, investment, legal or tax advice. We do not recommend any token, including tokens created through Diggo.fun. Tokens created here are memecoins: they can go to zero. Read the Risk Disclosure before you trade anything.",
         "You are solely responsible for your own decisions, for complying with the law where you live, and for any tax arising from anything you do.",
       ],
     },
     {
-      heading: "10. Prohibited conduct",
+      heading: "13. Non-custodial service and no guaranteed value",
+      paragraphs: [
+        "The Service is non-custodial. We never hold your keys and never take custody of your tokens. We cannot move, freeze, reverse, refund or recover anything for you, and we never ask you to send us assets to look after.",
+        "No feature of the Service promises value, yield, return, price, liquidity or a buyer, and section 12 applies here too: nothing we publish is financial, investment, legal, accounting or tax advice, or a recommendation to acquire, hold or dispose of any asset. Rewards depend on the reserve a mine's creator committed and on the rules in these Terms, and they can be nothing at all. Read the Risk Disclosure next to this section.",
+      ],
+    },
+    {
+      heading: "14. Prohibited conduct",
       paragraphs: ["Do not do any of the following, and do not help anyone else do them:"],
       bullets: [
         "Operate multiple accounts to farm rewards, or coordinate wallets to defeat the anti-abuse rules.",
@@ -128,22 +171,30 @@ const TERMS: LegalDocument = {
       ],
     },
     {
-      heading: "11. Availability, changes and termination",
+      heading: "15. Availability, changes and termination",
       paragraphs: [
         "The Service is under active development and is offered on an as-available basis. Features can change, be suspended or be withdrawn; a cluster can be reset; nothing is guaranteed to be available at any particular time.",
         "We may change these Terms. A material change will be announced in the interface before it takes effect, and the revised date at the top of this page will change. Continuing to use the Service after that means you accept the change.",
         "You may stop using the Service at any time. We may restrict or end your access if you breach these Terms or if we are required to by law.",
+        "We may restrict, suspend or end your access, or any feature of it, at our discretion and without notice, including where we consider that you have breached these Terms or that a representation in section 4, 5 or 6 is untrue for you, or where the law requires it. We do not have to detect or act on every breach, and not acting on one does not waive our right to act on it or on another. We are not liable for a loss that follows, including lost rewards, lost ORE, lost access to a mine, or a lost opportunity.",
       ],
     },
     {
-      heading: "12. Disclaimers and liability",
+      heading: "16. Indemnity",
+      paragraphs: [
+        "You agree to indemnify, defend and hold harmless the operator of the Service and its officers, directors, employees, contractors and agents against any claim, demand, action, loss, liability, penalty, fine, cost or expense (including reasonable legal fees) that arises out of or in connection with: (a) your breach of these Terms, including a representation in section 4, 5 or 6 that is untrue for you; (b) your breach of any law or of anyone's rights; (c) your use of the Service or of anything created with it; or (d) anything done through your wallet by a person you allowed to use it.",
+        "Nothing in this section requires you to indemnify us for our own wilful misconduct or fraud. This section survives the end of your use of the Service.",
+      ],
+    },
+    {
+      heading: "17. Disclaimers and liability",
       paragraphs: [
         "The Service is provided 'as is' and 'as available', without warranties of any kind, express or implied, including fitness for a particular purpose, uninterrupted availability, or that any token will retain any value. We do not warrant that a mine's reserve, a reward rate or ORE will be worth anything.",
         "To the fullest extent permitted by law, we are not liable for indirect, incidental, special or consequential losses, for lost profits, for lost tokens or for losses caused by third parties, wallets, RPC providers, blockchains, exchanges or your own key management. Our total aggregate liability is limited to [LIABILITY CAP - to be confirmed]. Nothing in these Terms excludes liability that cannot lawfully be excluded, and nothing affects mandatory consumer rights you have where you live.",
       ],
     },
     {
-      heading: "13. Governing law and disputes",
+      heading: "18. Governing law and disputes",
       paragraphs: [
         "These Terms are governed by " +
           GOVERNING_LAW_PLACEHOLDER +
