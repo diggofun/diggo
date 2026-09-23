@@ -18,11 +18,11 @@ pub const DEFAULT_BLOCK_INTERVAL: i64 = 300;
 
 pub const DEFAULT_EPOCH_LENGTH: i64 = 604_800;
 
-pub const MAX_NAME_LEN: usize = 32;
+pub const MAX_NAME_LEN: usize = 16;
 
-pub const MAX_SYMBOL_LEN: usize = 10;
+pub const MAX_SYMBOL_LEN: usize = 8;
 
-pub const MAX_URI_LEN: usize = 200;
+pub const MAX_URI_LEN: usize = 96;
 
 /// Per-call budget of the mining ledger walk, in segments. One segment is at most one run
 /// of blocks plus at most one epoch rollover, so this is a hard compute bound per call.
@@ -129,7 +129,7 @@ pub const MINE_PHASE_APPENDED_BYTES: usize = 2 + 8;
 /// the walk's timing, so an un-walked stretch can never be paid out of the Mining Reserve. A
 /// version 3 account reads it as zero, which means "no cursor" - the phase then follows
 /// `graduated` alone, exactly as it did before this field existed.
-pub const ACCOUNT_VERSION: u8 = 4;
+pub const ACCOUNT_VERSION: u8 = 5;
 
 
 /// Account kinds accepted by migrate_account.
@@ -140,10 +140,86 @@ pub const ACCOUNT_KIND_MINE: u8 = 1;
 pub const ACCOUNT_KIND_MARKET: u8 = 2;
 
 
-/// Byte offset of ProtocolConfig.guardian in the raw account data: the 8-byte
+/// Byte offset of ProtocolConfigV4.guardian in the raw account data: the 8-byte
 /// discriminator, then treasury, then keeper. The protocol account is the one account
 /// whose own layout gates every other instruction — while it is still awaiting migration
-/// it cannot be loaded as a typed Account<ProtocolConfig>, so migrate_account reads this
+/// it cannot be loaded as a typed Account<ProtocolConfigV4>, so migrate_account reads this
 /// single field out of the raw bytes instead of trusting a deserialized struct. The
 /// protocol_guardian_offset_matches_the_layout test pins it against the real layout.
 pub const PROTOCOL_GUARDIAN_OFFSET: usize = 8 + 32 + 32;
+
+// ---- v2 constants (docs/ONCHAIN_V2_DESIGN.md 8.2) ----------------------------------------
+//
+// The metadata caps above are now the Token-2022 limits (16 / 8 / 96) and ACCOUNT_VERSION is
+// 5: v2 is a fresh program id with a wiped devnet and no migration path, so no v2 account ever
+// decodes a v4 layout.
+
+/// Flat, refundable anti-bot bond, identical for every wallet. It buys no power, no ORE, no
+/// rarity and no cap: it only makes a farm park real capital behind a cooldown.
+pub const BOND_LAMPORTS: u64 = 70_000_000;
+/// Cooldown between request_unbond and withdraw_bond: seven days.
+pub const BOND_COOLDOWN_SECONDS: i64 = 604_800;
+/// Mining efficiency of an unbonded (starter-mode) player, in bps of the same power.
+pub const STARTER_EFFICIENCY_BPS: u16 = 2_500;
+/// Share of one block's reward the starter tranche may ever receive, in bps, whatever the
+/// bonded power is. A bonded player therefore always keeps at least 90% of a block, and the
+/// remainder a starter-only coin cannot assign stays in the Mining Reserve: it is never
+/// burned and never re-allocated to the starter index.
+pub const STARTER_TRANCHE_BPS: u16 = 1_000;
+/// Slots between an epoch's end and the SlotHashes entry its seed is taken from.
+pub const EPOCH_SEED_DELAY_SLOTS: u64 = 32;
+/// How late a reveal may be before the seed re-arms instead of being committed.
+pub const EPOCH_SEED_MAX_LATENESS_SLOTS: u64 = 512;
+/// How many slot hashes the SlotHashes sysvar keeps: the window a reveal must land in.
+pub const SLOT_HASHES_WINDOW: u64 = 512;
+/// Share of a coin's accrued fees a single crank_tip may pay out, in bps.
+pub const CRANK_TIP_BPS: u16 = 200;
+/// Longest a pause flag may be set for without the timelocked governance path.
+pub const MAX_PAUSE_SECONDS: i64 = 259_200;
+/// Most rarity tiers ProtocolConfig can hold.
+pub const MAX_RARITY_TIERS: usize = 8;
+/// Crew components: miners, drills, carts, foreman, storage.
+pub const CREW_COMPONENTS: usize = 5;
+/// Highest crew level any component may reach; the curve tables have one entry per level.
+pub const MAX_CREW_LEVEL: u16 = 100;
+/// Power-table entries, one per crew level.
+pub const CURVE_TABLE_POWER_LEN: usize = 100;
+/// Discovery caps, in lamports of SOL and never in USD (design 4.3). The dollar figures the
+/// UI shows are converted at display time by the off-chain oracle.
+pub const DEFAULT_DISCOVERY_DAILY_CAP_LAMPORTS: u64 = 1_000_000_000;
+pub const DEFAULT_DISCOVERY_WEEKLY_CAP_LAMPORTS: u64 = 4_000_000_000;
+pub const DEFAULT_DISCOVERY_GLOBAL_DAILY_CAP_LAMPORTS: u64 = 50_000_000_000;
+pub const DEFAULT_DISCOVERY_EPOCH_BUDGET_LAMPORTS: u64 = 2_000_000_000;
+/// Default per-wallet sponsor limit for a bond or account subsidy: one bond.
+pub const DEFAULT_SPONSOR_PER_WALLET_LIMIT_LAMPORTS: u64 = BOND_LAMPORTS;
+/// Default crank-pool share of a trade's fee. The tip a crank may take is bounded by
+/// CRANK_TIP_BPS of the coin's accrued fees, and it can only ever be paid out of accrual.
+pub const DEFAULT_CRANK_POOL_FEE_BPS: u16 = 0;
+/// Length of one discovery day and one discovery week, in seconds.
+pub const DISCOVERY_DAY_SECONDS: i64 = 86_400;
+pub const DISCOVERY_WEEK_SECONDS: i64 = 604_800;
+/// Seconds a pending DiscoveryOpportunity may stay unsettleable before expire_opportunity
+/// may close it: one epoch plus a settle window, so an honest settle is never griefed.
+pub const OPPORTUNITY_EXPIRY_SECONDS: i64 = 1_209_600;
+/// Maturity ramp of a PlayerAccount, in days from its creation slot, and the bps of power
+/// and ORE it unlocks. Day 1 20%, day 3 40%, day 7 70%, then 100% (design section 5).
+pub const MATURITY_RAMP: [(u64, u16); 3] = [(1, 2_000), (3, 4_000), (7, 7_000)];
+/// A player may re-activate at most once every this many seconds.
+pub const MIN_REACTIVATION_SECONDS: i64 = 86_400;
+/// Activation window granted by activate, and the grace the UI derives from it.
+pub const ACTIVATION_SECONDS: i64 = 86_400;
+pub const ACTIVATION_GRACE_SECONDS: i64 = 3_600;
+
+// ---- Token-2022 mint layout (design 1.3(c)) ----------------------------------------------
+
+pub const MINT_BASE_SIZE: usize = 82;
+pub const MINT_ACCOUNT_TYPE_SIZE: usize = 1;
+pub const MINT_METADATA_POINTER_SIZE: usize = 68;
+pub const MINT_TOKEN_METADATA_SIZE: usize = 208;
+/// The whole hand-written Token-2022 mint launch_token creates: 359 bytes.
+pub const MINT_V2_SIZE: usize = MINT_BASE_SIZE
+    + MINT_ACCOUNT_TYPE_SIZE
+    + MINT_METADATA_POINTER_SIZE
+    + MINT_TOKEN_METADATA_SIZE;
+/// An SPL token account, for the coin's single vault.
+pub const TOKEN_ACCOUNT_SIZE: usize = 165;

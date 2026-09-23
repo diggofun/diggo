@@ -331,7 +331,7 @@ pub fn sync_mine_with_budget(
 }
 
 
-pub fn settle_position(position: &mut MiningPosition, mine: &Mine) -> Result<()> {
+pub fn settle_position(position: &mut MiningPositionV4, mine: &Mine) -> Result<()> {
     if position.assigned_power == 0 {
         position.last_reward_index = mine.reward_index;
         return Ok(());

@@ -6,7 +6,7 @@ pub use anchor_spl::token_interface::{
     self, Mint, MintTo, SetAuthority, TokenAccount, TokenInterface, TransferChecked,
 };
 
-declare_id!("BLF7g1SbT72xb5M8rVrD7V3mdDXxb1AqwChcoeF4ppmE");
+declare_id!("H3Y8GgTnvwv5U1bajfzj386YSPC48vvwjFroXYyHZFj5");
 
 pub mod constants;
 pub mod errors;
@@ -29,241 +29,283 @@ pub use state::*;
 // The instruction modules are re-exported item by item. The #[program] macro already
 // publishes one glob of the handler names at the crate root, so a `pub use instructions::*;`
 // here would make every handler name ambiguous.
-pub use instructions::admin::{GuardianConfig, GuardianMineConfig, InitializeProtocol, MigrateAccount, RotateGuardian, RotateKeeper};
-pub use instructions::crew::{AssignPower, InitializePlayer, SyncCrewPower};
-pub use instructions::discovery::{ClaimDiscovery};
-pub use instructions::fees::{ClaimCreatorFees, ClaimPlatformFees};
-pub use instructions::launch::{LaunchToken};
-pub use instructions::mining::{AdvanceMine, ClaimRewards};
-pub use instructions::trade::{Buy, GraduateMarket, PoolBuy, PoolSell, Sell};
+pub use instructions::admin::{AdminConfig, InitializeProtocol, ProtocolConfigArgs, SetCurveTable};
 pub use instructions::crank::*;
-pub use instructions::token::*;
-pub use instructions::launch::{validate_launch_args, LaunchTokenArgs};
-pub use instructions::admin::{
-    account_layout, guardian_from_raw_protocol, set_discovery_payouts_paused,
-    set_mine_discovery_paused, set_reward_claims_paused, upgraded_account_data,
+pub use instructions::discovery::{CreateDiscoveryRoll, ExpireOpportunity, SettleDiscovery};
+pub use instructions::fees::{ClaimCreatorFees, CrankTip, SweepFees};
+pub use instructions::launch::{validate_launch_args, LaunchToken, LaunchTokenArgs};
+pub use instructions::mining_advance::AdvanceMine;
+pub use instructions::mining_seed::CommitEpochSeed;
+pub use instructions::player_activate::{Activate, InitializePlayer};
+pub use instructions::player_bond::{PostBond, RequestUnbond, WithdrawBond};
+pub use instructions::player_crew::UpgradeCrew;
+pub use instructions::player_mine::{AssignPower, ClaimRewards, RemovePower, SwitchMine};
+pub use instructions::player_ore::CollectOre;
+pub use instructions::sponsor::{
+    CloseSponsorEvent, CreateSponsorEvent, FundSponsorVault, InitSponsorVault,
+    WithdrawSponsorVault,
 };
+pub use instructions::token::*;
+pub use instructions::trade::{Buy, GraduateMarket, PoolBuy, PoolSell, Sell};
 
 // #[program] re-exports `crate::__client_accounts_<struct>` for every instruction, so the
 // generated client-account module of every derive(Accounts) struct must be reachable at the
-// crate root as well.
-pub(crate) use instructions::admin::{__client_accounts_guardian_config, __client_accounts_guardian_mine_config, __client_accounts_initialize_protocol, __client_accounts_migrate_account, __client_accounts_rotate_guardian, __client_accounts_rotate_keeper};
-pub(crate) use instructions::crew::{__client_accounts_assign_power, __client_accounts_initialize_player, __client_accounts_sync_crew_power};
-pub(crate) use instructions::discovery::{__client_accounts_claim_discovery};
-pub(crate) use instructions::fees::{__client_accounts_claim_creator_fees, __client_accounts_claim_platform_fees};
-pub(crate) use instructions::launch::{__client_accounts_launch_token};
-pub(crate) use instructions::mining::{__client_accounts_advance_mine, __client_accounts_claim_rewards};
-pub(crate) use instructions::trade::{__client_accounts_buy, __client_accounts_graduate_market, __client_accounts_pool_buy, __client_accounts_pool_sell, __client_accounts_sell};
+// crate root as well. The handler functions are deliberately not re-exported: the macro
+// publishes one glob of those names itself.
+pub(crate) use instructions::admin::{
+    __client_accounts_admin_config, __client_accounts_initialize_protocol,
+    __client_accounts_set_curve_table,
+};
+pub(crate) use instructions::discovery::{
+    __client_accounts_create_discovery_roll, __client_accounts_expire_opportunity,
+    __client_accounts_settle_discovery,
+};
+pub(crate) use instructions::fees::{
+    __client_accounts_claim_creator_fees, __client_accounts_crank_tip,
+    __client_accounts_sweep_fees,
+};
+pub(crate) use instructions::launch::__client_accounts_launch_token;
+pub(crate) use instructions::mining_advance::__client_accounts_advance_mine;
+pub(crate) use instructions::mining_seed::__client_accounts_commit_epoch_seed;
+pub(crate) use instructions::player_activate::{
+    __client_accounts_activate, __client_accounts_initialize_player,
+};
+pub(crate) use instructions::player_bond::{
+    __client_accounts_post_bond, __client_accounts_request_unbond,
+    __client_accounts_withdraw_bond,
+};
+pub(crate) use instructions::player_crew::__client_accounts_upgrade_crew;
+pub(crate) use instructions::player_mine::{
+    __client_accounts_assign_power, __client_accounts_claim_rewards,
+    __client_accounts_remove_power, __client_accounts_switch_mine,
+};
+pub(crate) use instructions::player_ore::__client_accounts_collect_ore;
+pub(crate) use instructions::sponsor::{
+    __client_accounts_close_sponsor_event, __client_accounts_create_sponsor_event,
+    __client_accounts_fund_sponsor_vault, __client_accounts_init_sponsor_vault,
+    __client_accounts_withdraw_sponsor_vault,
+};
+pub(crate) use instructions::trade::{
+    __client_accounts_buy, __client_accounts_graduate_market, __client_accounts_pool_buy,
+    __client_accounts_pool_sell, __client_accounts_sell,
+};
+
+/// The v2 program: every state transition that creates, sizes or releases value is an
+/// instruction here, signed by the player or by anyone, and no operator key is required for
+/// any of them. Every body below delegates to the module that owns it; until a workstream
+/// lands its logic the module returns DiggoError::NotImplemented.
 #[program]
 pub mod diggo_protocol {
     use super::*;
 
+    // ---- protocol, config and governance ----
+
     pub fn initialize_protocol(
         ctx: Context<InitializeProtocol>,
-        treasury: Pubkey,
-        keeper: Pubkey,
+        config: ProtocolConfigArgs,
     ) -> Result<()> {
-        instructions::admin::initialize_protocol(ctx, treasury, keeper)
+        instructions::admin::initialize_protocol(ctx, config)
     }
 
-    /// Rotates the backend keeper key without touching treasury, reserves or any
-    /// player balance. Only the current keeper can hand off to a new one.
-    pub fn rotate_keeper(ctx: Context<RotateKeeper>, new_keeper: Pubkey) -> Result<()> {
-        instructions::admin::rotate_keeper(ctx, new_keeper)
-    }
-
-    /// Hands the circuit-breaker role to another key. Only the current guardian may do
-    /// this, and GuardianRotated keeps every hand-off auditable on-chain.
-    pub fn rotate_guardian(ctx: Context<RotateGuardian>, new_guardian: Pubkey) -> Result<()> {
-        instructions::admin::rotate_guardian(ctx, new_guardian)
-    }
-
-    /// Protocol-wide circuit breaker (spec 65): stops every discovery payout while
-    /// paused is true. Trading is untouched. The handler assigns one boolean and
-    /// nothing else — its account set holds no mint, token account or vault, so no
-    /// instruction built on it can ever move a reserve token.
-    pub fn pause_discovery_payouts(ctx: Context<GuardianConfig>, paused: bool) -> Result<()> {
-        instructions::admin::pause_discovery_payouts(ctx, paused)
-    }
-
-    /// Protocol-wide circuit breaker (spec 65): stops every claim_rewards while paused
-    /// is true. Trading is untouched.
-    pub fn pause_reward_claims(ctx: Context<GuardianConfig>, paused: bool) -> Result<()> {
-        instructions::admin::pause_reward_claims(ctx, paused)
-    }
-
-    /// Circuit breaker scoped to a single mine's Discovery Reserve (spec 65).
-    pub fn pause_mine_discovery(ctx: Context<GuardianMineConfig>, paused: bool) -> Result<()> {
-        instructions::admin::pause_mine_discovery(ctx, paused)
-    }
-
-    /// Sets the bounded keeper power rule: a ceiling on Crew Power the keeper may ever
-    /// push, plus a per-call increase bound. Both are clamped to protocol constants, so
-    /// neither can be configured away.
-    pub fn update_power_bounds(
-        ctx: Context<GuardianConfig>,
-        max_crew_power: u64,
-        max_power_increase_bps: u16,
-    ) -> Result<()> {
-        instructions::admin::update_power_bounds(ctx, max_crew_power, max_power_increase_bps)
-    }
-
-    /// Sets the default trading fee schedule. Existing markets keep the schedule they
-    /// snapshotted at launch, so a change here can never retroactively alter a live
-    /// market, and both fees stay capped at MAX_TRADING_FEE_BPS.
     pub fn update_fee_config(
-        ctx: Context<GuardianConfig>,
+        ctx: Context<AdminConfig>,
         creator_fee_bps: u16,
         platform_fee_bps: u16,
+        crank_pool_fee_bps: u16,
     ) -> Result<()> {
-        instructions::admin::update_fee_config(ctx, creator_fee_bps, platform_fee_bps)
+        instructions::admin::update_fee_config(
+            ctx,
+            creator_fee_bps,
+            platform_fee_bps,
+            crank_pool_fee_bps,
+        )
     }
 
-    /// Tunes the discovery spend limits used by mines launched from now on. Existing
-    /// mines keep the budget they snapshotted at launch; the guardian can always stop
-    /// them outright with pause_mine_discovery.
     pub fn update_discovery_limits(
-        ctx: Context<GuardianConfig>,
+        ctx: Context<AdminConfig>,
         discovery_max_bps: u16,
         discovery_epoch_budget_bps: u16,
+        daily_cap_lamports: u64,
+        weekly_cap_lamports: u64,
+        global_daily_cap_lamports: u64,
+        epoch_budget_lamports: u64,
     ) -> Result<()> {
-        instructions::admin::update_discovery_limits(ctx, discovery_max_bps, discovery_epoch_budget_bps)
+        instructions::admin::update_discovery_limits(
+            ctx,
+            discovery_max_bps,
+            discovery_epoch_budget_bps,
+            daily_cap_lamports,
+            weekly_cap_lamports,
+            global_daily_cap_lamports,
+            epoch_budget_lamports,
+        )
     }
 
-    /// Guardian-only layout upgrade for one program-owned config, mine or market account.
-    ///
-    /// It reallocates the account to the current size and stamps the trailing version
-    /// byte; every byte that already existed is copied verbatim, so no balance, reserve,
-    /// fee bucket or timestamp can move. The account must already hold enough lamports for
-    /// its new rent-exempt minimum — top it up with a plain system transfer first, because
-    /// this instruction deliberately never touches lamports at all.
-    pub fn migrate_account(ctx: Context<MigrateAccount>, kind: u8) -> Result<()> {
-        instructions::admin::migrate_account(ctx, kind)
+    pub fn set_rarity_table(ctx: Context<AdminConfig>, tiers: Vec<RarityTier>) -> Result<()> {
+        instructions::admin::set_rarity_table(ctx, tiers)
     }
+
+    pub fn set_curve_table(
+        ctx: Context<SetCurveTable>,
+        power: Vec<u32>,
+        upgrade_ore_cost: Vec<Vec<u32>>,
+    ) -> Result<()> {
+        instructions::admin::set_curve_table(ctx, power, upgrade_ore_cost)
+    }
+
+    pub fn schedule_pause(ctx: Context<AdminConfig>, flag: u8, paused_until: i64) -> Result<()> {
+        instructions::admin::schedule_pause(ctx, flag, paused_until)
+    }
+
+    pub fn unpause(ctx: Context<AdminConfig>, flag: u8) -> Result<()> {
+        instructions::admin::unpause(ctx, flag)
+    }
+
+    // ---- launch, trading and graduation ----
 
     pub fn launch_token(ctx: Context<LaunchToken>, args: LaunchTokenArgs) -> Result<()> {
         instructions::launch::launch_token(ctx, args)
     }
 
-    /// Trading is deliberately outside every circuit breaker: this instruction never
-    /// reads a pause flag, so pausing discoveries or claims can never stop the market.
     pub fn buy(ctx: Context<Buy>, sol_in: u64, min_tokens_out: u64) -> Result<()> {
         instructions::trade::buy(ctx, sol_in, min_tokens_out)
     }
 
-    /// Trading is deliberately outside every circuit breaker: like buy, this never
-    /// reads a pause flag.
     pub fn sell(ctx: Context<Sell>, tokens_in: u64, min_sol_out: u64) -> Result<()> {
         instructions::trade::sell(ctx, tokens_in, min_sol_out)
     }
 
-    /// Moves a graduated market's entire curve liquidity into the program-owned
-    /// constant-product pool (spec 36). Permissionless on purpose: once a market has
-    /// genuinely reached its graduation target, anyone may pay for the pool accounts.
-    ///
-    /// The pool is created here and only here. It mints no LP token, its token vault is
-    /// owned by the pool PDA, and no instruction anywhere can take its liquidity back out
-    /// again — see apply_pool_swap. After this call the market holds nothing but accrued
-    /// fees and every trade routes through the pool.
-    pub fn graduate_market(ctx: Context<GraduateMarket>) -> Result<()> {
-        instructions::trade::graduate_market(ctx)
-    }
-
-    /// Constant-product buy against the graduated pool: the same explicit fee schedule
-    /// and the same slippage floor as the curve, but against reserves that live in the
-    /// pool's own vaults and that no instruction can drain (spec 35, 36).
     pub fn pool_buy(ctx: Context<PoolBuy>, sol_in: u64, min_tokens_out: u64) -> Result<()> {
         instructions::trade::pool_buy(ctx, sol_in, min_tokens_out)
     }
 
-    /// Constant-product sell against the graduated pool. The payout comes out of the
-    /// pool's SOL vault, never exceeds the reserve the pool tracks, and honours the same
-    /// explicit slippage floor.
     pub fn pool_sell(ctx: Context<PoolSell>, tokens_in: u64, min_sol_out: u64) -> Result<()> {
         instructions::trade::pool_sell(ctx, tokens_in, min_sol_out)
     }
 
-    pub fn initialize_player(ctx: Context<InitializePlayer>) -> Result<()> {
-        instructions::crew::initialize_player(ctx)
+    pub fn graduate_market(ctx: Context<GraduateMarket>) -> Result<()> {
+        instructions::trade::graduate_market(ctx)
     }
 
-    pub fn assign_power(ctx: Context<AssignPower>) -> Result<()> {
-        instructions::crew::assign_power(ctx)
+    // ---- fees and the crank tip ----
+
+    pub fn sweep_fees(ctx: Context<SweepFees>) -> Result<()> {
+        instructions::fees::sweep_fees(ctx)
     }
 
-    pub fn remove_power(ctx: Context<AssignPower>) -> Result<()> {
-        instructions::crew::remove_power(ctx)
-    }
-
-    /// Walks this mine's mining ledger forward by at most MAX_SYNC_SEGMENTS segments and
-    /// commits the progress. Permissionless by design: a mine that has been idle longer
-    /// than one call can afford is caught up by calling this repeatedly, which is also how
-    /// a caller that received SyncBehind from claim_rewards or assign_power unblocks
-    /// itself. Each call is a deterministic continuation of the previous one, so the
-    /// ledger it finally lands on is the same one a single unbounded pass would have
-    /// produced.
-    pub fn advance_mine(ctx: Context<AdvanceMine>) -> Result<()> {
-        instructions::mining::advance_mine(ctx)
-    }
-
-    /// Pays out accrued mining rewards. Blocked while the protocol-wide
-    /// reward-claims circuit breaker is on; buying and selling are never affected.
-    ///
-    /// Neither side is debited here: the walk already debited whichever one paid each
-    /// block — the market's curve token inventory through
-    /// apply_curve_mining_debit(CurveDebit::MiningEmission, ..) before graduation, the
-    /// Mining Reserve through apply_reserve_debit(ReserveDebit::MiningClaim, ..) after it —
-    /// and pending_reward is this position's claim on what the ledger already accounted
-    /// for. This instruction therefore moves no token that the mining ledger did not first
-    /// authorise.
-    ///
-    /// Curve emission is strictly older than reserve emission (the curve phase ends at
-    /// graduation), so the oldest unpaid tokens are the curve's: a claim pays
-    /// min(amount, curve_mining_unpaid) out of the market vault and the remainder out of
-    /// the Mining Reserve. The curve vault keeps the rest of the mined-but-unclaimed
-    /// tokens, which is why graduation moves only the post-mining curve inventory and
-    /// leaves these behind for the positions they were credited to.
-    pub fn claim_rewards(ctx: Context<ClaimRewards>) -> Result<()> {
-        instructions::mining::claim_rewards(ctx)
-    }
-
-    /// Pushes a player's off-chain, ORE-funded Crew power on-chain. Only the
-    /// protocol keeper may call this — real tokens or SOL never buy power;
-    /// power only ever comes from the backend's Crew progression accounting.
-    pub fn sync_crew_power(ctx: Context<SyncCrewPower>, new_power: u64) -> Result<()> {
-        instructions::crew::sync_crew_power(ctx, new_power)
-    }
-
-    /// Pays out a server-authoritative random memecoin discovery from the
-    /// Discovery Reserve. Only the protocol keeper may call this, and only
-    /// after the backend's eligibility, budget and anti-abuse checks pass —
-    /// this instruction performs no RNG or eligibility logic itself.
-    ///
-    /// Idempotency is enforced on-chain: discovery_id seeds a DiscoveryReceipt PDA that
-    /// is created with init, so replaying an id fails instead of paying twice. The scoped
-    /// circuit breakers, the per-call ceiling, the per-mine per-epoch budget and reserve
-    /// sufficiency all live in approve_discovery_payout, and the Discovery Reserve is
-    /// debited through the shared reserve ledger.
-    pub fn claim_discovery(
-        ctx: Context<ClaimDiscovery>,
-        discovery_id: u64,
-        amount: u64,
-    ) -> Result<()> {
-        instructions::discovery::claim_discovery(ctx, discovery_id, amount)
-    }
-
-    /// Claims the mine creator's explicitly accrued trading fee. The creator can claim
-    /// only their own fee bucket: withdrawable_fee refuses to move anything unless the
-    /// market still holds its rent floor, the whole curve reserve (LP SOL) and the other
-    /// fee bucket afterwards. There is no path from here to a program reserve.
     pub fn claim_creator_fees(ctx: Context<ClaimCreatorFees>) -> Result<()> {
         instructions::fees::claim_creator_fees(ctx)
     }
 
-    /// Claims the platform trading fee accrued on one market, paid to the treasury wallet
-    /// stored in ProtocolConfig. Same guard as the creator claim: the curve reserve and
-    /// the other fee bucket are untouchable.
-    pub fn claim_platform_fees(ctx: Context<ClaimPlatformFees>) -> Result<()> {
-        instructions::fees::claim_platform_fees(ctx)
+    pub fn crank_tip(ctx: Context<CrankTip>, max_tip: u64) -> Result<()> {
+        instructions::fees::crank_tip(ctx, max_tip)
+    }
+
+    // ---- sponsorship ----
+
+    pub fn init_sponsor_vault(ctx: Context<InitSponsorVault>) -> Result<()> {
+        instructions::sponsor::init_sponsor_vault(ctx)
+    }
+
+    pub fn fund_sponsor_vault(ctx: Context<FundSponsorVault>, amount: u64) -> Result<()> {
+        instructions::sponsor::fund_sponsor_vault(ctx, amount)
+    }
+
+    pub fn withdraw_sponsor_vault(ctx: Context<WithdrawSponsorVault>, amount: u64) -> Result<()> {
+        instructions::sponsor::withdraw_sponsor_vault(ctx, amount)
+    }
+
+    pub fn create_sponsor_event(
+        ctx: Context<CreateSponsorEvent>,
+        kind: u8,
+        start_at: i64,
+        end_at: i64,
+        budget_lamports: u64,
+        per_coin_limit_lamports: u64,
+        per_wallet_limit_lamports: u64,
+    ) -> Result<()> {
+        instructions::sponsor::create_sponsor_event(
+            ctx,
+            kind,
+            start_at,
+            end_at,
+            budget_lamports,
+            per_coin_limit_lamports,
+            per_wallet_limit_lamports,
+        )
+    }
+
+    pub fn close_sponsor_event(ctx: Context<CloseSponsorEvent>, event_id: u32) -> Result<()> {
+        instructions::sponsor::close_sponsor_event(ctx, event_id)
+    }
+
+    // ---- player: creation, activation, ORE, crew ----
+
+    pub fn initialize_player(ctx: Context<InitializePlayer>) -> Result<()> {
+        instructions::player_activate::initialize_player(ctx)
+    }
+
+    pub fn activate(ctx: Context<Activate>) -> Result<()> {
+        instructions::player_activate::activate(ctx)
+    }
+
+    pub fn collect_ore(ctx: Context<CollectOre>) -> Result<()> {
+        instructions::player_ore::collect_ore(ctx)
+    }
+
+    pub fn upgrade_crew(ctx: Context<UpgradeCrew>, component: u8) -> Result<()> {
+        instructions::player_crew::upgrade_crew(ctx, component)
+    }
+
+    // ---- player: positions, claims and the bond ----
+
+    pub fn assign_power(ctx: Context<AssignPower>) -> Result<()> {
+        instructions::player_mine::assign_power(ctx)
+    }
+
+    pub fn remove_power(ctx: Context<RemovePower>) -> Result<()> {
+        instructions::player_mine::remove_power(ctx)
+    }
+
+    pub fn switch_mine(ctx: Context<SwitchMine>) -> Result<()> {
+        instructions::player_mine::switch_mine(ctx)
+    }
+
+    pub fn claim_rewards(ctx: Context<ClaimRewards>) -> Result<()> {
+        instructions::player_mine::claim_rewards(ctx)
+    }
+
+    pub fn post_bond(ctx: Context<PostBond>) -> Result<()> {
+        instructions::player_bond::post_bond(ctx)
+    }
+
+    pub fn request_unbond(ctx: Context<RequestUnbond>) -> Result<()> {
+        instructions::player_bond::request_unbond(ctx)
+    }
+
+    pub fn withdraw_bond(ctx: Context<WithdrawBond>) -> Result<()> {
+        instructions::player_bond::withdraw_bond(ctx)
+    }
+
+    // ---- the crank: ledger walk, epoch seed, discovery ----
+
+    pub fn advance_mine(ctx: Context<AdvanceMine>) -> Result<()> {
+        instructions::mining_advance::advance_mine(ctx)
+    }
+
+    pub fn commit_epoch_seed(ctx: Context<CommitEpochSeed>) -> Result<()> {
+        instructions::mining_seed::commit_epoch_seed(ctx)
+    }
+
+    pub fn create_discovery_roll(ctx: Context<CreateDiscoveryRoll>) -> Result<()> {
+        instructions::discovery::create_discovery_roll(ctx)
+    }
+
+    pub fn settle_discovery(ctx: Context<SettleDiscovery>) -> Result<()> {
+        instructions::discovery::settle_discovery(ctx)
+    }
+
+    pub fn expire_opportunity(ctx: Context<ExpireOpportunity>) -> Result<()> {
+        instructions::discovery::expire_opportunity(ctx)
     }
 }

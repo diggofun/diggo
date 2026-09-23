@@ -2,7 +2,7 @@
 
 Status: design proposal, not implemented. Supersedes the authority split in
 `docs/ARCHITECTURE.md` sections 3-9, 13 and `docs/ONCHAIN.md` section 1. Program today:
-`BLF7g1SbT72xb5M8rVrD7V3mdDXxb1AqwChcoeF4ppmE` (Anchor 1.2.0, `ACCOUNT_VERSION = 4`).
+`H3Y8GgTnvwv5U1bajfzj386YSPC48vvwjFroXYyHZFj5` (Anchor 1.2.0, `ACCOUNT_VERSION = 4`).
 v2 deploys as a **new program id** with `ACCOUNT_VERSION = 5` and a wiped devnet (section 7);
 there is no account migration path.
 
@@ -57,7 +57,7 @@ onto a sponsor vault, and the only deposit anyone else makes is the player's ref
 Every coin is a set of PDAs under one program. `Anchor.toml` declares exactly one program per
 cluster, `launch_token` deploys and upgrades nothing, and there is exactly one
 `declare_id!` in the tree. Adding a coin is data, not code. The owner pays the program cost
-once; the v4 program `BLF7g1SbT72xb5M8rVrD7V3mdDXxb1AqwChcoeF4ppmE` is retired at the v2
+once; the v4 program `H3Y8GgTnvwv5U1bajfzj386YSPC48vvwjFroXYyHZFj5` is retired at the v2
 cutover (section 7) and nothing is deployed per coin, ever.
 
 | Item | Size | Rent (lamports) | SOL |
@@ -414,6 +414,17 @@ pay rent on capital it must leave parked for a week.
 | Withdrawal | `request_unbond` sets `unbond_available_at = now + bond_cooldown_seconds` (default **604,800 s = 7 days**), then `withdraw_bond` returns the lamports. Requires no active `MiningPosition` (unassign first) and the cooldown to have elapsed |
 | Sponsor-funded bond | `bond_source = 1` with `bond_sponsor_vault` set. It unlocks exactly the same things, the player can never withdraw it, and it returns to the vault when the player exits |
 | Maturity | measured from the `PlayerAccount` PDA creation slot, and **not** from the bond. Posting or withdrawing a bond never resets, accelerates or delays maturity |
+
+**Amendment from the Phase 0 review (2026-09-23): the starter tranche cap.** A player with no
+bond mines at `starter_efficiency_bps`, but the unbonded players of a coin may collectively
+receive at most `STARTER_TRANCHE_BPS` (default `1_000` = 10%) of each block's reward. A bonded
+player therefore always keeps at least 90% of a block, and when a coin has no bonded power at
+all the unassigned remainder stays in the Mining Reserve: it is never burned and never
+re-assigned to the starter index. The implementation is two reward indexes per mine, a bonded
+index and a starter index, which is why `Coin` carries `bonded_power` and `starter_power`.
+Both bounds apply at once and neither can be traded for the other: starter mode is 25% of the
+same maturity-adjusted power **and** capped at 10% of the block. The reserve is debited only by
+what is actually distributed, so the remainder needs no carry field and cannot be spent twice.
 
 Why not the alternatives: an instantaneous balance check is cyclable, so a farm with one funded
 wallet could satisfy it for ten thousand wallets in the same slot; an off-chain wallet-age
@@ -889,6 +900,7 @@ pool (`LedgerInvariantViolated`, `MetadataTooLong`, `InvalidMintLayout`,
 
 **Constants** (`constants.rs`, Phase 0b): `BOND_LAMPORTS = 70_000_000`,
 `BOND_COOLDOWN_SECONDS = 604_800`, `STARTER_EFFICIENCY_BPS = 2_500`,
+`STARTER_TRANCHE_BPS = 1_000`,
 `EPOCH_SEED_DELAY_SLOTS = 32`, `EPOCH_SEED_MAX_LATENESS_SLOTS = 512`,
 `SLOT_HASHES_WINDOW = 512`, `CRANK_TIP_BPS = 200`, `MAX_PAUSE_SECONDS = 259_200`,
 `MAX_RARITY_TIERS = 8`, `MAX_NAME_LEN = 16`, `MAX_SYMBOL_LEN = 8`,
@@ -1012,6 +1024,7 @@ differs, the Rust value wins and the TypeScript is the bug, because the chain is
 | Creator pays 100% by default; on-chain sponsorship and events can subsidise, and sponsorship never affects power, rewards or discovery | 1.4, 1.7 |
 | No per-player VRF: one seed per (coin, epoch) committed to a future slot's `SlotHashes` entry, participation locked before the seed is known, all outcomes derived from it | 1.6, 4.1, 4.2 |
 | Anti-bot by economic commitment: a flat, identical, refundable bond with no power, plus a no-bond starter mode | 3.2, 5 |
+| Starter tranche capped at `STARTER_TRANCHE_BPS` (10%) of each block whatever the bonded power is; the unassigned remainder stays in the Mining Reserve and is never burned | 3.2, 8.2 |
 | Discovery caps denominated in SOL, priced by our own pool TWAP, no external oracle | 4.3 |
 | Governance: Squads 2-of-3 with a timelock now, program frozen after audit, no discretionary guardian pause over user funds | 6 |
 | Fresh start: new program id, wiped devnet, no v2 migration code | 7 |

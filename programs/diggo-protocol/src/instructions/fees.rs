@@ -1,106 +1,61 @@
-//! instructions::fees.rs (phase 0a mechanical split of lib.rs).
+//! Fees and the crank tip (design 6, 8.2). WS-B owns this file.
 
 use crate::*;
 
+/// Permissionless sweep of a coin's accrued fees to the fixed destinations held in
+/// ProtocolConfig. No instruction takes a destination argument.
+#[derive(Accounts)]
+pub struct SweepFees<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub mint: InterfaceAccount<'info, Mint>,
+    #[account(mut, seeds = [COIN_SEED, mint.key().as_ref()], bump = coin.bump)]
+    pub coin: Account<'info, Coin>,
+    #[account(seeds = [PROTOCOL_SEED], bump = protocol.bump)]
+    pub protocol: Account<'info, ProtocolConfig>,
+    #[account(mut, seeds = [TREASURY_SEED], bump)]
+    pub treasury: SystemAccount<'info>,
+    #[account(mut, seeds = [CRANK_POOL_SEED], bump)]
+    pub crank_pool: SystemAccount<'info>,
+    /// The coin's creator: the only account a creator payout may reach.
+    #[account(mut, address = coin.creator)]
+    pub creator: SystemAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
 
-
-/// Creator trading-fee claim. Pays out only the creator's accrued fee bucket and can
-/// never touch the curve's LP SOL or either program reserve; see withdrawable_fee.
 #[derive(Accounts)]
 pub struct ClaimCreatorFees<'info> {
     #[account(mut)]
     pub creator: Signer<'info>,
     pub mint: InterfaceAccount<'info, Mint>,
-    #[account(seeds = [b"mine", mint.key().as_ref()], bump = mine.bump, has_one = mint)]
-    pub mine: Account<'info, Mine>,
-    #[account(mut, seeds = [b"market", mint.key().as_ref()], bump = market.bump, has_one = mine)]
-    pub market: Account<'info, LaunchMarket>,
+    #[account(mut, seeds = [COIN_SEED, mint.key().as_ref()], bump = coin.bump, has_one = creator)]
+    pub coin: Account<'info, Coin>,
+    pub system_program: Program<'info, System>,
 }
 
-
-/// Platform trading-fee claim, signed by the treasury wallet stored in ProtocolConfig.
+/// Pays at most min(max_tip, crank_tip_bps * accrued fees) to the payer, out of the coin's
+/// accrued fees only: never out of a reserve and never out of the pool.
 #[derive(Accounts)]
-pub struct ClaimPlatformFees<'info> {
+pub struct CrankTip<'info> {
     #[account(mut)]
-    pub treasury: Signer<'info>,
-    #[account(seeds = [b"protocol"], bump = protocol.bump)]
-    pub protocol: Account<'info, ProtocolConfig>,
+    pub payer: Signer<'info>,
     pub mint: InterfaceAccount<'info, Mint>,
-    #[account(seeds = [b"mine", mint.key().as_ref()], bump = mine.bump, has_one = mint)]
-    pub mine: Account<'info, Mine>,
-    #[account(mut, seeds = [b"market", mint.key().as_ref()], bump = market.bump, has_one = mine)]
-    pub market: Account<'info, LaunchMarket>,
+    #[account(mut, seeds = [COIN_SEED, mint.key().as_ref()], bump = coin.bump)]
+    pub coin: Account<'info, Coin>,
+    #[account(seeds = [PROTOCOL_SEED], bump = protocol.bump)]
+    pub protocol: Account<'info, ProtocolConfig>,
+    pub system_program: Program<'info, System>,
 }
 
-/// Claims the mine creator's explicitly accrued trading fee. The creator can claim
-/// only their own fee bucket: withdrawable_fee refuses to move anything unless the
-/// market still holds its rent floor, the whole curve reserve (LP SOL) and the other
-/// fee bucket afterwards. There is no path from here to a program reserve.
-pub fn claim_creator_fees(ctx: Context<ClaimCreatorFees>) -> Result<()> {
-    require_keys_eq!(
-        ctx.accounts.creator.key(),
-        ctx.accounts.mine.creator,
-        DiggoError::UnauthorizedCreator
-    );
-    let market_info = ctx.accounts.market.to_account_info();
-    let rent_floor = Rent::get()?.minimum_balance(market_info.data_len());
-    let amount = withdrawable_fee(
-        &ctx.accounts.market,
-        market_info.lamports(),
-        rent_floor,
-        FeeBucket::Creator,
-    )?;
-    ctx.accounts.market.creator_fee_claimable = 0;
-    **market_info.try_borrow_mut_lamports()? = market_info
-        .lamports()
-        .checked_sub(amount)
-        .ok_or(DiggoError::MathOverflow)?;
-    let creator_info = ctx.accounts.creator.to_account_info();
-    **creator_info.try_borrow_mut_lamports()? = creator_info
-        .lamports()
-        .checked_add(amount)
-        .ok_or(DiggoError::MathOverflow)?;
-    emit!(FeesClaimed {
-        mint: ctx.accounts.mint.key(),
-        claimant: ctx.accounts.creator.key(),
-        kind: 0,
-        amount,
-    });
-    Ok(())
+pub fn sweep_fees(_ctx: Context<SweepFees>) -> Result<()> {
+    err!(DiggoError::NotImplemented)
 }
 
-/// Claims the platform trading fee accrued on one market, paid to the treasury wallet
-/// stored in ProtocolConfig. Same guard as the creator claim: the curve reserve and
-/// the other fee bucket are untouchable.
-pub fn claim_platform_fees(ctx: Context<ClaimPlatformFees>) -> Result<()> {
-    require_keys_eq!(
-        ctx.accounts.treasury.key(),
-        ctx.accounts.protocol.treasury,
-        DiggoError::InvalidTreasury
-    );
-    let market_info = ctx.accounts.market.to_account_info();
-    let rent_floor = Rent::get()?.minimum_balance(market_info.data_len());
-    let amount = withdrawable_fee(
-        &ctx.accounts.market,
-        market_info.lamports(),
-        rent_floor,
-        FeeBucket::Platform,
-    )?;
-    ctx.accounts.market.platform_fee_claimable = 0;
-    **market_info.try_borrow_mut_lamports()? = market_info
-        .lamports()
-        .checked_sub(amount)
-        .ok_or(DiggoError::MathOverflow)?;
-    let treasury_info = ctx.accounts.treasury.to_account_info();
-    **treasury_info.try_borrow_mut_lamports()? = treasury_info
-        .lamports()
-        .checked_add(amount)
-        .ok_or(DiggoError::MathOverflow)?;
-    emit!(FeesClaimed {
-        mint: ctx.accounts.mint.key(),
-        claimant: ctx.accounts.treasury.key(),
-        kind: 1,
-        amount,
-    });
-    Ok(())
+pub fn claim_creator_fees(_ctx: Context<ClaimCreatorFees>) -> Result<()> {
+    err!(DiggoError::NotImplemented)
 }
+
+pub fn crank_tip(_ctx: Context<CrankTip>, _max_tip: u64) -> Result<()> {
+    err!(DiggoError::NotImplemented)
+}
+

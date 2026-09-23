@@ -28,24 +28,24 @@ pub struct Mine {
     pub reduction_bps: u16,
     pub minimum_reward: u64,
     pub status: MineStatus,
-    #[max_len(MAX_NAME_LEN)]
+    #[max_len(32)]
     pub name: String,
-    #[max_len(MAX_SYMBOL_LEN)]
+    #[max_len(10)]
     pub symbol: String,
-    #[max_len(MAX_URI_LEN)]
+    #[max_len(200)]
     pub uri: String,
     /// Total Discovery Reserve allocated at launch — the denominator of the per-call
     /// and per-epoch caps, so the spend limits stay stable as the reserve drains.
     pub discovery_reserve_total: u64,
     /// Maximum discovery payout for this mine in one discovery epoch, snapshotted at
-    /// launch from ProtocolConfig.
+    /// launch from ProtocolConfigV4.
     pub discovery_epoch_budget: u64,
     pub discovery_epoch_spent: u64,
     pub discovery_epoch_ends_at: i64,
     /// Scoped circuit breaker for this mine's Discovery Reserve only.
     pub discovery_paused: bool,
     pub bump: u8,
-    /// Appended layout version (ACCOUNT_VERSION); see ProtocolConfig.version.
+    /// Appended layout version (ACCOUNT_VERSION); see ProtocolConfigV4.version.
     pub version: u8,
     /// True while this mine's block rewards are paid out of its market's curve token
     /// inventory instead of its own Mining Reserve. Set at launch whenever the launch
@@ -116,7 +116,7 @@ pub struct LaunchMarket {
     pub creator_fee_bps: u16,
     pub platform_fee_bps: u16,
     pub bump: u8,
-    /// Appended layout version (ACCOUNT_VERSION); see ProtocolConfig.version.
+    /// Appended layout version (ACCOUNT_VERSION); see ProtocolConfigV4.version.
     pub version: u8,
     /// The curve-mining ledger, appended after the version byte so a pre-curve market
     /// still decodes with every one of these fields at its safe default: a zero budget,
@@ -151,3 +151,124 @@ pub enum MineStatus {
     MiningActive,
     FullyMined,
 }
+
+// ---- v2 (docs/ONCHAIN_V2_DESIGN.md 1.3(b), 3.2, 4.1, 8.2) --------------------------------
+
+/// The one account that holds a coin: Mine and LaunchMarket merged, the four token vaults
+/// replaced by one vault plus this ledger, and the metadata moved into the mint.
+///
+/// It is also the whole reward ledger. `reward_index` is cumulative over blocks and is split
+/// into two indexes by the starter-tranche rule: a bonded position accrues against the
+/// bonded index, a starter-mode position against the starter index, and the starter index can
+/// never receive more than STARTER_TRANCHE_BPS of any block. Whatever a block cannot assign
+/// stays in the Mining Reserve - it is never burned and never moved to the starter index.
+///
+/// The vault ledger invariant every instruction that touches the vault must end with is
+/// `vault.amount >= curve_tokens + reserve_remaining + discovery_remaining + outstanding_claims`.
+#[account]
+#[derive(Default)]
+pub struct Coin {
+    pub creator: Pubkey,
+    /// The coin's single token vault, PDA under [b"vault", mint].
+    pub vault: Pubkey,
+    pub total_supply: u64,
+    /// Mining Reserve left to emit after graduation.
+    pub reserve_remaining: u64,
+    /// Discovery Reserve left to pay out.
+    pub discovery_remaining: u64,
+    /// Part of the index already credited to positions but not yet claimed. Without it the
+    /// vault invariant of design 1.3(a) is short by exactly the mined-but-unclaimed amount.
+    pub outstanding_claims: u64,
+    pub cumulative_distributed: u64,
+    pub total_power: u64,
+    /// Power of positions accruing in the bonded index.
+    pub bonded_power: u64,
+    /// Power of positions accruing in the starter index, already scaled by
+    /// starter_efficiency_bps.
+    pub starter_power: u64,
+    /// Cumulative rewards per unit of power, scaled by INDEX_SCALE, over the bonded index.
+    pub reward_index: u128,
+    pub current_block_reward: u64,
+    pub block_interval: u32,
+    pub next_block_at: i64,
+    pub epoch_index: u32,
+    pub epoch_length: u32,
+    pub epoch_ends_at: i64,
+    /// Slot this epoch ends at, so the epoch seed target of design 4.1 can be armed from it.
+    pub epoch_ends_slot: u64,
+    pub reduction_bps: u16,
+    pub minimum_reward: u64,
+    /// Curve inventory the pre-graduation phase may sell.
+    pub token_reserve: u64,
+    pub sol_reserve: u64,
+    pub virtual_sol_reserve: u64,
+    pub graduation_target: u64,
+    pub creator_fee_claimable: u64,
+    pub platform_fee_claimable: u64,
+    pub creator_fee_bps: u16,
+    pub platform_fee_bps: u16,
+    pub curve_mining_cap: u64,
+    pub curve_mining_mined: u64,
+    pub curve_mining_unpaid: u64,
+    pub curve_mining_block_reward: u64,
+    pub curve_mining_open: u8,
+    pub graduated: u8,
+    pub curve_phase_ends_at: i64,
+    pub discovery_reserve_total: u64,
+    pub discovery_epoch_budget: u64,
+    pub discovery_epoch_spent: u64,
+    /// Discovery epoch cursor: which epoch the two counters above belong to.
+    pub discovery_epoch_index: u32,
+    pub discovery_paused: u8,
+    /// TWAP accumulator over this coin's own pool, in lamports per base unit scaled by
+    /// PRICE_SCALE, plus the slot it was last updated at. The only price the program trusts.
+    pub twap_cum_price_lamports_per_unit: u128,
+    pub twap_last_update_slot: u64,
+    /// The epoch seed of design 4.1 and the slot it was taken from. Frozen contract:
+    /// WS-B writes these, WS-C reads them, and they must not move.
+    pub epoch_seed: [u8; 32],
+    pub epoch_seed_epoch: u32,
+    pub epoch_seed_target_slot: u64,
+    pub epoch_seed_recorded_slot: u64,
+    pub status: u8,
+    pub bump: u8,
+    pub version: u8,
+}
+
+impl Coin {
+    pub const LEN: usize = 32 * 2
+        + 8 * 8
+        + 16
+        + 8
+        + 4
+        + 8
+        + 4
+        + 4
+        + 8
+        + 8
+        + 2
+        + 8
+        + 8 * 6
+        + 2 * 2
+        + 8 * 4
+        + 1
+        + 1
+        + 8
+        + 8 * 3
+        + 4
+        + 1
+        + 16
+        + 8
+        + 32
+        + 4
+        + 8
+        + 8
+        + 3;
+    /// Whole account space, discriminator included.
+    pub const SIZE: usize = 8 + Self::LEN;
+}
+
+/// Coin lifecycle, kept as a byte so the layout stays explicit.
+pub const COIN_STATUS_LAUNCHING: u8 = 0;
+pub const COIN_STATUS_MINING_ACTIVE: u8 = 1;
+pub const COIN_STATUS_FULLY_MINED: u8 = 2;

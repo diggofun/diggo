@@ -18,7 +18,7 @@ pub struct DiscoveryApproval {
 /// per-call ceiling, per-mine per-epoch budget, and reserve sufficiency. Idempotency is
 /// enforced separately by the DiscoveryReceipt PDA.
 pub fn approve_discovery_payout(
-    protocol: &ProtocolConfig,
+    protocol: &ProtocolConfigV4,
     mine: &Mine,
     amount: u64,
     now: i64,

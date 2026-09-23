@@ -4,12 +4,12 @@ use crate::*;
 
 
 
-/// Bounded keeper power rule: never above ProtocolConfig.max_crew_power (itself clamped
+/// Bounded keeper power rule: never above ProtocolConfigV4.max_crew_power (itself clamped
 /// by MAX_CREW_POWER_HARD_CAP), and never more than max_power_increase_bps plus the
 /// always-allowed MIN_POWER_STEP above the previous value. Decreases are intentionally
 /// unbounded so abuse handling can still reduce a player's power.
 pub fn validate_power_update(
-    protocol: &ProtocolConfig,
+    protocol: &ProtocolConfigV4,
     previous_power: u64,
     new_power: u64,
 ) -> Result<()> {

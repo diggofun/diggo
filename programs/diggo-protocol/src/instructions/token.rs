@@ -110,7 +110,7 @@ pub fn transfer_from_pool<'info>(
     mint: &InterfaceAccount<'info, Mint>,
     from: &InterfaceAccount<'info, TokenAccount>,
     to: &InterfaceAccount<'info, TokenAccount>,
-    pool: &Account<'info, LiquidityPool>,
+    pool: &Account<'info, LiquidityPoolV4>,
     amount: u64,
 ) -> Result<()> {
     let mint_key = mint.key();

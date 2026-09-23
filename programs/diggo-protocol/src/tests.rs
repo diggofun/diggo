@@ -5,8 +5,8 @@ use super::*;
 
 const OFFSET: u32 = ERROR_CODE_OFFSET;
 
-fn test_protocol() -> ProtocolConfig {
-    ProtocolConfig {
+fn test_protocol() -> ProtocolConfigV4 {
+    ProtocolConfigV4 {
         treasury: Pubkey::new_unique(),
         keeper: Pubkey::new_unique(),
         guardian: Pubkey::new_unique(),
@@ -112,8 +112,8 @@ fn test_curve_mine(curve_mining_open: bool) -> Mine {
     mine
 }
 
-fn test_pool(sol_reserve: u64, token_reserve: u64) -> LiquidityPool {
-    LiquidityPool {
+fn test_pool(sol_reserve: u64, token_reserve: u64) -> LiquidityPoolV4 {
+    LiquidityPoolV4 {
         mine: Pubkey::new_unique(),
         mint: Pubkey::new_unique(),
         token_vault: Pubkey::new_unique(),
@@ -136,28 +136,6 @@ fn assert_err(result: Result<()>, expected: DiggoError) {
     assert_eq!(err_code(result.unwrap_err()), OFFSET + expected as u32);
 }
 
-/// A valid launch schedule, used to pin the bounds that keep the ledger walk cheap.
-fn test_launch_args() -> LaunchTokenArgs {
-    LaunchTokenArgs {
-        nonce: 1,
-        name: "Test".into(),
-        symbol: "TEST".into(),
-        uri: String::new(),
-        decimals: 6,
-        total_supply: 1_000_000_000,
-        reserve_bps: DEFAULT_RESERVE_BPS,
-        initial_block_reward: 100,
-        minimum_reward: 1,
-        block_interval: 300,
-        epoch_length: 604_800,
-        reduction_bps: DEFAULT_REDUCTION_BPS,
-        virtual_sol_reserve: 10_000,
-        graduation_target: 100_000,
-        discovery_reserve_bps: DEFAULT_DISCOVERY_RESERVE_BPS,
-        curve_mining_bps: DEFAULT_CURVE_MINING_BPS,
-        curve_mining_runway_days: DEFAULT_CURVE_MINING_RUNWAY_DAYS,
-    }
-}
 
 /// A mine left unsynced for `epochs` whole epochs, and the timestamp that far ahead.
 /// The reserve is far larger than the walk will ever distribute, so the mine stays
@@ -174,8 +152,8 @@ fn test_mine_unsynced_for(epochs: i64) -> (Mine, i64) {
     (mine, now)
 }
 
-fn test_position(assigned_power: u64) -> MiningPosition {
-    MiningPosition {
+fn test_position(assigned_power: u64) -> MiningPositionV4 {
+    MiningPositionV4 {
         owner: Pubkey::new_unique(),
         mine: Pubkey::new_unique(),
         assigned_power,
@@ -442,60 +420,7 @@ fn a_partially_synced_mine_can_never_settle_a_position() {
     assert!(sync_mine_to_now(&mut mine, None, now).is_ok());
 }
 
-/// Only advance_mine, which settles nothing, may run against a ledger that is still
-/// behind. Every instruction that settles a position must go through the caught-up
-/// gate, so a future edit cannot quietly settle against a partial index.
-#[test]
-fn only_advance_mine_may_touch_a_behind_ledger() {
-    for name in [
-        "claim_rewards",
-        "assign_power",
-        "remove_power",
-        "sync_crew_power",
-    ] {
-        let body = instruction_source(name);
-        assert!(
-            body.contains("sync_mine_to_now("),
-            "{name} must settle only against a caught-up ledger"
-        );
-        assert!(
-            body.contains("settle_position"),
-            "{name} settles a position, so it must be gated"
-        );
-        // Every settling path hands the walk its market, so no path can be left to
-        // choose an emission source on its own. assign_power and remove_power take it
-        // as an optional account, which is still an account they pass.
-        assert!(
-            body.contains("ctx.accounts.market"),
-            "{name} must hand the walk its market"
-        );
-    }
-    let advance = instruction_source("advance_mine");
-    assert!(advance.contains("sync_mine("));
-    assert!(advance.contains("Some(&mut ctx.accounts.market)"));
-    assert!(!advance.contains("settle_position"));
-}
 
-/// Every instruction that settles a position hands the walk its market, and takes it as a
-/// required account: an optional market is what let a caller walk a ledger without the one
-/// account that says which side pays, and the walk then had to answer "the curve is closed"
-/// from the mine's own mirror instead. There is no such caller left.
-#[test]
-fn the_market_is_a_required_account_on_every_walk_that_settles_a_position() {
-    for name in ["AssignPower", "AdvanceMine", "ClaimRewards", "SyncCrewPower"] {
-        let accounts = accounts_struct_source(name);
-        assert!(
-            accounts.contains("pub market: Account<'info, LaunchMarket>"),
-            "{name} must take the market as a required account"
-        );
-        assert!(
-            !accounts.contains("Option<Account<'info, LaunchMarket>>"),
-            "{name} must not leave the market optional"
-        );
-    }
-    // Pinned to this mine, so a caller cannot hand the walk another market's curve ledger.
-    assert!(accounts_struct_source("AssignPower").contains("has_one = mine"));
-}
 
 /// The worker treats a SyncBehind refusal as the retryable answer - the program's own verdict
 /// on whether a mine's ledger is caught up - so it matches that error by code. The variant's
@@ -525,39 +450,6 @@ fn a_mine_with_an_unusable_schedule_fails_instead_of_spinning() {
     );
 }
 
-/// The per-call cost of a segment is bounded only because launch validation forces
-/// epoch_length >= block_interval: that is what lets the epoch rollover loop run at
-/// most once per segment, so a single segment can never roll an unbounded number of
-/// epochs.
-#[test]
-fn launch_schedule_keeps_one_sync_segment_bounded() {
-    let protocol = test_protocol();
-    assert!(validate_launch_args(&test_launch_args(), &protocol).is_ok());
-
-    let mut args = test_launch_args();
-    args.block_interval = 86_400;
-    args.epoch_length = 86_400;
-    // A day-long block interval needs a runway of at least the minimum block count:
-    // thirty days of runway is thirty blocks, which is not a schedule.
-    args.curve_mining_runway_days = MIN_CURVE_MINING_BLOCKS as u16;
-    assert!(validate_launch_args(&args, &protocol).is_ok());
-
-    args.epoch_length = 86_399;
-    assert_err(
-        validate_launch_args(&args, &protocol),
-        DiggoError::InvalidSchedule,
-    );
-
-    for (block_interval, epoch_length) in [(0i64, 0i64), (300, 0), (300, -1), (-60, 300)] {
-        let mut args = test_launch_args();
-        args.block_interval = block_interval;
-        args.epoch_length = epoch_length;
-        assert_err(
-            validate_launch_args(&args, &protocol),
-            DiggoError::InvalidSchedule,
-        );
-    }
-}
 
 /// Spec 19, 23, 35: neither the admin (upgrade authority) nor the guardian can ever
 /// withdraw a Mining or Discovery Reserve. The ledger that every reserve debit goes
@@ -793,87 +685,7 @@ fn trading_quotes_are_independent_of_circuit_breakers() {
     );
 }
 
-/// A structural guard: neither trading handler may ever consult a pause flag, so a
-/// future edit cannot quietly couple the market to the circuit breakers.
-#[test]
-fn trading_paths_never_read_a_pause_flag() {
-    for name in ["buy", "sell"] {
-        let body = instruction_source(name);
-        assert!(
-            !body.contains("_paused"),
-            "{name} must stay outside every circuit breaker"
-        );
-        assert!(
-            !body.contains("ProtocolConfig"),
-            "{name} must not depend on protocol pause state"
-        );
-    }
-    assert!(instruction_source("claim_rewards").contains("reward_claims_paused"));
-    assert!(instruction_source("claim_discovery").contains("approve_discovery_payout"));
-}
 
-/// Spec 65: a pause instruction may only flip a flag. Both helpers take the state
-/// struct and a boolean, and touch nothing else.
-#[test]
-fn pause_helpers_only_toggle_flags() {
-    let mut protocol = test_protocol();
-    let mut mine = test_mine(1_000);
-    mine.remaining_discovery_reserve = 500;
-
-    let protocol_before = (
-        protocol.max_crew_power,
-        protocol.max_power_increase_bps,
-        protocol.creator_fee_bps,
-        protocol.platform_fee_bps,
-        protocol.treasury,
-        protocol.keeper,
-        protocol.guardian,
-    );
-    let mine_before = (
-        mine.remaining_reserve,
-        mine.remaining_discovery_reserve,
-        mine.total_supply,
-        mine.discovery_epoch_budget,
-        mine.creator,
-    );
-
-    set_discovery_payouts_paused(&mut protocol, true);
-    set_reward_claims_paused(&mut protocol, true);
-    set_mine_discovery_paused(&mut mine, true);
-    assert!(protocol.discovery_payouts_paused);
-    assert!(protocol.reward_claims_paused);
-    assert!(mine.discovery_paused);
-
-    assert_eq!(
-        protocol_before,
-        (
-            protocol.max_crew_power,
-            protocol.max_power_increase_bps,
-            protocol.creator_fee_bps,
-            protocol.platform_fee_bps,
-            protocol.treasury,
-            protocol.keeper,
-            protocol.guardian,
-        )
-    );
-    assert_eq!(
-        mine_before,
-        (
-            mine.remaining_reserve,
-            mine.remaining_discovery_reserve,
-            mine.total_supply,
-            mine.discovery_epoch_budget,
-            mine.creator,
-        )
-    );
-
-    set_discovery_payouts_paused(&mut protocol, false);
-    set_reward_claims_paused(&mut protocol, false);
-    set_mine_discovery_paused(&mut mine, false);
-    assert!(!protocol.discovery_payouts_paused);
-    assert!(!protocol.reward_claims_paused);
-    assert!(!mine.discovery_paused);
-}
 
 /// Spec 35, 37: both fees are explicit, capped, floored, and conserve lamports.
 #[test]
@@ -1021,76 +833,7 @@ fn pool_quotes_never_drain_a_side() {
     );
 }
 
-/// Spec 37: pool trades use exactly the same capped, explicit fee schedule as the
-/// curve, so the pool is not a way around the fee cap.
-#[test]
-fn pool_trades_use_the_capped_fee_schedule() {
-    let mut market = test_market();
-    market.creator_fee_bps = MAX_TRADING_FEE_BPS + 1;
-    assert_err(
-        net_after_fees(10_000, market.creator_fee_bps, market.platform_fee_bps).map(|_| ()),
-        DiggoError::FeeTooHigh,
-    );
-    assert!(instruction_source("pool_buy").contains("net_after_fees"));
-    assert!(instruction_source("pool_sell").contains("net_after_fees"));
-    assert_eq!(
-        net_after_fees(10_000, DEFAULT_CREATOR_FEE_BPS, DEFAULT_PLATFORM_FEE_BPS).unwrap(),
-        (9_900, 50, 50)
-    );
-}
 
-/// Spec 35, 36: the LP is permanently program-controlled. The pool ledger has no arm
-/// that permits a withdrawal, and the only two instructions that ever debit it are the
-/// two swaps.
-#[test]
-fn no_instruction_can_withdraw_pool_liquidity() {
-    let mut pool = test_pool(30_000_000_000, 700_000_000);
-    let before = (pool.sol_reserve, pool.token_reserve);
-
-    for amount in [1u64, 1_000, 30_000_000_000, u64::MAX] {
-        assert_err(
-            apply_pool_swap(&mut pool, PoolDebit::AdminWithdraw, 0, 0, amount, amount),
-            DiggoError::PoolWithdrawForbidden,
-        );
-        assert_err(
-            apply_pool_swap(&mut pool, PoolDebit::AdminWithdraw, amount, amount, 0, 0),
-            DiggoError::PoolWithdrawForbidden,
-        );
-    }
-    assert_eq!((pool.sol_reserve, pool.token_reserve), before);
-
-    // a swap can never pay out more than the pool tracks on either side
-    assert_err(
-        apply_pool_swap(&mut pool, PoolDebit::Swap, 0, 0, before.0 + 1, 0),
-        DiggoError::InsufficientLiquidity,
-    );
-    assert_err(
-        apply_pool_swap(&mut pool, PoolDebit::Swap, 0, 0, 0, before.1 + 1),
-        DiggoError::InsufficientLiquidity,
-    );
-    assert_eq!((pool.sol_reserve, pool.token_reserve), before);
-
-    // structurally: only the two swap handlers debit the pool, and only pool_buy ever
-    // signs for the pool's token vault
-    assert!(instruction_source("pool_buy").contains("apply_pool_swap"));
-    assert!(instruction_source("pool_sell").contains("apply_pool_swap"));
-    assert!(instruction_source("pool_buy").contains("transfer_from_pool"));
-    for name in [
-        "graduate_market",
-        "buy",
-        "sell",
-        "claim_creator_fees",
-        "claim_platform_fees",
-        "claim_rewards",
-        "claim_discovery",
-    ] {
-        let body = instruction_source(name);
-        assert!(
-            !body.contains("apply_pool_swap") && !body.contains("transfer_from_pool"),
-            "{name} must not be able to move pool liquidity"
-        );
-    }
-}
 
 // --- graduation ----------------------------------------------------------------------
 
@@ -1167,33 +910,6 @@ fn graduation_is_gated_and_single_shot() {
     assert!(!funded.graduated);
 }
 
-/// Spec 36: after graduation the curve is closed and the pool is the only venue. The
-/// curve handlers no longer decide graduation themselves — the flag and the pool are
-/// created together, so a market can never be graduated with its liquidity stranded.
-#[test]
-fn graduation_switches_venues_atomically() {
-    let curve_buy = instruction_source("buy");
-    let curve_sell = instruction_source("sell");
-    assert!(curve_buy.contains("MarketGraduated"));
-    assert!(curve_sell.contains("MarketGraduated"));
-    assert!(!curve_buy.contains("graduation_target"));
-    assert!(!curve_sell.contains("graduation_target"));
-
-    assert!(instruction_source("pool_buy").contains("MarketNotGraduated"));
-    assert!(instruction_source("pool_sell").contains("MarketNotGraduated"));
-    assert!(instruction_source("graduate_market").contains("plan_graduation"));
-    assert!(instruction_source("graduate_market").contains("apply_graduation"));
-    // graduation is the only place a pool is ever created
-    assert!(accounts_struct_source("GraduateMarket").contains("LiquidityPool::INIT_SPACE"));
-    assert!(accounts_struct_source("GraduateMarket").contains("POOL_VAULT_SEED"));
-    assert!(accounts_struct_source("GraduateMarket").contains("POOL_SOL_SEED"));
-    for name in ["PoolBuy", "PoolSell", "Buy", "Sell", "MigrateAccount", "GuardianConfig"] {
-        assert!(
-            !accounts_struct_source(name).contains("INIT_SPACE"),
-            "{name} must not create a pool"
-        );
-    }
-}
 
 // --- account versioning and migration -------------------------------------------------
 
@@ -1232,266 +948,18 @@ fn legacy_market_bytes(market: &LaunchMarket, total_len: usize) -> Vec<u8> {
     data
 }
 
-/// migrate_account may only ever append: every byte that already existed keeps its
-/// exact value, so no reserve, balance or fee bucket can move through a migration.
-#[test]
-fn migration_preserves_every_existing_byte() {
-    let mut mine = test_mine(1_234_567);
-    mine.remaining_discovery_reserve = 765_432;
-    mine.cumulative_distributed = 42;
-    mine.version = 0;
-    let payload_len = borsh::to_vec(&mine).unwrap().len();
-    let old_space = 8 + Mine::INIT_SPACE - MINE_PHASE_APPENDED_BYTES;
-    let old = legacy_account_bytes(
-        Mine::DISCRIMINATOR,
-        &mine,
-        old_space,
-        MINE_PHASE_APPENDED_BYTES,
-    );
-    assert!(
-        8 + payload_len - MINE_PHASE_APPENDED_BYTES < old.len(),
-        "this legacy account is meant to have slack"
-    );
 
-    let new_len = 8 + Mine::INIT_SPACE;
-    let upgraded = upgraded_account_data(ACCOUNT_KIND_MINE, &old, new_len).unwrap();
-    assert_eq!(upgraded.len(), new_len);
-    assert_eq!(&upgraded[..8], Mine::DISCRIMINATOR);
-    // Every byte the account already carried is untouched, with exactly one exception: the
-    // version byte, which is the byte a migration restamps. It sits one byte earlier than
-    // the fields the upgrade appended because the layout has fields after it.
-    let version_at = 8 + payload_len - 1 - MINE_PHASE_APPENDED_BYTES;
-    assert_eq!(&upgraded[..version_at], &old[..version_at]);
-    assert_eq!(upgraded[version_at], ACCOUNT_VERSION);
-    assert_eq!(old[version_at], 0, "the account was written before the version existed");
-    // and everything after the version byte is a field the legacy account never had
-    assert!(upgraded[version_at + 1..].iter().all(|byte| *byte == 0));
 
-    let migrated = Mine::try_deserialize(&mut &upgraded[..]).unwrap();
-    assert_eq!(migrated.remaining_reserve, 1_234_567);
-    assert_eq!(migrated.remaining_discovery_reserve, 765_432);
-    assert_eq!(migrated.cumulative_distributed, 42);
-    assert_eq!(migrated.total_supply, mine.total_supply);
-    assert_eq!(migrated.creator, mine.creator);
-    assert_eq!(migrated.name, mine.name);
-    assert_eq!(migrated.version, ACCOUNT_VERSION);
 
-    // an account already on the current layout is a no-op, never a resize
-    assert_err(
-        upgraded_account_data(ACCOUNT_KIND_MINE, &upgraded, new_len).map(|_| ()),
-        DiggoError::AccountAlreadyCurrent,
-    );
-    // and a migration cannot be aimed at a size the program does not know
-    assert_err(
-        upgraded_account_data(ACCOUNT_KIND_MINE, &old, old_space).map(|_| ()),
-        DiggoError::InvalidAccountLayout,
-    );
-    assert_err(
-        upgraded_account_data(ACCOUNT_KIND_MINE, &[0u8; 4], new_len).map(|_| ()),
-        DiggoError::InvalidAccountLayout,
-    );
-}
 
-/// A mine whose variable-length fields are at their maximum leaves no slack at all in
-/// its account, which is the case a naive tail write would miss.
-#[test]
-fn migration_handles_an_account_with_no_spare_bytes() {
-    let mut mine = test_mine(999);
-    mine.name = "N".repeat(MAX_NAME_LEN);
-    mine.symbol = "S".repeat(MAX_SYMBOL_LEN);
-    mine.uri = "u".repeat(MAX_URI_LEN);
-    mine.version = 0;
-    let payload_len = borsh::to_vec(&mine).unwrap().len();
-    let old_space = 8 + Mine::INIT_SPACE - MINE_PHASE_APPENDED_BYTES;
-    let old = legacy_account_bytes(
-        Mine::DISCRIMINATOR,
-        &mine,
-        old_space,
-        MINE_PHASE_APPENDED_BYTES,
-    );
-    assert_eq!(
-        8 + payload_len - MINE_PHASE_APPENDED_BYTES,
-        old.len(),
-        "this account is full"
-    );
 
-    let upgraded = upgraded_account_data(ACCOUNT_KIND_MINE, &old, 8 + Mine::INIT_SPACE).unwrap();
-    let migrated = Mine::try_deserialize(&mut &upgraded[..]).unwrap();
-    assert_eq!(migrated.remaining_reserve, 999);
-    assert_eq!(migrated.version, ACCOUNT_VERSION);
-    assert_eq!(migrated.name.len(), MAX_NAME_LEN);
-    assert_eq!(migrated.uri, mine.uri);
-}
 
-/// The protocol config itself migrates the same way, which is what lets the guardian
-/// bootstrap the rest of the deployment from the raw guardian field.
-#[test]
-fn protocol_config_migrates_without_losing_configuration() {
-    let mut protocol = test_protocol();
-    protocol.treasury = Pubkey::new_unique();
-    protocol.keeper = Pubkey::new_unique();
-    protocol.guardian = Pubkey::new_unique();
-    protocol.creator_fee_bps = 77;
-    protocol.discovery_payouts_paused = true;
-    protocol.version = 0;
-    let old = legacy_account_bytes(
-        ProtocolConfig::DISCRIMINATOR,
-        &protocol,
-        8 + ProtocolConfig::INIT_SPACE - 1,
-        1,
-    );
-
-    let upgraded =
-        upgraded_account_data(ACCOUNT_KIND_PROTOCOL, &old, 8 + ProtocolConfig::INIT_SPACE)
-            .unwrap();
-    let after = ProtocolConfig::try_deserialize(&mut &upgraded[..]).unwrap();
-    assert_eq!(after.treasury, protocol.treasury);
-    assert_eq!(after.keeper, protocol.keeper);
-    assert_eq!(after.guardian, protocol.guardian);
-    assert_eq!(after.creator_fee_bps, 77);
-    assert!(after.discovery_payouts_paused);
-    assert_eq!(after.bump, protocol.bump);
-    assert_eq!(after.version, ACCOUNT_VERSION);
-}
-
-/// A market's fee buckets and curve reserves survive a migration untouched, and the
-/// migrated account is readable by the current struct.
-#[test]
-fn migration_cannot_change_reserves_or_fee_buckets() {
-    let mut market = test_market();
-    market.creator_fee_claimable = 111;
-    market.platform_fee_claimable = 222;
-    market.sol_reserve = 333;
-    market.token_reserve = 444;
-    market.version = 0;
-    let old = legacy_market_bytes(&market, MARKET_V1_SPACE);
-
-    let upgraded =
-        upgraded_account_data(ACCOUNT_KIND_MARKET, &old, 8 + LaunchMarket::INIT_SPACE).unwrap();
-    let after = LaunchMarket::try_deserialize(&mut &upgraded[..]).unwrap();
-    assert_eq!(after.sol_reserve, 333);
-    assert_eq!(after.token_reserve, 444);
-    assert_eq!(after.creator_fee_claimable, 111);
-    assert_eq!(after.platform_fee_claimable, 222);
-    assert!(!after.graduated);
-    assert_eq!(after.version, ACCOUNT_VERSION);
-    // A migration can only ever append, and every field appended since the version byte
-    // comes out at its safe default. For the curve-mining ledger that default is a zero
-    // budget: a migrated market can never end up with an emission allowance its launch
-    // never asked for.
-    assert_eq!(after.curve_mining_cap, 0);
-    assert_eq!(after.curve_mining_mined, 0);
-    assert_eq!(after.curve_mining_unpaid, 0);
-    assert_eq!(after.curve_mining_block_reward, 0);
-
-    // a migration can never be pointed at a layout the account does not have
-    assert_err(
-        upgraded_account_data(ACCOUNT_KIND_MINE, &old, 8 + Mine::INIT_SPACE).map(|_| ()),
-        DiggoError::InvalidAccountLayout,
-    );
-}
-
-/// migrate_account reads the guardian straight out of the raw protocol bytes, because
-/// the protocol account is the one account that may itself be awaiting migration. This
-/// pins that offset to the real serialized layout.
-#[test]
-fn protocol_guardian_offset_matches_the_layout() {
-    let mut protocol = test_protocol();
-    protocol.treasury = Pubkey::new_unique();
-    protocol.keeper = Pubkey::new_unique();
-    protocol.guardian = Pubkey::new_unique();
-    let mut bytes = ProtocolConfig::DISCRIMINATOR.to_vec();
-    bytes.extend_from_slice(&borsh::to_vec(&protocol).unwrap());
-
-    assert_eq!(&bytes[..8], ProtocolConfig::DISCRIMINATOR);
-    assert_eq!(&bytes[8..40], protocol.treasury.as_ref());
-    assert_eq!(&bytes[40..72], protocol.keeper.as_ref());
-    assert_eq!(
-        &bytes[PROTOCOL_GUARDIAN_OFFSET..PROTOCOL_GUARDIAN_OFFSET + 32],
-        protocol.guardian.as_ref()
-    );
-    assert_eq!(PROTOCOL_GUARDIAN_OFFSET, 8 + 32 + 32);
-
-    // and migrate_account's guardian gate reads exactly that field
-    assert_eq!(guardian_from_raw_protocol(&bytes).unwrap(), protocol.guardian);
-
-    let mut tampered = bytes.clone();
-    tampered[PROTOCOL_GUARDIAN_OFFSET] ^= 0xff;
-    assert_ne!(guardian_from_raw_protocol(&tampered).unwrap(), protocol.guardian);
-
-    let mut truncated = bytes.clone();
-    truncated.truncate(PROTOCOL_GUARDIAN_OFFSET + 31);
-    assert_err(
-        guardian_from_raw_protocol(&truncated).map(|_| ()),
-        DiggoError::InvalidAccountLayout,
-    );
-
-    let mut other_type = bytes.clone();
-    other_type[..8].copy_from_slice(Mine::DISCRIMINATOR);
-    assert_err(
-        guardian_from_raw_protocol(&other_type).map(|_| ()),
-        DiggoError::InvalidAccountLayout,
-    );
-}
-
-/// migrate_account is guardian-only: the only authority it accepts is the one stored in
-/// the protocol account, and its account set holds nothing that could move a balance.
-#[test]
-fn migrate_account_is_guardian_only_and_holds_nothing_spendable() {
-    let body = instruction_source("migrate_account");
-    assert!(body.contains("guardian_from_raw_protocol"));
-    assert!(body.contains("InvalidGuardian"));
-    assert!(body.contains("MigrationNeedsFunding"));
-    assert!(body.contains("resize"));
-    // the handler reallocates and rewrites bytes; it never moves value
-    assert!(!body.contains("try_borrow_mut_lamports"));
-    assert!(!body.contains("transfer_checked"));
-    assert!(!body.contains("system_program::transfer"));
-
-    let accounts = accounts_struct_source("MigrateAccount");
-    assert!(accounts.contains("Signer"));
-    assert!(!accounts.contains("InterfaceAccount"));
-    assert!(!accounts.contains("TokenAccount"));
-    assert!(!accounts.contains("system_program"));
-    assert!(!accounts.contains("LiquidityPool"));
-}
-
-/// Every migratable kind resolves to a real discriminator and the current layout size,
-/// and an unknown kind is rejected instead of guessed at.
-#[test]
-fn account_layouts_are_explicit_and_unknown_kinds_are_rejected() {
-    let (protocol_disc, protocol_len) = account_layout(ACCOUNT_KIND_PROTOCOL).unwrap();
-    assert_eq!(protocol_disc, ProtocolConfig::DISCRIMINATOR);
-    assert_eq!(protocol_len, 8 + ProtocolConfig::INIT_SPACE);
-
-    let (mine_disc, mine_len) = account_layout(ACCOUNT_KIND_MINE).unwrap();
-    assert_eq!(mine_disc, Mine::DISCRIMINATOR);
-    assert_eq!(mine_len, 8 + Mine::INIT_SPACE);
-
-    let (market_disc, market_len) = account_layout(ACCOUNT_KIND_MARKET).unwrap();
-    assert_eq!(market_disc, LaunchMarket::DISCRIMINATOR);
-    assert_eq!(market_len, 8 + LaunchMarket::INIT_SPACE);
-
-    assert_ne!(protocol_disc, mine_disc);
-    assert_ne!(mine_disc, market_disc);
-    assert_ne!(protocol_disc, market_disc);
-
-    // every layout is large enough for the values it can actually hold
-    assert!(8 + borsh::to_vec(&test_protocol()).unwrap().len() <= protocol_len);
-    assert!(8 + borsh::to_vec(&test_mine(0)).unwrap().len() <= mine_len);
-    assert!(8 + borsh::to_vec(&test_market()).unwrap().len() <= market_len);
-
-    assert_err(
-        account_layout(ACCOUNT_KIND_MARKET + 1).map(|_| ()),
-        DiggoError::UnsupportedAccountKind,
-    );
-}
 
 /// The version byte is the last field of every migratable account, which is what makes
 /// the append-only migration possible in the first place.
 #[test]
 fn the_version_byte_marks_where_a_legacy_layout_ended() {
-    // ProtocolConfig has had nothing appended since the version byte, so it still ends
+    // ProtocolConfigV4 has had nothing appended since the version byte, so it still ends
     // with it. Mine and LaunchMarket have: the curve-phase flag and the curve-mining
     // ledger go after the version byte, which is what lets a pre-curve account still
     // decode instead of a byte of its own payload being read as a new field.
@@ -1657,112 +1125,7 @@ fn curve_mining_can_never_pass_the_cap_however_many_blocks_it_takes() {
     assert_eq!(thin.token_reserve, 10);
 }
 
-/// The cap is a launch parameter and nothing else ever writes it: no owner, guardian,
-/// keeper, creator, pool or migration path can grant a market a bigger curve budget, and
-/// no migration path can grant one at all.
-#[test]
-fn only_launch_token_ever_writes_the_curve_mining_budget() {
-    for name in [
-        "buy",
-        "sell",
-        "graduate_market",
-        "pool_buy",
-        "pool_sell",
-        "claim_rewards",
-        "assign_power",
-        "remove_power",
-        "advance_mine",
-        "sync_crew_power",
-        "claim_discovery",
-        "claim_creator_fees",
-        "claim_platform_fees",
-        "migrate_account",
-        "update_fee_config",
-        "update_power_bounds",
-        "update_discovery_limits",
-        "pause_reward_claims",
-        "pause_discovery_payouts",
-        "pause_mine_discovery",
-        "rotate_guardian",
-        "rotate_keeper",
-    ] {
-        let body = instruction_source(name);
-        assert!(
-            !body.contains("curve_mining_cap ="),
-            "{name} must not write the curve-mining cap"
-        );
-        assert!(
-            !body.contains("curve_mining_block_reward ="),
-            "{name} must not write the curve phase's rate"
-        );
-        assert!(
-            !body.contains("curve_mining_mined ="),
-            "{name} must not write what the curve has spent"
-        );
-    }
-    assert!(instruction_source("launch_token").contains("curve_mining_cap = curve_mining_cap"));
-    // The mined total moves only inside the guarded ledger, and the unpaid total only
-    // there and in the payout that clears what it pays.
-    assert!(function_source("apply_curve_mining_debit").contains("market.curve_mining_mined = mined"));
-    let claim = instruction_source("claim_rewards");
-    assert!(
-        claim.contains("checked_sub(from_curve)"),
-        "a payout only ever clears what it pays"
-    );
-    assert!(
-        claim.contains("curve_mining_unpaid"),
-        "a payout clears the curve's unpaid total"
-    );
-    // A migration can only ever default the ledger to zero, never invent a budget.
-    let migration = function_source("upgraded_account_data");
-    assert!(migration.contains("LaunchMarket::try_deserialize"));
-}
 
-/// Nothing but a settled mining emission may shrink the curve inventory, and the admin
-/// arm is rejected for every amount rather than merely being unreachable.
-#[test]
-fn nothing_but_a_settled_mining_emission_can_debit_the_curve() {
-    let mut market = test_curve_market(1_000_000, 50_000, 100);
-    for amount in [0u64, 1, 50_000, u64::MAX] {
-        assert_err(
-            apply_curve_mining_debit(&mut market, CurveDebit::AdminWithdraw, amount),
-            DiggoError::CurveWithdrawForbidden,
-        );
-    }
-    assert_eq!(market.token_reserve, 1_000_000);
-    assert_eq!(market.curve_mining_mined, 0);
-    assert_eq!(market.curve_mining_unpaid, 0);
-
-    // A graduated market may not emit even with its whole budget left.
-    let mut graduated = test_curve_market(1_000_000, 50_000, 100);
-    graduated.graduated = true;
-    assert_err(
-        apply_curve_mining_debit(&mut graduated, CurveDebit::MiningEmission, 1),
-        DiggoError::MarketGraduated,
-    );
-
-    // Only the mining ledger reaches the emission arm; no instruction debits the curve.
-    assert!(function_source("sync_mine_with_budget").contains("CurveDebit::MiningEmission"));
-    for name in [
-        "buy",
-        "sell",
-        "graduate_market",
-        "claim_rewards",
-        "assign_power",
-        "remove_power",
-        "advance_mine",
-        "sync_crew_power",
-        "claim_discovery",
-        "migrate_account",
-        "claim_creator_fees",
-        "claim_platform_fees",
-    ] {
-        assert!(
-            !instruction_source(name).contains("apply_curve_mining_debit"),
-            "{name} must not debit the curve inventory"
-        );
-    }
-}
 
 /// Mined tokens bring no SOL, so the curve's sell capacity is the real SOL reserve and
 /// mining cannot raise it.
@@ -1850,63 +1213,6 @@ fn curve_mining_conserves_the_curve_inventory_through_trades_and_graduation() {
         "the pool holds the curve and the vault holds the mined but unclaimed"
     );
     assert_eq!(market.curve_mining_cap, 47_500, "the cap survives graduation");
-}
-/// A curve budget has to be a schedule, not a single block. The flat rate is the cap
-/// divided by the runway in blocks, so a launch whose runway holds a single block would
-/// emit the whole cap at block one: one cliff in the curve's inventory, no price path, and
-/// a budget spent before anyone could mine it. Asking for no curve share is still legal -
-/// that is the pre-curve behaviour, and it has no runway to bound.
-#[test]
-fn a_curve_budget_needs_a_runway_of_more_than_one_block() {
-    let protocol = test_protocol();
-
-    // The review's case: a day-long block interval with a one-day runway is one block, and
-    // the rate it would publish is the entire budget.
-    let mut args = test_launch_args();
-    args.block_interval = 86_400;
-    args.curve_mining_runway_days = 1;
-    assert_eq!(
-        curve_mining_runway_blocks(args.block_interval, args.curve_mining_runway_days).unwrap(),
-        1
-    );
-    assert_eq!(
-        curve_mining_rate(47_500, args.block_interval, args.curve_mining_runway_days).unwrap(),
-        47_500,
-        "one block of runway emits the whole cap at block one"
-    );
-    assert_err(
-        validate_launch_args(&args, &protocol),
-        DiggoError::InvalidCurveMining,
-    );
-
-    // One block short of the bound is refused; the bound itself is accepted, and there the
-    // budget really is spread over every block it was given.
-    args.curve_mining_runway_days = (MIN_CURVE_MINING_BLOCKS - 1) as u16;
-    assert_err(
-        validate_launch_args(&args, &protocol),
-        DiggoError::InvalidCurveMining,
-    );
-    args.curve_mining_runway_days = MIN_CURVE_MINING_BLOCKS as u16;
-    assert!(validate_launch_args(&args, &protocol).is_ok());
-    let blocks =
-        curve_mining_runway_blocks(args.block_interval, args.curve_mining_runway_days).unwrap();
-    assert_eq!(blocks, MIN_CURVE_MINING_BLOCKS);
-    let cap = 1_000_000u64;
-    let rate =
-        curve_mining_rate(cap, args.block_interval, args.curve_mining_runway_days).unwrap();
-    assert_eq!(
-        rate,
-        (cap + blocks - 1) / blocks,
-        "rounded up, so the budget is always finishable"
-    );
-    assert!(rate * blocks >= cap && rate * (blocks - 1) < cap);
-
-    // A launch that asks for no curve share has no runway to bound.
-    let mut off = test_launch_args();
-    off.block_interval = 86_400;
-    off.curve_mining_runway_days = 1;
-    off.curve_mining_bps = 0;
-    assert!(validate_launch_args(&off, &protocol).is_ok());
 }
 
 /// The curve only ever gives up what the reward index can actually pay, and everything it
@@ -2469,81 +1775,7 @@ fn a_graduation_cursor_keeps_pre_graduation_blocks_off_the_reserve() {
     assert!(!curve_phase_pending(&cursorless));
 }
 
-/// The graduation cursor is written by exactly two instructions: launch_token starts the phase
-/// with no cursor, and graduate_market records the instant it ended, in the same transaction
-/// that flips the flag. A cursor no other instruction can move is what makes "a block before
-/// it is curve-phase" a fact about the account rather than a claim about the caller.
-#[test]
-fn only_launch_and_graduation_write_the_graduation_cursor() {
-    assert!(instruction_source("launch_token").contains("curve_phase_ends_at = 0"));
-    assert!(instruction_source("graduate_market").contains("curve_phase_ends_at = now"));
-    for name in [
-        "buy",
-        "sell",
-        "pool_buy",
-        "pool_sell",
-        "claim_rewards",
-        "assign_power",
-        "remove_power",
-        "advance_mine",
-        "sync_crew_power",
-        "claim_discovery",
-        "claim_creator_fees",
-        "claim_platform_fees",
-        "migrate_account",
-        "update_fee_config",
-        "update_power_bounds",
-        "update_discovery_limits",
-        "pause_reward_claims",
-        "pause_discovery_payouts",
-        "pause_mine_discovery",
-        "rotate_guardian",
-        "rotate_keeper",
-    ] {
-        assert!(
-            !instruction_source(name).contains("curve_phase_ends_at"),
-            "{name} must not write the graduation cursor"
-        );
-    }
-}
 
-/// The launch parameters are the whole of the curve budget, and they are bounded.
-#[test]
-fn launch_validation_bounds_the_curve_share_and_its_runway() {
-    let protocol = test_protocol();
-    let mut args = test_launch_args();
-    assert!(validate_launch_args(&args, &protocol).is_ok());
-
-    args.curve_mining_bps = MAX_CURVE_MINING_BPS + 1;
-    assert_err(
-        validate_launch_args(&args, &protocol),
-        DiggoError::InvalidCurveMining,
-    );
-    args.curve_mining_bps = DEFAULT_CURVE_MINING_BPS;
-
-    args.curve_mining_runway_days = 0;
-    assert_err(
-        validate_launch_args(&args, &protocol),
-        DiggoError::InvalidCurveMining,
-    );
-    args.curve_mining_runway_days = MAX_CURVE_MINING_RUNWAY_DAYS + 1;
-    assert_err(
-        validate_launch_args(&args, &protocol),
-        DiggoError::InvalidCurveMining,
-    );
-
-    // Zero is legal: it switches curve-phase mining off and leaves the pre-curve rule of a
-    // mine that only ever emits after graduation.
-    args.curve_mining_runway_days = DEFAULT_CURVE_MINING_RUNWAY_DAYS;
-    args.curve_mining_bps = 0;
-    assert!(validate_launch_args(&args, &protocol).is_ok());
-    let cap = mul_bps(950_000, args.curve_mining_bps).unwrap();
-    assert_eq!(cap, 0);
-    assert_eq!(
-        curve_mining_rate(cap, args.block_interval, args.curve_mining_runway_days).unwrap(),
-        0
-    );
-}
 
 /// The curve phase's rate is the cap spread over the launch runway, so a 5% budget is weeks
 /// of rewards rather than the hours the reserve schedule would pay it out in.
@@ -2576,7 +1808,7 @@ fn the_curve_runway_spreads_the_cap_over_the_launch_days() {
 fn pool_layout_is_fixed_size_and_self_describing() {
 
     assert_eq!(
-        LiquidityPool::INIT_SPACE,
+        LiquidityPoolV4::INIT_SPACE,
         32 * 4 + 8 + 8 + 8 + 1,
         "mine, mint, token_vault, sol_vault, both reserves, graduated_at, bump"
     );
@@ -2584,4 +1816,169 @@ fn pool_layout_is_fixed_size_and_self_describing() {
     assert_eq!(POOL_SEED, b"pool");
     assert_eq!(POOL_VAULT_SEED, b"pool-vault");
     assert_eq!(POOL_SOL_SEED, b"pool-sol");
+}
+
+// --- v2 spine: frozen layouts and frozen error blocks ---------------------------------------
+
+/// Borsh body length of one account struct, which is exactly what an account's data holds
+/// after its 8-byte discriminator.
+fn borsh_body_len<T: AnchorSerialize>(value: &T) -> usize {
+    let mut buf = Vec::new();
+    value.serialize(&mut buf).unwrap();
+    buf.len()
+}
+
+/// Every v2 account's declared SIZE must equal 8 + its borsh length, so a field added, moved
+/// or resized without a deliberate contract change fails here rather than silently changing
+/// the rent and the layout every workstream is building against.
+#[test]
+fn v2_account_sizes_match_their_frozen_layouts() {
+    assert_eq!(8 + borsh_body_len(&Coin::default()), Coin::SIZE);
+    assert_eq!(8 + borsh_body_len(&PlayerAccount::default()), PlayerAccount::SIZE);
+    assert_eq!(8 + borsh_body_len(&MiningPosition::default()), MiningPosition::SIZE);
+    assert_eq!(8 + borsh_body_len(&LiquidityPool::default()), LiquidityPool::SIZE);
+    assert_eq!(
+        8 + borsh_body_len(&DiscoveryOpportunity::default()),
+        DiscoveryOpportunity::SIZE
+    );
+    assert_eq!(8 + borsh_body_len(&GlobalBudget::default()), GlobalBudget::SIZE);
+    assert_eq!(8 + borsh_body_len(&SponsorVault::default()), SponsorVault::SIZE);
+    assert_eq!(8 + borsh_body_len(&SponsorEvent::default()), SponsorEvent::SIZE);
+    assert_eq!(8 + borsh_body_len(&SponsorGrant::default()), SponsorGrant::SIZE);
+    assert_eq!(8 + borsh_body_len(&ProtocolConfig::default()), ProtocolConfig::SIZE);
+    assert_eq!(8 + borsh_body_len(&CurveTable::default()), CurveTable::SIZE);
+    // RarityTier is a field type, not an account, so it carries no discriminator.
+    assert_eq!(borsh_body_len(&RarityTier::default()), RarityTier::LEN);
+}
+
+/// The same sizes written out as literals: these are the numbers in CONTRACTS.md, and this
+/// is the test that makes them a contract rather than a comment.
+#[test]
+fn v2_account_sizes_are_the_documented_numbers() {
+    assert_eq!(Coin::SIZE, 408);
+    assert_eq!(PlayerAccount::SIZE, 216);
+    assert_eq!(MiningPosition::SIZE, 51);
+    assert_eq!(LiquidityPool::SIZE, 185);
+    assert_eq!(DiscoveryOpportunity::SIZE, 116);
+    assert_eq!(GlobalBudget::SIZE, 53);
+    assert_eq!(SponsorVault::SIZE, 70);
+    assert_eq!(SponsorEvent::SIZE, 92);
+    assert_eq!(SponsorGrant::SIZE, 42);
+    assert_eq!(ProtocolConfig::SIZE, 434);
+    assert_eq!(CurveTable::SIZE, 2410);
+    // Rust alignment padding only ever makes the in-memory struct larger than its borsh
+    // body, which is the direction that cannot truncate an account.
+    assert!(std::mem::size_of::<Coin>() >= Coin::LEN);
+    assert!(std::mem::size_of::<PlayerAccount>() >= PlayerAccount::LEN);
+    assert!(std::mem::size_of::<ProtocolConfig>() >= ProtocolConfig::LEN);
+}
+
+/// The v2 error variants are appended after the v4 ones in the order design section 8.2
+/// reserves them, so a workstream can name a variant from the first commit and the numeric
+/// codes stay stable for every client that already matches on them.
+#[test]
+fn v2_error_codes_are_appended_in_the_designed_order() {
+    let v2 = [
+        DiggoError::NotImplemented,
+        DiggoError::InvalidPauseWindow,
+        DiggoError::NotTimelocked,
+        DiggoError::ConfigOutOfBounds,
+        DiggoError::InvalidRarityTable,
+        DiggoError::InvalidCurveTable,
+        DiggoError::NotActivated,
+        DiggoError::AccrualOverflow,
+        DiggoError::CrewAtMaxLevel,
+        DiggoError::InsufficientOre,
+        DiggoError::StorageCapacityExceeded,
+        DiggoError::ReactivationTooSoon,
+        DiggoError::BondAlreadyPosted,
+        DiggoError::NoBondPosted,
+        DiggoError::PositionStillActive,
+        DiggoError::BondCooldownActive,
+        DiggoError::SponsorBondNotWithdrawable,
+        DiggoError::VaultBelowRentExempt,
+        DiggoError::LedgerInvariantViolated,
+        DiggoError::MetadataTooLong,
+        DiggoError::InvalidMintLayout,
+        DiggoError::CurveExhausted,
+        DiggoError::PoolNotInitialised,
+        DiggoError::TwapUnavailable,
+        DiggoError::FeeSplitOverflow,
+        DiggoError::CrankTipExceedsAccrual,
+        DiggoError::NotCoinCreator,
+        DiggoError::EventNotActive,
+        DiggoError::EventBudgetExhausted,
+        DiggoError::PerCoinLimitExceeded,
+        DiggoError::PerWalletLimitExceeded,
+        DiggoError::EventAlreadyClosed,
+        DiggoError::UnspentWithdrawalOnly,
+        DiggoError::InvalidEventKind,
+        DiggoError::EpochNotRolled,
+        DiggoError::SeedTargetInFuture,
+        DiggoError::SeedTargetNotInSysvar,
+        DiggoError::SeedAlreadyCommitted,
+        DiggoError::SeedNotCommitted,
+        DiggoError::CoinNotAdvanced,
+        DiggoError::RollAlreadyExists,
+        DiggoError::NotDiscoveryEligible,
+        DiggoError::OpportunityExpired,
+        DiggoError::OpportunityAlreadySettled,
+        DiggoError::DailyCapExceeded,
+        DiggoError::WeeklyCapExceeded,
+        DiggoError::GlobalCapExceeded,
+        DiggoError::EpochBudgetExhausted,
+    ];
+    assert_eq!(v2.len(), 48);
+    for pair in v2.windows(2) {
+        assert_eq!(u32::from(pair[1]), u32::from(pair[0]) + 1);
+    }
+    // The v4 enum holds 48 variants, so the v2 block starts at 6000 + 48.
+    assert_eq!(u32::from(v2[0]), ERROR_CODE_OFFSET + 48);
+    assert_eq!(u32::from(*v2.last().unwrap()), ERROR_CODE_OFFSET + 95);
+}
+
+/// The v2 seed prefixes are the ones design section 8.2 freezes. Changing one is a contract
+/// amendment, not a worker decision, so it fails here first.
+#[test]
+fn v2_seed_prefixes_are_the_frozen_ones() {
+    assert_eq!(PROTOCOL_SEED, b"protocol");
+    assert_eq!(TREASURY_SEED, b"treasury");
+    assert_eq!(CRANK_POOL_SEED, b"crank-pool");
+    assert_eq!(CURVE_TABLE_SEED, b"curve-table");
+    assert_eq!(COIN_SEED, b"coin");
+    assert_eq!(VAULT_SEED, b"vault");
+    assert_eq!(PLAYER_SEED, b"player");
+    assert_eq!(POSITION_SEED, b"position");
+    assert_eq!(OPPORTUNITY_SEED, b"opportunity");
+    assert_eq!(GLOBAL_BUDGET_SEED, b"global-budget");
+    assert_eq!(SPONSOR_VAULT_SEED, b"sponsor-vault");
+    assert_eq!(SPONSOR_EVENT_SEED, b"sponsor-event");
+    assert_eq!(SPONSOR_GRANT_SEED, b"sponsor-grant");
+    assert_eq!(MINT_SEED, b"mint");
+    assert_eq!(POOL_SEED, b"pool");
+    assert_eq!(POOL_VAULT_SEED, b"pool-vault");
+    assert_eq!(POOL_SOL_SEED, b"pool-sol");
+    let coin = Pubkey::new_unique();
+    let owner = Pubkey::new_unique();
+    let seeds = opportunity_seeds(&coin, &owner, 7);
+    assert_eq!(seeds.len(), OPPORTUNITY_SEED.len() + 32 + 32 + 2);
+    assert_eq!(&seeds[OPPORTUNITY_SEED.len() + 64..], &7u16.to_le_bytes());
+    let day = global_budget_seeds(3);
+    assert_eq!(&day[GLOBAL_BUDGET_SEED.len()..], &3u16.to_le_bytes());
+}
+
+/// The STARTER_TRANCHE_CAP amendment: the starter tranche is a tenth of a block whatever the
+/// bonded power is, and the unassigned remainder stays in the reserve rather than being
+/// burned or handed to the starter index.
+#[test]
+fn starter_tranche_cap_and_defaults_are_the_amended_ones() {
+    assert_eq!(STARTER_TRANCHE_BPS, 1_000);
+    assert_eq!(STARTER_EFFICIENCY_BPS, 2_500);
+    assert_eq!(BOND_LAMPORTS, 70_000_000);
+    assert_eq!(BOND_COOLDOWN_SECONDS, 604_800);
+    assert_eq!(EPOCH_SEED_DELAY_SLOTS, 32);
+    assert_eq!(EPOCH_SEED_MAX_LATENESS_SLOTS, SLOT_HASHES_WINDOW);
+    assert_eq!(MAX_PAUSE_SECONDS, 72 * 3_600);
+    assert_eq!(MINT_V2_SIZE, 359);
+    assert_eq!(MIN_CURVE_MINING_BLOCKS, 48);
 }

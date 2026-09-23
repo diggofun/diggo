@@ -62,7 +62,7 @@ pub fn reduced_reward(current: u64, reduction_bps: u16, minimum: u64) -> Result<
 // --- post-graduation constant-product pool (spec 36) ------------------------------------
 
 /// x*y before a swap, as a u128 so the product of two u64 reserves can never overflow.
-pub fn pool_invariant(pool: &LiquidityPool) -> Result<u128> {
+pub fn pool_invariant(pool: &LiquidityPoolV4) -> Result<u128> {
     (pool.sol_reserve as u128)
         .checked_mul(pool.token_reserve as u128)
         .ok_or_else(|| error!(DiggoError::MathOverflow))
@@ -132,7 +132,7 @@ pub enum PoolDebit {
 /// other caller and no other arm that permits a debit — AdminWithdraw exists so an LP
 /// withdrawal is rejected explicitly rather than merely unreachable (spec 35, 36).
 pub fn apply_pool_swap(
-    pool: &mut LiquidityPool,
+    pool: &mut LiquidityPoolV4,
     debit: PoolDebit,
     sol_in: u64,
     tokens_in: u64,
@@ -196,7 +196,7 @@ pub fn plan_graduation(market: &LaunchMarket) -> Result<GraduationPlan> {
 /// the tokens the pool holds are provably the ones the curve held a moment earlier.
 pub fn apply_graduation(
     market: &mut LaunchMarket,
-    pool: &mut LiquidityPool,
+    pool: &mut LiquidityPoolV4,
     plan: GraduationPlan,
 ) -> Result<()> {
     require!(

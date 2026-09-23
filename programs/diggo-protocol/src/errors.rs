@@ -111,4 +111,109 @@ pub enum DiggoError {
     CurveWithdrawForbidden,
     #[msg("Invalid curve mining parameters")]
     InvalidCurveMining,
+    // ---------------------------------------------------------------------------------
+    // v2 codes. Appended in the order docs/ONCHAIN_V2_DESIGN.md section 8.2 reserves them,
+    // so every workstream can name a variant from the first commit. The numeric blocks the
+    // design quotes (6040, 6100, ...) assume a shorter v4 enum than the tree actually has,
+    // so the codes are positional: the names and their order are the contract, and
+    // `v2_error_codes_are_appended_in_the_designed_order` in tests.rs pins the block order.
+    // ---------------------------------------------------------------------------------
+    /// Declared by the v2 spine but not implemented yet. Every v2 handler body returns this
+    /// until the workstream that owns the file lands its logic.
+    #[msg("Not implemented yet")]
+    NotImplemented,
+    #[msg("A pause must expire within MAX_PAUSE_SECONDS")]
+    InvalidPauseWindow,
+    #[msg("The governance timelock has not elapsed")]
+    NotTimelocked,
+    #[msg("A configuration value is out of bounds")]
+    ConfigOutOfBounds,
+    #[msg("The rarity table is invalid")]
+    InvalidRarityTable,
+    #[msg("The curve table is invalid")]
+    InvalidCurveTable,
+    #[msg("The player is not activated")]
+    NotActivated,
+    #[msg("ORE accrual overflowed")]
+    AccrualOverflow,
+    #[msg("The crew component is already at its maximum level")]
+    CrewAtMaxLevel,
+    #[msg("Not enough ORE")]
+    InsufficientOre,
+    #[msg("Storage capacity exceeded")]
+    StorageCapacityExceeded,
+    #[msg("Activated again too soon")]
+    ReactivationTooSoon,
+    #[msg("A bond is already posted")]
+    BondAlreadyPosted,
+    #[msg("No bond is posted")]
+    NoBondPosted,
+    #[msg("A mining position is still active")]
+    PositionStillActive,
+    #[msg("The bond cooldown has not elapsed")]
+    BondCooldownActive,
+    #[msg("A sponsor-funded bond is not withdrawable by the player")]
+    SponsorBondNotWithdrawable,
+    #[msg("The vault would drop below its rent-exempt minimum")]
+    VaultBelowRentExempt,
+    #[msg("The vault ledger invariant was violated")]
+    LedgerInvariantViolated,
+    #[msg("Metadata is longer than the on-chain maximum")]
+    MetadataTooLong,
+    #[msg("The mint layout is not the expected Token-2022 layout")]
+    InvalidMintLayout,
+    #[msg("The curve is exhausted")]
+    CurveExhausted,
+    #[msg("The pool is not initialised")]
+    PoolNotInitialised,
+    #[msg("No TWAP is available yet")]
+    TwapUnavailable,
+    #[msg("The fee split does not sum to BPS")]
+    FeeSplitOverflow,
+    #[msg("The crank tip exceeds the accrued fees")]
+    CrankTipExceedsAccrual,
+    #[msg("Only the coin creator may do this")]
+    NotCoinCreator,
+    #[msg("The sponsor event is not active")]
+    EventNotActive,
+    #[msg("The sponsor event budget is exhausted")]
+    EventBudgetExhausted,
+    #[msg("The sponsor event per-coin limit is exceeded")]
+    PerCoinLimitExceeded,
+    #[msg("The sponsor event per-wallet limit is exceeded")]
+    PerWalletLimitExceeded,
+    #[msg("The sponsor event is already closed")]
+    EventAlreadyClosed,
+    #[msg("Only unspent lamports may be withdrawn")]
+    UnspentWithdrawalOnly,
+    #[msg("Unknown sponsor event kind")]
+    InvalidEventKind,
+    #[msg("The coin's epoch has not been rolled yet")]
+    EpochNotRolled,
+    #[msg("The epoch seed target slot is still in the future")]
+    SeedTargetInFuture,
+    #[msg("The epoch seed target slot is no longer in the slot hashes sysvar")]
+    SeedTargetNotInSysvar,
+    #[msg("This epoch's seed is already committed")]
+    SeedAlreadyCommitted,
+    #[msg("This epoch's seed is not committed yet")]
+    SeedNotCommitted,
+    #[msg("The coin has not been advanced")]
+    CoinNotAdvanced,
+    #[msg("An opportunity already exists for this window")]
+    RollAlreadyExists,
+    #[msg("The player is not eligible for discovery")]
+    NotDiscoveryEligible,
+    #[msg("The opportunity has expired")]
+    OpportunityExpired,
+    #[msg("The opportunity is already settled")]
+    OpportunityAlreadySettled,
+    #[msg("The daily discovery cap is exceeded")]
+    DailyCapExceeded,
+    #[msg("The weekly discovery cap is exceeded")]
+    WeeklyCapExceeded,
+    #[msg("The global daily discovery cap is exceeded")]
+    GlobalCapExceeded,
+    #[msg("The coin's epoch discovery budget is exhausted")]
+    EpochBudgetExhausted,
 }
