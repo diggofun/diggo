@@ -10,7 +10,7 @@
  * Achievements are evaluated from gameplay progression (activations, streaks, upgrades, tiers,
  * discoveries, blocks), never from token amounts, and their ORE payout is capped.
  */
-import { DIGGO_CONFIG, crewTier, crewTotalLevel, oreCapacity } from "../shared/economics";
+import { CREW_COMPONENTS, DIGGO_CONFIG, crewTier, crewTotalLevel, oreCapacity, type CrewLevels } from "../shared/economics";
 import {
   ACHIEVEMENT_CATALOG,
   ACHIEVEMENT_ORE_TOTAL_CAP,
@@ -36,7 +36,8 @@ import {
 import { sessionWallet } from "./auth";
 import type { RuntimeEnv } from "./env";
 import { apiError, checkWalletRateLimit, json, readJson } from "./http";
-import { crewLevelsOf, getOrCreatePlayer } from "./player";
+import { crewLevelsForWallet, crewLevelsOf, getOrCreatePlayer, loadPlayerAccount } from "./player";
+import { REALIZED_DISCOVERY_PREDICATE } from "./telemetry";
 
 const CATALOG_MARKER_KEY = "social:catalog:v1";
 let catalogSeeded = false;
@@ -153,8 +154,19 @@ async function loadSocialMetrics(env: RuntimeEnv, wallet: string): Promise<Socia
   return row ?? { blocks_won: 0, mine_switches: 0, fully_mined_witnessed: 0 };
 }
 
+/**
+ * How many discoveries this wallet has actually found.
+ *
+ * v2 indexes the roll, not the discovery: every `create_discovery_roll` writes a PENDING row and
+ * only `settle_discovery` turns one into a discovery. The indexed `rarity` is the program's
+ * 0-based tier index, so tier 0 is a real tier (the cheapest one) and never means "nothing" - a
+ * roll the seed gives no outcome to settles at tier 0 with no units. The payout is what separates a
+ * discovery from an empty roll, which is also all a v4 `discoveries` row ever recorded.
+ */
 async function countDiscoveries(env: RuntimeEnv, wallet: string): Promise<number> {
-  const row = await env.DB.prepare("SELECT COUNT(*) AS found FROM discoveries WHERE wallet = ?1")
+  const row = await env.DB.prepare(
+    "SELECT COUNT(*) AS found FROM discovery_events WHERE wallet = ?1 AND" + REALIZED_DISCOVERY_PREDICATE,
+  )
     .bind(wallet)
     .first<{ found: number }>();
   return row?.found ?? 0;
@@ -175,26 +187,58 @@ export interface AchievementSyncResult {
 }
 
 /**
+ * The crew levels the wallet's indexed PlayerAccount mirror reports, or null when there is no
+ * usable mirror to read.
+ *
+ * `crewLevelsForWallet` answers all zeros for a wallet the indexer has not reached yet, which is the
+ * right answer for a profile and the wrong one for ORE: zero sits below the crew floor, so
+ * `oreCapacity` rejects it. Null means "unknown" here, so a payout that has to be measured against
+ * capacity is deferred rather than priced from levels nobody reported. A mirror row whose levels
+ * fall outside the configured range is treated the same way, because a row that cannot state a real
+ * crew cannot state a real capacity either.
+ */
+async function indexedCrewLevels(env: RuntimeEnv, wallet: string): Promise<CrewLevels | null> {
+  const account = await loadPlayerAccount(env, wallet);
+  if (!account) return null;
+  const levels = crewLevelsOf(account);
+  for (const component of CREW_COMPONENTS) {
+    const level = levels[component];
+    if (!Number.isInteger(level) || level < DIGGO_CONFIG.crew.minLevel || level > DIGGO_CONFIG.crew.maxLevel) {
+      return null;
+    }
+  }
+  return levels;
+}
+
+/**
  * Awards every achievement whose gameplay threshold the player has reached, once. The ORE payout is
  * capped across all achievements by ACHIEVEMENT_ORE_TOTAL_CAP and clamped to ORE storage capacity.
+ *
+ * An award is written in two halves that are not one write - the row records the ORE it granted,
+ * then that ORE is credited against the crew's storage capacity - so a wallet whose crew mirror is
+ * not indexed yet is skipped whole and retried on a later sweep. Awarding it early would either
+ * throw between the two halves, leaving the ORE recorded but never paid, or pay an amount no crew
+ * was shown to be able to hold. Skipping writes nothing, so the next sweep still owes the award.
  */
 export async function syncAchievements(
   env: RuntimeEnv,
   wallet: string,
   now: number,
   /** The request that triggered this sync, when there was one; the cron sweeps without it. */
-  request?: Request,
+  _request?: Request,
 ): Promise<AchievementSyncResult> {
-  const player = await getOrCreatePlayer(env, wallet, request);
+  const player = await getOrCreatePlayer(env, wallet);
+  const crewLevels = await indexedCrewLevels(env, wallet);
+  if (crewLevels === null) return { awarded: [], oreGranted: 0 };
   const [metricsRow, discoveries, earned] = await Promise.all([
     loadSocialMetrics(env, wallet),
     countDiscoveries(env, wallet),
     earnedAchievements(env, wallet),
   ]);
   const metrics = achievementMetrics({
-    crewLevels: crewLevelsOf(player),
-    activeDays: player.active_days,
-    streak: player.streak,
+    crewLevels,
+    activeDays: player.active_days ?? 0,
+    streak: player.streak ?? 0,
     discoveries,
     blocks: metricsRow.blocks_won,
     mineSwitches: metricsRow.mine_switches,
@@ -221,8 +265,10 @@ export async function syncAchievements(
   const confirmed = grants.filter((_grant, index) => (inserted[index]?.meta?.changes ?? 0) > 0);
   const oreGranted = confirmed.reduce((total, grant) => total + grant.ore, 0);
   if (oreGranted > 0) {
-    const capacity = oreCapacity(crewLevelsOf(player));
-    await env.DB.prepare("UPDATE players SET ore_balance = MIN(ore_balance + ?1, ?2) WHERE wallet = ?3")
+    const capacity = oreCapacity(crewLevels);
+    // COALESCE because the profile's ORE mirror is nullable ("not indexed yet"), and adding to
+    // NULL would drop a grant this function has already recorded against the player.
+    await env.DB.prepare("UPDATE players SET ore_balance = MIN(COALESCE(ore_balance, 0) + ?1, ?2) WHERE wallet = ?3")
       .bind(oreGranted, capacity, wallet)
       .run();
   }
@@ -249,17 +295,17 @@ export async function syncCosmeticUnlocks(
   env: RuntimeEnv,
   wallet: string,
   now: number,
-  request?: Request,
+  _request?: Request,
 ): Promise<string[]> {
-  const player = await getOrCreatePlayer(env, wallet, request);
+  const player = await getOrCreatePlayer(env, wallet);
   const [earned, owned, seasonPoints] = await Promise.all([
     earnedAchievements(env, wallet),
     ownedCosmeticIds(env, wallet),
     storedSeasonalPoints(env, wallet, now),
   ]);
   const unlocked = unlockedCosmeticIds({
-    streak: player.streak,
-    crewTier: crewTier(crewLevelsOf(player)).tier,
+    streak: player.streak ?? 0,
+    crewTier: crewTier(await crewLevelsForWallet(env, wallet)).tier,
     achievementIds: earned.map((row) => row.achievement_id),
     seasonPoints,
   });
@@ -386,9 +432,9 @@ export async function playerAchievements(request: Request, env: RuntimeEnv, wall
     countDiscoveries(env, wallet),
   ]);
   const metrics = achievementMetrics({
-    crewLevels: crewLevelsOf(player),
-    activeDays: player.active_days,
-    streak: player.streak,
+    crewLevels: await crewLevelsForWallet(env, wallet),
+    activeDays: player.active_days ?? 0,
+    streak: player.streak ?? 0,
     discoveries,
     blocks: metricsRow.blocks_won,
     mineSwitches: metricsRow.mine_switches,
@@ -445,10 +491,10 @@ export async function recomputeSeasonalPoints(
   env: RuntimeEnv,
   wallet: string,
   now: number,
-  request?: Request,
+  _request?: Request,
 ): Promise<SeasonalPointsResult> {
   const season = await currentSeason(env, now);
-  const player = await getOrCreatePlayer(env, wallet, request);
+  const player = await getOrCreatePlayer(env, wallet);
   const [earned, discoveries, eventRow, stored] = await Promise.all([
     earnedAchievements(env, wallet),
     countDiscoveries(env, wallet),
@@ -458,9 +504,9 @@ export async function recomputeSeasonalPoints(
     storedSeasonalPoints(env, wallet, now),
   ]);
   const derivedPoints = seasonalProgressPoints({
-    activeDays: player.active_days,
-    crewUpgrades: crewTotalLevel(crewLevelsOf(player)) - crewTotalLevel(DIGGO_CONFIG.crew.starterLevels),
-    streak: player.streak,
+    activeDays: player.active_days ?? 0,
+    crewUpgrades: crewTotalLevel(await crewLevelsForWallet(env, wallet)) - crewTotalLevel(DIGGO_CONFIG.crew.starterLevels),
+    streak: player.streak ?? 0,
     achievementCount: earned.length,
     discoveryCount: discoveries,
   });
@@ -486,10 +532,10 @@ export async function awardSeasonalEvent(
   kind: SeasonalEventKind,
   ref: string,
   now: number,
-  request?: Request,
+  _request?: Request,
 ): Promise<{ inserted: boolean; points: number }> {
   const season = await currentSeason(env, now);
-  await getOrCreatePlayer(env, wallet, request);
+  await getOrCreatePlayer(env, wallet);
   const result = await env.DB.prepare(
     "INSERT OR IGNORE INTO seasonal_point_events (id, wallet, season_id, kind, ref, points, created_at)" +
       " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",

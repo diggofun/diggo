@@ -20,6 +20,7 @@ import {
   NOTIFICATION_THRESHOLDS,
   RARE_RARITIES,
   computeNotifications,
+  isRareRarity,
   type GeneratedNotification,
   type NotificationKind,
 } from "../shared/social";
@@ -51,10 +52,50 @@ interface MineRow {
   reserve_total: number;
 }
 
+/** One row of the indexed discovery projection: the numeric tier, and when the find happened. */
 interface DiscoveryRow {
   id: string;
-  rarity: string;
-  created_at: number;
+  rarity: number | null;
+  found_at: number;
+}
+
+/**
+ * `discovery_events.rarity` is the numeric tier index the program rolls
+ * (programs/diggo-protocol/src/math/rarity.rs), not the name shared/social.ts speaks. The mapping
+ * is the config's own tier order, so the two cannot drift apart: index 2 means `rare` only because
+ * `rare` is the third tier in DIGGO_CONFIG.rarity.tiers.
+ *
+ * -1 matches no tier, so a config that names no rare tier switches the branch off rather than
+ * producing an `IN ()` list SQLite rejects.
+ */
+const RARE_RARITY_TIER_INDEXES: readonly number[] = (() => {
+  const indexes = RARE_RARITIES.map((rarity) =>
+    DIGGO_CONFIG.rarity.tiers.findIndex((tier) => tier.rarity === rarity),
+  ).filter((index) => index >= 0);
+  return indexes.length > 0 ? indexes : [-1];
+})();
+
+/**
+ * When a discovery was found: the settle transaction's block time, falling back to the index time
+ * of the roll.
+ *
+ * Rarity is only known once the roll settles, and in v2 a roll can sit PENDING until anyone sends
+ * `settle_discovery`, so the settle is the moment the find happened. `block_time` is written by
+ * that same settle, but the indexer stores 0 when the chain read carried no block time, and
+ * `created_at` is always set - which is why this falls back rather than dropping the find.
+ */
+function discoveryFoundAt(alias: string): string {
+  return "COALESCE(NULLIF(" + alias + ".block_time, 0), " + alias + ".created_at)";
+}
+
+/**
+ * The canonical rarity name for the numeric tier a discovery row carries. Null for a roll that has
+ * not settled yet (`rarity IS NULL`) and for a tier index the config does not define: neither is a
+ * find, so neither becomes a notification.
+ */
+function rarityNameForTier(tier: number | null): string | null {
+  if (tier === null || !Number.isInteger(tier)) return null;
+  return DIGGO_CONFIG.rarity.tiers[tier]?.rarity ?? null;
 }
 
 interface NotificationRow {
@@ -77,26 +118,41 @@ interface DeliveryRow {
 export async function loadNotificationInput(env: RuntimeEnv, wallet: string, now: number) {
   const player = await env.DB.prepare("SELECT * FROM players WHERE wallet = ?1").bind(wallet).first<PlayerRow>();
   if (!player) return null;
+  const account = await env.DB.prepare(
+    "SELECT longest_streak FROM player_accounts WHERE wallet = ?1",
+  )
+    .bind(wallet)
+    .first<{ longest_streak: number }>();
+  // ?1 is the wallet, so the tier indexes start at ?2 and the freshness bound follows them.
+  const rareTierPlaceholders = RARE_RARITY_TIER_INDEXES.map((_tier, index) => "?" + (index + 2)).join(", ");
+  const windowPlaceholder = "?" + (RARE_RARITY_TIER_INDEXES.length + 2);
   const [mine, discoveries] = await Promise.all([
     player.active_mint
       ? env.DB.prepare("SELECT mint, symbol, status, reserve_remaining, reserve_total FROM tokens WHERE mint = ?1")
           .bind(player.active_mint)
           .first<MineRow>()
       : Promise.resolve(null),
+    // Only the rare tiers are read. Taking the newest finds of any rarity would let ten commons
+    // push a rare one out of the window before computeNotifications ever saw it.
     env.DB.prepare(
-      "SELECT id, rarity, created_at FROM discoveries WHERE wallet = ?1 AND created_at >= ?2 ORDER BY created_at DESC LIMIT 10",
+      "SELECT d.id, d.rarity, " + discoveryFoundAt("d") + " AS found_at FROM discovery_events d" +
+        " WHERE d.wallet = ?1 AND d.rarity IN (" + rareTierPlaceholders + ")" +
+        " AND " + discoveryFoundAt("d") + " >= " + windowPlaceholder +
+        " ORDER BY found_at DESC, d.id ASC LIMIT 10",
     )
-      .bind(wallet, now - NOTIFICATION_THRESHOLDS.rareDiscoveryWindowSeconds)
+      .bind(wallet, ...RARE_RARITY_TIER_INDEXES, now - NOTIFICATION_THRESHOLDS.rareDiscoveryWindowSeconds)
       .all<DiscoveryRow>(),
   ]);
   return {
     now,
     player: {
       wallet: player.wallet,
-      streak: player.streak,
-      longestStreak: player.streak,
-      lastActivationAt: player.last_activation_at,
-      activationExpiresAt: player.activation_expires_at,
+      streak: player.streak ?? 0,
+      // The profile row mirrors the program's own streak counters; `longest_streak` lives on the
+      // mirrored PlayerAccount, and a profile that has never been indexed has none to report.
+      longestStreak: account?.longest_streak ?? player.streak ?? 0,
+      lastActivationAt: player.last_activation_at ?? 0,
+      activationExpiresAt: player.activation_expires_at ?? 0,
     },
     mine: mine
       ? {
@@ -107,7 +163,10 @@ export async function loadNotificationInput(env: RuntimeEnv, wallet: string, now
           reserveTotal: mine.reserve_total,
         }
       : null,
-    discoveries: discoveries.results.map((row) => ({ id: row.id, rarity: row.rarity, createdAt: row.created_at })),
+    discoveries: discoveries.results.flatMap((row) => {
+      const rarity = rarityNameForTier(row.rarity);
+      return rarity !== null && isRareRarity(rarity) ? [{ id: row.id, rarity, createdAt: row.found_at }] : [];
+    }),
   };
 }
 
@@ -348,16 +407,19 @@ export function dueCandidatesQuery(now: number, limit: number): { sql: string; p
   );
 
   // RARE_DISCOVERY_FOUND: one of the newest rare discoveries inside the freshness window is still
-  // unannounced. The inner select repeats the same newest-first cap computeNotifications applies, so
-  // a player with more rare finds than the cap stops being a candidate once the newest ones are
-  // stored rather than being re-selected forever.
+  // unannounced. `rarity` is the program's numeric tier index, so the rare tiers are matched by the
+  // indexes the config gives them rather than by name. The inner select repeats the same
+  // newest-first cap computeNotifications applies, so a player with more rare finds than the cap
+  // stops being a candidate once the newest ones are stored rather than being re-selected forever.
+  const rareTierList = RARE_RARITY_TIER_INDEXES.map((tier) => bind(tier)).join(", ");
+  const foundAt = discoveryFoundAt("d2");
   parts.push(
-    " OR EXISTS (SELECT 1 FROM discoveries d WHERE d.wallet = p.wallet AND d.id IN (" +
-      "SELECT d2.id FROM discoveries d2 WHERE d2.wallet = p.wallet" +
-      " AND d2.created_at >= " + bind(now - NOTIFICATION_THRESHOLDS.rareDiscoveryWindowSeconds) +
-      " AND d2.created_at <= " + bind(now) +
-      " AND d2.rarity IN (" + RARE_RARITIES.map((rarity) => bind(rarity)).join(", ") + ")" +
-      " ORDER BY d2.created_at DESC, d2.id ASC LIMIT " + bind(NOTIFICATION_THRESHOLDS.maxRareDiscoveryNotifications) +
+    " OR EXISTS (SELECT 1 FROM discovery_events d WHERE d.wallet = p.wallet AND d.id IN (" +
+      "SELECT d2.id FROM discovery_events d2 WHERE d2.wallet = p.wallet" +
+      " AND d2.rarity IN (" + rareTierList + ")" +
+      " AND " + foundAt + " >= " + bind(now - NOTIFICATION_THRESHOLDS.rareDiscoveryWindowSeconds) +
+      " AND " + foundAt + " <= " + bind(now) +
+      " ORDER BY " + foundAt + " DESC, d2.id ASC LIMIT " + bind(NOTIFICATION_THRESHOLDS.maxRareDiscoveryNotifications) +
       ") AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.wallet = p.wallet" +
       " AND n.dedupe_key = p.wallet || ':RARE_DISCOVERY_FOUND:' || d.id))",
   );

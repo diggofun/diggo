@@ -4,6 +4,11 @@
   "main": "worker/index.ts",
   "compatibility_date": "2026-09-13",
   "compatibility_flags": ["nodejs_compat"],
+  // Lets Worker code distinguish Wrangler's local runtime from a deployed version. Local Wrangler
+  // supplies an empty tag; deployed versions carry real version metadata.
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
+  },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
@@ -19,14 +24,25 @@
   "vars": {
     "ENVIRONMENT": "production",
     "SOLANA_CLUSTER": "devnet",
+    // diggo.fun is intentionally still on devnet. Every deployed environment must also set the
+    // DIGGO_RPC_URL secret below; the public devnet fallback is only for local Wrangler development.
+    // Change cluster, program id, treasury and RPC endpoint together when moving networks.
     "POSTHOG_API_KEY": "phc_rUmzX7ft4ue8iLqACMEe8NgaJphvWYVD9WtwRGfC6nQK",
     "POSTHOG_HOST": "https://us.i.posthog.com",
     "SUPABASE_URL": "https://mtkvvcybpasehmscueox.supabase.co",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAEzwvf6nnwXvXdMc",
     "DIGGO_PROGRAM_ID": "H3Y8GgTnvwv5U1bajfzj386YSPC48vvwjFroXYyHZFj5",
     "DIGGO_TREASURY": "3YwWHow5jFCtE3vQGadPiLi83eNRwDaEmCZebuEx71PQ",
-    "DIGGO_KEEPER": "G3QELLuGprfRBYxoh3P5v4ZkGFyNXGLjATsNYZx6xWu8",
     "VANITY_SUFFIX": "diggo",
+    // The optional crank bot (worker/crank.ts). It holds no authority: every instruction it sends
+    // is permissionless, and the only thing its key does is pay the fee. The key itself belongs in
+    // `wrangler secret put DIGGO_CRANK_SECRET_KEY`; `CRANK_ENABLED` is the kill switch, and "0"
+    // turns the bot off without removing the secret.
+    "CRANK_ENABLED": "1",
+    // Indexer tuning. Bounded so one cron pass cannot run past its budget on a busy program.
+    "INDEXER_SIGNATURE_LIMIT": "100",
+    "INDEXER_MAX_PAGES": "3",
+    "INDEXER_COIN_LIMIT": "200",
     // Price oracle (worker/oracle.ts, docs/SECURITY.md "Price oracle"). Every one of these has a
     // working default - the public Jupiter and Pyth endpoints and the published SOL/USD feed id -
     // so they are listed rather than set: an empty string is not an override, it just falls back.
@@ -36,10 +52,7 @@
     //PYTH_HERMES_URL: "",
     //PYTH_SOL_USD_FEED_ID: "",
     //ORACLE_MIN_EXTERNAL_SOURCES: "0",
-    //ORACLE_SOL_USD_OVERRIDE: "",
-    // Commit-reveal RNG epoch length in seconds, bounded to [3600, 2592000] by RNG_EPOCH_BOUNDS.
-    // Pinned to the shipped default so the schedule is a deployment decision, not a code default.
-    "DISCOVERY_EPOCH_SECONDS": "86400"
+    //ORACLE_SOL_USD_OVERRIDE: ""
   },
   "d1_databases": [
     {
@@ -60,10 +73,6 @@
       {
         "name": "MARKETS",
         "class_name": "TokenMarket"
-      },
-      {
-        "name": "PLAYER_LOCK",
-        "class_name": "PlayerLock"
       }
     ]
   },
@@ -75,6 +84,14 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["PlayerLock"]
+    },
+    {
+      // The v4 per-wallet mutation mutex, retired. v2 has no server-side mutation to serialise:
+      // every mutation is a signed transaction the player sends, so the lock and its binding are
+      // gone. The class is removed by its own migration rather than by editing v2's, so a
+      // deployment that already applied v2 still converges.
+      "tag": "v3",
+      "deleted_classes": ["PlayerLock"]
     }
   ],
   "queues": {
@@ -95,7 +112,9 @@
     ]
   },
   "triggers": {
-    "crons": ["*/5 * * * *"]
+    // Indexing runs on a short cadence because the index is what the read API serves; the
+    // advisory sweeps (social, risk, crank) ride along on the same tick and are all idempotent.
+    "crons": ["*/2 * * * *"]
   },
   "analytics_engine_datasets": [
     {
@@ -130,6 +149,9 @@
       "name": "diggo-fun-staging",
       "compatibility_date": "2026-09-13",
       "compatibility_flags": ["nodejs_compat"],
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
+      },
       // Routes are one of the few fields a named environment DOES inherit, so this has to be
       // cleared explicitly: without it a staging deploy would move the diggo.fun custom domain
       // off the production Worker. Staging therefore stays on its workers.dev hostname.
@@ -144,14 +166,18 @@
         "ENVIRONMENT": "staging",
         // Devnet only. Staging must never point at a mainnet program id or RPC.
         "SOLANA_CLUSTER": "devnet",
+        // Staging is also a deployed devnet environment and must provide DIGGO_RPC_URL explicitly.
         "POSTHOG_API_KEY": "phc_rUmzX7ft4ue8iLqACMEe8NgaJphvWYVD9WtwRGfC6nQK",
         "POSTHOG_HOST": "https://us.i.posthog.com",
         "SUPABASE_URL": "https://mtkvvcybpasehmscueox.supabase.co",
         "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
         "DIGGO_PROGRAM_ID": "H3Y8GgTnvwv5U1bajfzj386YSPC48vvwjFroXYyHZFj5",
         "DIGGO_TREASURY": "3YwWHow5jFCtE3vQGadPiLi83eNRwDaEmCZebuEx71PQ",
-        "DIGGO_KEEPER": "G3QELLuGprfRBYxoh3P5v4ZkGFyNXGLjATsNYZx6xWu8",
         "VANITY_SUFFIX": "diggo",
+        "CRANK_ENABLED": "0",
+        "INDEXER_SIGNATURE_LIMIT": "100",
+        "INDEXER_MAX_PAGES": "3",
+        "INDEXER_COIN_LIMIT": "200",
         // Same oracle and RNG knobs as production, listed for discoverability. Staging keeps the
         // day-long epoch so its commitment schedule matches production; only the API keys differ,
         // and those are per-environment secrets.
@@ -160,8 +186,7 @@
         //PYTH_HERMES_URL: "",
         //PYTH_SOL_USD_FEED_ID: "",
         //ORACLE_MIN_EXTERNAL_SOURCES: "0",
-        //ORACLE_SOL_USD_OVERRIDE: "",
-        "DISCOVERY_EPOCH_SECONDS": "86400"
+        //ORACLE_SOL_USD_OVERRIDE: ""
       },
       "d1_databases": [
         {
@@ -184,10 +209,6 @@
           {
             "name": "MARKETS",
             "class_name": "TokenMarket"
-          },
-          {
-            "name": "PLAYER_LOCK",
-            "class_name": "PlayerLock"
           }
         ]
       },
@@ -199,6 +220,10 @@
         {
           "tag": "v2",
           "new_sqlite_classes": ["PlayerLock"]
+        },
+        {
+          "tag": "v3",
+          "deleted_classes": ["PlayerLock"]
         }
       ],
       "queues": {
@@ -220,8 +245,8 @@
         ]
       },
       "triggers": {
-        // Staging runs the same five-minute sweep so cron paths are exercised before production.
-        "crons": ["*/5 * * * *"]
+        // Staging runs the same cadence so cron paths are exercised before production.
+        "crons": ["*/2 * * * *"]
       },
       "analytics_engine_datasets": [
         {

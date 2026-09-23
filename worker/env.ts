@@ -1,36 +1,38 @@
 /**
- * The Worker runtime environment: the generated Env bindings from wrangler.jsonc plus the
- * secrets configured out of band (wrangler secret put, see docs/CUSTODY.md). Every domain
- * module takes a RuntimeEnv so the binding types stay declared in exactly one place.
+ * The Worker runtime environment: the generated bindings from wrangler.jsonc plus the secrets
+ * configured out of band (`wrangler secret put`).
+ *
+ * The v2 surface is deliberately smaller than the v4 one. Gone are the keeper's signing key
+ * and the server-side RNG secret: the worker no longer holds a key the program trusts for
+ * anything, and it no longer rolls any dice. What is left is an RPC endpoint, a webhook secret,
+ * the notification credentials and - optionally - a crank hot key that pays transaction fees
+ * and nothing else.
  */
 
 export interface SecretBindings {
   TURNSTILE_SECRET?: string;
   HELIUS_WEBHOOK_AUTH?: string;
+  /** Secret required for the operator-only manual indexer refresh endpoints. */
+  INDEXER_ADMIN_SECRET?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
   /** Devnet RPC URL, e.g. a Helius endpoint. Falls back to the public devnet RPC when unset. */
   DIGGO_RPC_URL?: string;
-  /** Keeper's base58-encoded 64-byte secret key, JSON-array-stringified (see docs/CUSTODY.md). */
-  DIGGO_KEEPER_SECRET_KEY?: string;
   /**
-   * Server-only RNG secret for Discovery rolls (wrangler secret put DISCOVERY_SECRET).
-   * Every roll is HMAC-derived from it, so it must never be exposed to a client and must never
-   * be absent in production: without it the discovery subsystem fails closed and rolls nothing
-   * rather than falling back to a predictable seed (spec 55, 56).
+   * The optional crank bot's fee payer, base58-encoded 64-byte secret key, JSON-array
+   * stringified (see docs/CUSTODY.md).
+   *
+   * This key has **no authority of any kind**. Every instruction the crank sends -
+   * `advance_mine`, `commit_epoch_seed`, `settle_discovery`, `graduate_market`, `sweep_fees`,
+   * `crank_tip` - is permissionless, so a stranger could send it with their own wallet. The key
+   * exists to pay the network fee, and a leaked one costs its holder the fees it was already
+   * paying. Unset means the crank is off and the protocol still works: every user-signed
+   * instruction opportunistically advances the coin it touches.
    */
-  DISCOVERY_SECRET?: string;
-  /** Optional tuning overrides for the discovery window/chance; see worker/discovery.ts. */
-  DISCOVERY_WINDOW_SECONDS?: string;
-  DISCOVERY_ROLL_CHANCE_BPS?: string;
+  DIGGO_CRANK_SECRET_KEY?: string;
   /**
-   * Commit-reveal RNG epoch length in seconds (worker/discovery.ts). Bounded by RNG_EPOCH_BOUNDS
-   * and defaulting to a day, so a rehearsal on devnet can roll its commitments over in minutes
-   * while a production deployment stays on the daily schedule from spec 55.
-   */
-  DISCOVERY_EPOCH_SECONDS?: string;
-  /**
-   * Comma-separated list of admin wallet addresses (see worker/admin.ts). An admin session
-   * still has to be a real signed wallet session; this list only says which wallets may use it.
+   * Comma-separated list of admin wallet addresses (see worker/admin.ts). An admin session still
+   * has to be a real signed wallet session; this list only says which wallets may use it, and the
+   * admin surface can no longer move funds, halt a mine or touch a reserve.
    */
   ADMIN_WALLETS?: string;
   /** Server-side salt for hashing IP/device/network fingerprints (worker/signals.ts). */
@@ -39,49 +41,29 @@ export interface SecretBindings {
   /**
    * Web push credentials (worker/push.ts, RFC 8291 + RFC 8292). All three are optional: without
    * them the push channel reports itself as unavailable and the notification bell stays empty
-   * rather than silently dropping alerts. Generate the pair once with `npx web-push
-   * generate-vapid-keys` and keep the same pair across deployments — rotating it invalidates every
-   * existing browser subscription. VAPID_SUBJECT is a mailto: or https: URL the push service can
-   * contact about this application.
+   * rather than silently dropping alerts.
    */
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
   VAPID_SUBJECT?: string;
-  /**
-   * Optional Telegram delivery channel for the same notifications (worker/push.ts). The bot token
-   * is the only required part; the username is what a player is shown when linking, and the
-   * webhook secret authenticates Telegram's own calls back into /webhooks/telegram, which fails
-   * closed when it is unset or wrong.
-   */
+  /** Optional Telegram delivery channel for the same notifications (worker/push.ts). */
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_BOT_USERNAME?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
-
 }
 
 /**
- * The price oracle's own configuration (worker/oracle.ts). Every entry is optional and every
- * entry has a working default: the URLs and the Pyth SOL/USD feed id are the public endpoints and
- * the published feed, so an unconfigured deployment still reads a real price. The API keys are
- * the only entries that need `wrangler secret put` — a free Jupiter or Pyth plan raises the rate
- * limit, and without one the oracle simply leans on the other sources.
+ * The price oracle's configuration (worker/oracle.ts). In v2 the oracle is display-only: the
+ * program prices its own discovery caps from its own pool TWAP and consults no external source,
+ * so nothing here is a settlement input.
  */
 export interface OracleBindings {
-  /** Jupiter price endpoint; defaults to the current public v3 lite endpoint. */
   JUPITER_PRICE_URL?: string;
-  /** Older Jupiter price endpoint, still consulted as a second source when it answers. */
   JUPITER_PRICE_V2_URL?: string;
   JUPITER_API_KEY?: string;
-  /** Pyth Hermes base URL; defaults to the public hermes.pyth.network. */
   PYTH_HERMES_URL?: string;
   PYTH_API_KEY?: string;
-  /** Pyth price feed id for SOL/USD; defaults to the published mainnet feed id. */
   PYTH_SOL_USD_FEED_ID?: string;
-  /**
-   * How many independent external sources a price has to agree on before it is treated as
-   * externally corroborated. Raises ORACLE_LIMITS.minimumExternalSources; 0 (the default) lets a
-   * single source stand, which is what devnet runs on.
-   */
   ORACLE_MIN_EXTERNAL_SOURCES?: string;
   /**
    * Pins SOL/USD to a fixed number instead of reading an oracle. For local work and rehearsals
@@ -90,33 +72,31 @@ export interface OracleBindings {
   ORACLE_SOL_USD_OVERRIDE?: string;
 }
 
-/**
- * Operations secrets (worker/telemetry.ts). All three are optional on purpose: the Worker must
- * run, and keep logging alerts and metrics locally, whether or not an operator has wired up an
- * alerting webhook or Sentry.
- */
+/** Operations secrets (worker/telemetry.ts). All optional on purpose. */
 export interface OperationsBindings {
-  /**
-   * Discord/Slack-compatible incoming-webhook URL that fired alerts are pushed to. Unset means
-   * alerts stay in the structured log and in the D1 counters only.
-   */
   ALERT_WEBHOOK_URL?: string;
-  /**
-   * Seconds an identical alert name stays suppressed after a successful delivery, so one
-   * sustained condition produces one message per window instead of one per five-minute cron tick.
-   */
   ALERT_DEDUPE_SECONDS?: string;
-  /**
-   * Sentry DSN (https://<public-key>@<host>/<project-id>). When set, unhandled errors in the
-   * fetch, scheduled and queue handlers are reported as a plain Sentry envelope over fetch - no
-   * SDK, so the Worker bundle stays small and the reporting path has no extra dependencies.
-   */
   SENTRY_DSN?: string;
-  /** Release tag sent with Sentry events; falls back to the deployed Worker name. */
   SENTRY_RELEASE?: string;
 }
 
-export type RuntimeEnv = Env & SecretBindings & OperationsBindings & OracleBindings;
+/** Indexer tuning. Every entry has a working default, so an unconfigured deployment indexes. */
+export interface IndexerBindings {
+  /** Signatures read per cron pass, per page. Bounded so one pass cannot run past its budget. */
+  INDEXER_SIGNATURE_LIMIT?: string;
+  /** How many pages of signatures one cron pass may walk. */
+  INDEXER_MAX_PAGES?: string;
+  /** Coin accounts re-read per pass. */
+  INDEXER_COIN_LIMIT?: string;
+  /** "0" turns the optional crank bot off without removing its key. */
+  CRANK_ENABLED?: string;
+}
+
+export type RuntimeEnv = Env &
+  SecretBindings &
+  OperationsBindings &
+  OracleBindings &
+  IndexerBindings;
 
 /**
  * Bindings that exist in the deployed Worker but are optional at runtime, so tests and local
@@ -145,20 +125,46 @@ export function optionalBinding<T>(env: RuntimeEnv, name: string): T | undefined
   return value === undefined || value === null ? undefined : (value as T);
 }
 
-/**
- * The Rate Limiting binding (wrangler.jsonc `ratelimits`). Present in production and staging;
- * absent in tests, where the KV counters in worker/http.ts remain the only limiter.
- */
+/** The Rate Limiting binding (wrangler.jsonc `ratelimits`). */
 export function rateLimiterBinding(env: RuntimeEnv): RateLimiterBinding | undefined {
   const binding = optionalBinding<RateLimiterBinding>(env, "RATE_LIMITER");
   return binding && typeof binding.limit === "function" ? binding : undefined;
 }
 
-/**
- * The Analytics Engine dataset (wrangler.jsonc `analytics_engine_datasets`). Present in
- * production and staging; absent in tests, where telemetry still writes its D1 counters.
- */
+/** The Analytics Engine dataset (wrangler.jsonc `analytics_engine_datasets`). */
 export function metricsDatasetBinding(env: RuntimeEnv): MetricsDatasetBinding | undefined {
   const binding = optionalBinding<MetricsDatasetBinding>(env, "DIGGO_METRICS");
   return binding && typeof binding.writeDataPoint === "function" ? binding : undefined;
+}
+
+/** Reads a positive integer override, falling back to `fallback` for anything unusable. */
+function boundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
+  const parsed = Number.parseInt(raw ?? "", 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+/** Signatures per RPC page. Helius caps this at 1,000. */
+export const signatureLimit = (env: RuntimeEnv): number =>
+  boundedInt(env.INDEXER_SIGNATURE_LIMIT, 100, 1, 1_000);
+
+/** Pages of signatures per pass, so a backlog is worked off over several passes. */
+export const maxSignaturePages = (env: RuntimeEnv): number =>
+  boundedInt(env.INDEXER_MAX_PAGES, 3, 1, 20);
+
+/** Coin accounts re-read per pass. */
+export const coinLimit = (env: RuntimeEnv): number =>
+  boundedInt(env.INDEXER_COIN_LIMIT, 200, 1, 2_000);
+
+/**
+ * Whether the optional crank bot should run. Off unless a key is present and nothing explicitly
+ * disabled it, because an unconfigured deployment must not try to spend SOL it does not have.
+ */
+export function crankEnabled(env: RuntimeEnv): boolean {
+  // Read through the optional-binding accessor rather than as `env.CRANK_ENABLED`: the generated
+  // `Env` type narrows a var to the literal in wrangler.jsonc, so comparing it to another value is
+  // a type error the moment someone changes the var. This reads whatever is actually configured.
+  const flag = optionalBinding<string>(env, "CRANK_ENABLED");
+  if (flag === "0" || flag === "false") return false;
+  return typeof env.DIGGO_CRANK_SECRET_KEY === "string" && env.DIGGO_CRANK_SECRET_KEY.length > 0;
 }

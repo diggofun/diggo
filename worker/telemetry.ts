@@ -14,6 +14,7 @@ import {
   evaluateAlerts,
 } from "../shared/riskOps";
 import { metricsDatasetBinding, type RuntimeEnv } from "./env";
+import { getSolUsd } from "./oracle";
 
 /** Canonical counter names. Callers pass these rather than raw strings. */
 export const METRIC = {
@@ -109,9 +110,16 @@ export interface MetricReport {
   snapshot: AlertMetricSnapshot;
   alerts: RiskAlert[];
   window: { from: number; to: number; clusterSeconds: number };
-  /** Discoveries created in the cluster window, and the USD value they moved out of a reserve. */
+  /** Discoveries settled in the cluster window, and the value they moved out of a reserve. */
   discoveriesInWindow: number;
+  /**
+   * The exact lamport figure behind `reserveDrainedInWindowUsd`. The program caps discovery value
+   * in lamports, so this is the number that is true without a price.
+   */
+  reserveDrainedInWindowLamports: string;
   reserveDrainedInWindowUsd: number;
+  /** False when no SOL/USD rate was available, in which case every USD figure here is zero. */
+  usdPriceAvailable: boolean;
 }
 
 function asNumber(value: number | null | undefined): number {
@@ -119,9 +127,61 @@ function asNumber(value: number | null | undefined): number {
 }
 
 /**
+ * What counts as a discovery in the index.
+ *
+ * v2 indexes the roll, not the discovery: every `create_discovery_roll` writes a PENDING row and
+ * only `settle_discovery` turns one into a discovery. `rarity` is the program's **0-based tier
+ * index** into ProtocolConfig's table, so tier 0 is a real tier - the cheapest one - and must never
+ * be read as "no discovery": a roll the seed gives no outcome to settles at tier 0 with no units,
+ * exactly like one the coin's own eligibility floors downgrade away. The payout is the only thing
+ * that separates a discovery from an empty roll, which is what a v4 `discoveries` row meant too:
+ * it was only ever written for a real find.
+ *
+ * One fragment rather than a copy per caller: cosmetics, achievements, admin triage, risk signals
+ * and these metrics all ask the same question and have to answer it the same way.
+ */
+export const REALIZED_DISCOVERY_PREDICATE = " status = 'SETTLED' AND CAST(units AS INTEGER) > 0";
+
+/**
+ * The SOL/USD rate for the display-only USD columns, and whether it was available at all.
+ *
+ * The spec-66 metric set is specified in USD, but the program caps discovery value in lamports
+ * against its own reserves and consults no external price anywhere in a payout path, so the rate
+ * is a display conversion and nothing else. An unavailable rate is reported as unavailable rather
+ * than as a zero that looks like a measurement: the caller can then read the lamport figure, which
+ * needs no rate to be true.
+ */
+export async function displayUsdRate(env: RuntimeEnv): Promise<{ solUsd: number; available: boolean }> {
+  try {
+    const quote = await getSolUsd(env);
+    return { solUsd: quote.available ? quote.priceUsd : 0, available: quote.available && quote.priceUsd > 0 };
+  } catch {
+    return { solUsd: 0, available: false };
+  }
+}
+
+/** Lamports as USD at a display rate: the same conversion `v2CapUsd` applies to a lamport cap. */
+export function lamportsToUsd(lamports: number, solUsd: number): number {
+  return (lamports / 1_000_000_000) * solUsd;
+}
+
+/**
+ * One window of discovery economics, in the units the program itself uses.
+ *
+ * The window is measured from `block_time` - the settle event's own time - because that is when the
+ * value actually left the reserve. A roll's `created_at` is when the player committed, which can be
+ * a whole opportunity window earlier and, for a roll that is never settled, forever before anything
+ * was paid.
+ */
+const DISCOVERY_AGGREGATE_SQL =
+  "SELECT COUNT(*) AS n, COALESCE(SUM(CAST(value_lamports AS INTEGER)), 0) AS total, " +
+  "COUNT(DISTINCT wallet) AS wallets FROM discovery_events WHERE block_time >= ?1 AND" +
+  REALIZED_DISCOVERY_PREDICATE;
+
+/**
  * Collects the spec-66 metric set: hourly rates from the signal log, discovery economics from
- * the discoveries table, cluster sizes from the hashed fingerprints, and drain velocity from
- * the value that actually left a Discovery Reserve in the window.
+ * the indexed discovery events, cluster sizes from the hashed fingerprints, and drain velocity
+ * from the value that actually left a Discovery Reserve in the window.
  */
 export async function collectMetrics(
   env: RuntimeEnv,
@@ -156,26 +216,28 @@ export async function collectMetrics(
         "WHERE network_hash IS NOT NULL AND ts >= ?1 GROUP BY network_hash)",
     ).bind(clusterStart),
   ]);
-  const [discoveryHour, discoveryWindow, synchrony] = await env.DB.batch<DiscoveryAggregateRow | ShareRow>([
-    env.DB.prepare(
-      "SELECT COUNT(*) AS n, COALESCE(SUM(value_usd), 0) AS total, COUNT(DISTINCT wallet) AS wallets " +
-        "FROM discoveries WHERE created_at >= ?1",
-    ).bind(hourStart),
-    env.DB.prepare(
-      "SELECT COUNT(*) AS n, COALESCE(SUM(value_usd), 0) AS total, COUNT(DISTINCT wallet) AS wallets " +
-        "FROM discoveries WHERE created_at >= ?1",
-    ).bind(clusterStart),
-    env.DB.prepare(
-      "SELECT MAX(c) AS peak, COALESCE(SUM(c), 0) AS total FROM (SELECT COUNT(*) AS c FROM account_signals " +
-        "WHERE action = 'activate' AND outcome = 'ok' AND ts >= ?1 GROUP BY ts / ?2)",
-    ).bind(hourStart, config.synchronyBucketSeconds),
+  const [aggregates, rate] = await Promise.all([
+    env.DB.batch<DiscoveryAggregateRow | ShareRow>([
+      env.DB.prepare(DISCOVERY_AGGREGATE_SQL).bind(hourStart),
+      env.DB.prepare(DISCOVERY_AGGREGATE_SQL).bind(clusterStart),
+      env.DB.prepare(
+        "SELECT MAX(c) AS peak, COALESCE(SUM(c), 0) AS total FROM (SELECT COUNT(*) AS c FROM account_signals " +
+          "WHERE action = 'activate' AND outcome = 'ok' AND ts >= ?1 GROUP BY ts / ?2)",
+      ).bind(hourStart, config.synchronyBucketSeconds),
+    ]),
+    displayUsdRate(env),
   ]);
+  const [discoveryHour, discoveryWindow, synchrony] = aggregates;
 
   const hour = discoveryHour.results?.[0] as DiscoveryAggregateRow | undefined;
   const window = discoveryWindow.results?.[0] as DiscoveryAggregateRow | undefined;
   const synchronyRow = synchrony.results?.[0] as ShareRow | undefined;
   const activeAccounts = asNumber(perHourRows[3]?.results?.[0]?.n);
-  const reserveDrainedInWindowUsd = asNumber(window?.total);
+  // The lamport sums are exact; each USD figure is that sum converted once, at one rate.
+  const drainedLamports = asNumber(window?.total);
+  const hourLamports = asNumber(hour?.total);
+  const reserveDrainedInWindowUsd = lamportsToUsd(drainedLamports, rate.solUsd);
+  const discoveryValuePerHourUsd = lamportsToUsd(hourLamports, rate.solUsd);
   const budgetUsd =
     DIGGO_CONFIG.discovery.globalDailyCapUsd * (config.clusterWindowSeconds / DIGGO_CONFIG.time.secondsPerDay);
   const discoveriesPerHour = asNumber(hour?.n);
@@ -185,8 +247,8 @@ export async function collectMetrics(
     newAccountsPerHour: asNumber(perHourRows[1]?.results?.[0]?.n),
     claimsPerHour: asNumber(perHourRows[2]?.results?.[0]?.n),
     discoveriesPerHour,
-    avgDiscoveryValueUsd: discoveriesPerHour > 0 ? asNumber(hour?.total) / discoveriesPerHour : 0,
-    discoveryValuePerAccountUsd: activeAccounts > 0 ? asNumber(hour?.total) / activeAccounts : 0,
+    avgDiscoveryValueUsd: discoveriesPerHour > 0 ? discoveryValuePerHourUsd / discoveriesPerHour : 0,
+    discoveryValuePerAccountUsd: activeAccounts > 0 ? discoveryValuePerHourUsd / activeAccounts : 0,
     walletsPerDeviceCluster: asNumber(perHourRows[7]?.results?.[0]?.n),
     walletsPerNetworkCluster: asNumber(perHourRows[8]?.results?.[0]?.n),
     failedChallengesPerHour: asNumber(perHourRows[4]?.results?.[0]?.n),
@@ -194,7 +256,7 @@ export async function collectMetrics(
     rateLimitHitsPerHour: asNumber(perHourRows[6]?.results?.[0]?.n),
     synchronizedActivityShare:
       asNumber(synchronyRow?.total) > 0 ? asNumber(synchronyRow?.peak) / asNumber(synchronyRow?.total) : 0,
-    reserveDrainVelocityUsdPerHour: asNumber(hour?.total),
+    reserveDrainVelocityUsdPerHour: discoveryValuePerHourUsd,
     reserveDrainedFraction: budgetUsd > 0 ? Math.min(1, reserveDrainedInWindowUsd / budgetUsd) : 0,
   };
   return {
@@ -202,7 +264,9 @@ export async function collectMetrics(
     alerts: evaluateAlerts(snapshot, config, now),
     window: { from: clusterStart, to: now, clusterSeconds: config.clusterWindowSeconds },
     discoveriesInWindow: asNumber(window?.n),
+    reserveDrainedInWindowLamports: String(drainedLamports),
     reserveDrainedInWindowUsd,
+    usdPriceAvailable: rate.available,
   };
 }
 

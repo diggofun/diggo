@@ -1,186 +1,115 @@
 /**
- * Leaderboards (spec 68).
+ * Leaderboards, computed from the index.
  *
- * Categories are gameplay progression only: Crew Power, streak, achievements and seasonal points.
- * Nothing here ranks token amounts, holdings or trade volume, because a board that pays for farmed
- * token quantity is exactly what a bot farm optimises. Ranking, tiebreaks, eligibility and the
- * no-real-value-prize policy live in shared/social.ts; this module loads rows and ranks them.
+ * Every board ranks a value the program itself holds: assigned power, ORE, crew levels, the
+ * streak counters, or the value of settled discoveries. None of them ranks anything an operator
+ * can set, which is what makes a board here a report rather than a decision.
  *
- * Only accounts in the NORMAL reward state are selected: UNDER_REVIEW, HELD and BLOCKED accounts
- * are never advertised on a public board (spec 53, 63). The filter is in the SQL itself.
+ * No board marks a wallet as bonded. The bond is retired, so there is one tier, and nothing a
+ * wallet paid is something a board could rank by or a reader could mistake for a requirement.
  */
-import { DIGGO_CONFIG, crewPower, crewTier, crewTotalLevel } from "../shared/economics";
-import {
-  DEFAULT_SEASON_ID,
-  LEADERBOARD_CATEGORIES,
-  LEADERBOARD_POLICY,
-  SEASON_LENGTH_SECONDS,
-  rankLeaderboard,
-  seasonalProgressPoints,
-  type LeaderboardCandidate,
-  type LeaderboardCategory,
-  type RankedLeaderboardEntry,
-} from "../shared/social";
-import type { LeaderboardEntry } from "../shared/types";
-import { currentSeason } from "./cosmetics";
 import type { RuntimeEnv } from "./env";
 import { json } from "./http";
-import { crewLevelsOf, type PlayerRow } from "./player";
-import { loadTokens } from "./tokens";
+import type { LeaderboardEntryView, LeaderboardsView } from "./v2/types";
+import { crewLevelsOf, type PlayerAccountRow } from "./player";
 
-const STARTER_TOTAL_LEVEL = crewTotalLevel(DIGGO_CONFIG.crew.starterLevels);
-const RANK_LIMIT = 20;
-
-export interface LeaderboardRow extends PlayerRow {
-  achievement_count?: number;
-  seasonal_points?: number;
-  /** Present only on the query shape that joins the usernames table (migrations/0018). */
-  username?: string | null;
+/** One board: the SQL that ranks it, and how the metric is labelled. */
+interface BoardDefinition {
+  key: string;
+  label: string;
+  orderBy: string;
+  metric: (row: LeaderboardRow) => number;
 }
 
-const CANDIDATE_COLUMNS =
-  "wallet, miners_level, drills_level, carts_level, foreman_level, storage_level, streak, active_days," +
-  " ore_balance, active_mint, risk_state";
+interface LeaderboardRow extends PlayerAccountRow {
+  username: string | null;
+  discovery_value: string | null;
+  assigned_power_total: string | null;
+}
 
-/**
- * The same columns, qualified for a query that joins another table carrying a `wallet` column:
- * an unqualified `wallet` in a join would be ambiguous, and the qualification is derived from the
- * one column list above so the two shapes cannot drift apart.
- */
-const JOINED_CANDIDATE_COLUMNS = CANDIDATE_COLUMNS.split(",")
-  .map((column) => "players." + column.trim())
-  .join(", ");
+const BASE_SELECT = `SELECT p.*, u.username AS username,
+       (SELECT COALESCE(SUM(CAST(d.value_lamports AS INTEGER)), 0) FROM discovery_events d
+          WHERE d.wallet = p.wallet AND d.status = 'SETTLED') AS discovery_value
+       ,(SELECT COALESCE(SUM(CAST(x.assigned_power AS INTEGER)), 0) FROM mining_positions_v2 x
+          WHERE x.owner = p.wallet) AS assigned_power_total
+  FROM player_accounts p
+  LEFT JOIN usernames u ON u.wallet = p.wallet`;
 
-/**
- * Candidate rows for the progression boards. Achievement and seasonal columns need the social
- * migration, the display name needs the usernames migration, and the caller falls back to the
- * shapes a database without one of them can still answer.
- */
-export function leaderboardCandidatesSql(withSocialColumns: boolean, withUsernames = false): string {
-  const columns = withUsernames ? JOINED_CANDIDATE_COLUMNS : CANDIDATE_COLUMNS;
-  const username = withUsernames ? ", u.username AS username" : "";
-  const from = withUsernames
-    ? " FROM players LEFT JOIN usernames u ON u.wallet = players.wallet WHERE players.risk_state = 'NORMAL'"
-    : " FROM players WHERE risk_state = 'NORMAL'";
-  if (!withSocialColumns) {
-    return "SELECT " + columns + username + from;
+const BOARDS: BoardDefinition[] = [
+  {
+    key: "power",
+    label: "Assigned power",
+    orderBy: "CAST(assigned_power_total AS INTEGER) DESC",
+    metric: (row) => Number(row.assigned_power_total ?? 0),
+  },
+  {
+    key: "ore",
+    label: "ORE earned",
+    orderBy: "CAST(p.ore_earned AS INTEGER) DESC",
+    metric: (row) => Number(row.ore_earned),
+  },
+  {
+    key: "crew",
+    label: "Crew level",
+    orderBy:
+      "(p.miners_level + p.drills_level + p.carts_level + p.foreman_level + p.storage_level) DESC",
+    metric: (row) => crewLevelsOf(row).total,
+  },
+  {
+    key: "streak",
+    label: "Longest streak",
+    orderBy: "p.longest_streak DESC",
+    metric: (row) => row.longest_streak,
+  },
+  {
+    key: "discovery",
+    label: "Discovery value",
+    orderBy: "CAST(discovery_value AS INTEGER) DESC",
+    metric: (row) => Number(row.discovery_value ?? 0),
+  },
+];
+
+/** GET /api/leaderboards - every board, each capped at its own limit. */
+export async function leaderboards(
+  _request: Request,
+  env: RuntimeEnv,
+  limit = 25,
+): Promise<Response> {
+  const capped = Math.min(100, Math.max(1, limit));
+  const boards = [];
+  for (const board of BOARDS) {
+    const rows = await env.DB.prepare(`${BASE_SELECT} ORDER BY ${board.orderBy} LIMIT ?1`)
+      .bind(capped)
+      .all<LeaderboardRow>();
+    const entries: LeaderboardEntryView[] = (rows.results ?? [])
+      .filter((row) => board.metric(row) > 0)
+      .map((row, index) => ({
+        rank: index + 1,
+        wallet: row.wallet,
+        username: row.username,
+        metric: board.metric(row),
+        crewTier: tierLabel(crewLevelsOf(row).total),
+        crewPower: Number(row.assigned_power_total ?? "0"),
+      }));
+    boards.push({ key: board.key, label: board.label, entries });
   }
-  return (
-    "SELECT " + columns + username + "," +
-    " (SELECT COUNT(*) FROM player_achievements a WHERE a.wallet = players.wallet) AS achievement_count," +
-    " COALESCE((SELECT s.points FROM seasonal_points s WHERE s.wallet = players.wallet AND s.season_id = ?1), 0) AS seasonal_points" +
-    from
-  );
-}
-
-/** Maps one players row onto a leaderboard candidate, deriving seasonal points when unset. */
-export function rowToCandidate(row: LeaderboardRow): LeaderboardCandidate {
-  const levels = crewLevelsOf(row);
-  const totalLevel = crewTotalLevel(levels);
-  const achievementCount = row.achievement_count ?? 0;
-  const derivedPoints = seasonalProgressPoints({
-    activeDays: row.active_days,
-    crewUpgrades: totalLevel - STARTER_TOTAL_LEVEL,
-    streak: row.streak,
-    achievementCount,
-    discoveryCount: 0,
-  });
-  return {
-    wallet: row.wallet,
-    rewardState: row.risk_state,
-    power: crewPower(levels),
-    crewTier: crewTier(levels).tier,
-    crewTotalLevel: totalLevel,
-    streak: row.streak,
-    longestStreak: row.streak,
-    activeDays: row.active_days,
-    achievementCount,
-    seasonalPoints: Math.max(row.seasonal_points ?? 0, derivedPoints),
-    oreBalance: row.ore_balance,
-    activeMint: row.active_mint,
-    username: row.username ?? null,
+  const season = await env.DB.prepare(
+    "SELECT id, name, ends_at FROM seasons ORDER BY ends_at DESC LIMIT 1",
+  ).first<{ id: string; name: string; ends_at: number }>();
+  const body: LeaderboardsView = {
+    boards,
+    season: season ? { id: season.id, name: season.name, endsAt: season.ends_at } : null,
+    computedAt: Math.floor(Date.now() / 1_000),
   };
+  return json(body, { headers: { "cache-control": "public, max-age=60" } });
 }
 
-export function rankCandidates(
-  candidates: readonly LeaderboardCandidate[],
-): Record<LeaderboardCategory, RankedLeaderboardEntry[]> {
-  return {
-    crew: rankLeaderboard(candidates, "crew", RANK_LIMIT),
-    streak: rankLeaderboard(candidates, "streak", RANK_LIMIT),
-    achievements: rankLeaderboard(candidates, "achievements", RANK_LIMIT),
-    seasonal_points: rankLeaderboard(candidates, "seasonal_points", RANK_LIMIT),
-  };
-}
-
-async function loadCandidates(env: RuntimeEnv, seasonId: string): Promise<LeaderboardCandidate[]> {
-  // Each shape needs one more migration than the last: the social tables (0011) for achievements and
-  // seasonal points, the usernames table (0018) for the display name. A database missing one falls
-  // through to the next shape instead of failing the board, which is what an unmigrated local run
-  // looks like.
-  const attempts: { sql: string; bind: readonly string[] }[] = [
-    { sql: leaderboardCandidatesSql(true, true), bind: [seasonId] },
-    { sql: leaderboardCandidatesSql(true, false), bind: [seasonId] },
-    { sql: leaderboardCandidatesSql(false, false), bind: [] },
-  ];
-  let lastError: unknown = null;
-  for (const attempt of attempts) {
-    try {
-      const rows = (await env.DB.prepare(attempt.sql).bind(...attempt.bind).all<LeaderboardRow>()).results;
-      return rows.map(rowToCandidate);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error("Leaderboard query failed");
-}
-
-export async function leaderboards(env: RuntimeEnv, ctx: ExecutionContext): Promise<Response> {
-  const now = Math.floor(Date.now() / 1_000);
-  const season = await currentSeasonOrFallback(env, now);
-  const candidates = await loadCandidates(env, season.id);
-  const ranked = rankCandidates(candidates);
-  const legacy = (entries: readonly RankedLeaderboardEntry[], key: "power" | "streak"): LeaderboardEntry[] =>
-    entries
-      .slice()
-      .sort((a, b) => b[key] - a[key] || b.activeDays - a.activeDays)
-      .map(
-        (entry, index) =>
-          ({
-            rank: index + 1,
-            wallet: entry.wallet,
-            power: entry.power,
-            streak: entry.streak,
-            activeDays: entry.activeDays,
-            oreBalance: entry.oreBalance,
-            activeMint: entry.activeMint,
-            username: entry.username ?? null,
-          }) satisfies LeaderboardEntry,
-      );
-  const mines = (await loadTokens(env, ctx, 20)).tokens
-    .slice()
-    .sort((a, b) => b.networkPower - a.networkPower || b.marketCapUsd - a.marketCapUsd);
-  return json({
-    // Legacy keys kept for the current dashboard.
-    miners: legacy(ranked.crew, "power"),
-    streaks: legacy(ranked.streak, "streak"),
-    mines,
-    // Spec 68 categories, all gameplay progression.
-    crew: ranked.crew,
-    streak: ranked.streak,
-    achievements: ranked.achievements,
-    seasonal: ranked.seasonal_points,
-    categories: LEADERBOARD_CATEGORIES,
-    season: { id: season.id, name: season.name, endsAt: season.endsAt },
-    policy: LEADERBOARD_POLICY,
-  });
-}
-
-/** The current season, or the built-in default when the seasons table is not migrated yet. */
-async function currentSeasonOrFallback(env: RuntimeEnv, now: number) {
-  try {
-    return await currentSeason(env, now);
-  } catch {
-    return { id: DEFAULT_SEASON_ID, name: "Season 1 - Genesis Dig", startsAt: now, endsAt: now + SEASON_LENGTH_SECONDS };
-  }
+/** A plain label for a crew total. Presentation only: the program derives the real power. */
+function tierLabel(total: number): string {
+  if (total >= 400) return "MYTHIC";
+  if (total >= 300) return "LEGENDARY";
+  if (total >= 200) return "EPIC";
+  if (total >= 100) return "RARE";
+  if (total >= 40) return "UNCOMMON";
+  return "COMMON";
 }
