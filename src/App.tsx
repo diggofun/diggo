@@ -629,6 +629,7 @@ export default function App() {
               />
               <Ticker tokens={tokens} />
               <ExploreBoard tokens={tokens} limit={3} onLaunch={openLaunch} />
+              {economy}
               <HowItWorks />
               <FinalCta onLaunch={openLaunch} />
             </>
@@ -650,7 +651,6 @@ export default function App() {
                 onSwitchMine={() => setSwitchOpen(true)}
                 onCollect={() => void handleCollectReport()}
               />
-              {economy}
               {mineInfoPanel(activeMineToken, false)}
             </>
           )}
@@ -677,7 +677,6 @@ export default function App() {
                   </EmptyState>
                 </section>
               )}
-              {economy}
             </>
           )}
 
@@ -712,7 +711,13 @@ export default function App() {
 
           {page === "mines" && (featured ? (
             <>
-              <SelectedMine token={featured} now={now} canSwitch={canSwitchToFeatured} onSwitch={() => void handleSwitchMine(featured.mint)} />
+              <SelectedMine
+                token={featured}
+                mineInfo={mineInfo}
+                now={now}
+                canSwitch={canSwitchToFeatured}
+                onSwitch={() => void handleSwitchMine(featured.mint)}
+              />
               {mineInfoPanel(featured, canSwitchToFeatured)}
               {config.programId && (
                 <SwapPanel token={featured} programAddress={config.programId} signer={connected?.wallet ?? null} onTraded={() => void refreshFeaturedToken()} />

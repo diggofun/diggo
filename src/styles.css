@@ -69,9 +69,9 @@ a { color: inherit; text-decoration: none; }
 .page-shell { width: min(1240px, calc(100% - 48px)); margin-inline: auto; }
 
 .site-header { min-height: 76px; padding: 0 max(24px, calc((100vw - 1420px) / 2)); display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 80; background: rgba(241,238,228,.94); backdrop-filter: blur(14px); }
-.brand { display: inline-flex; align-items: center; gap: 9px; font: 900 19px/1 Arial Black, sans-serif; letter-spacing: -1px; }
+.brand { display: inline-flex; align-items: center; gap: 9px; font: 900 19px/1 Arial Black, sans-serif; letter-spacing: -1px; user-select: none; -webkit-user-select: none; }
 .brand-mark { width: 34px; height: 34px; display: grid; place-items: center; color: var(--acid); background: var(--ink); border-radius: 50%; transform: rotate(-8deg); }
-.brand-art { height: 34px; width: auto; }
+.brand-art { height: 34px; width: auto; -webkit-user-drag: none; }
 /* One slot per logo shape: the lockup when there is room, the square icon in the narrow header. */
 .brand-slot { display: inline-flex; align-items: center; gap: 9px; }
 .brand-slot-icon { display: none; }
@@ -604,7 +604,6 @@ a { color: inherit; text-decoration: none; }
 .cosmetics-summary { text-align: right; }
 .cosmetics-summary strong { display: block; font: 900 clamp(24px, 3vw, 30px)/1 var(--font-display); }
 .cosmetics-summary small { color: var(--muted); font: 800 var(--text-xs)/1 var(--font-mono); text-transform: uppercase; letter-spacing: .08em; }
-.cosmetics-rule { border-left: 3px solid var(--orange); border-radius: var(--radius-sm); background: #f6e7d7; padding: var(--space-3) var(--space-4); font-size: var(--text-sm); line-height: 1.6; margin: 0 0 var(--space-5); }
 /* The loadout preview is the real mine scene, drawn with whatever is equipped right now. */
 .cosmetics-preview { display: grid; gap: var(--space-3); margin-bottom: var(--space-6); }
 .cosmetics-preview p { margin: 0; color: var(--muted); font-size: var(--text-sm); line-height: 1.6; }
@@ -695,9 +694,6 @@ a { color: inherit; text-decoration: none; }
    Layout only - the copy itself lives in src/components/legal/content.ts. */
 .legal-page { width: min(860px, calc(100% - 48px)); margin: 0 auto; padding: var(--space-7) 0 var(--space-8); color: var(--ink); }
 .legal-page p { margin: 0 0 var(--space-3); line-height: 1.7; }
-.legal-draft { border: 2px solid var(--orange); background: var(--paper-2); padding: var(--space-4); margin-bottom: var(--space-6); font-size: var(--text-sm); line-height: 1.6; }
-.legal-page .legal-draft strong { display: block; margin-bottom: var(--space-2); color: var(--orange-ink); }
-.legal-page .legal-draft p { margin: 0; }
 .legal-title { font-family: var(--font-display); font-size: clamp(28px, 5vw, 44px); line-height: 1.05; letter-spacing: -.02em; margin: 0 0 var(--space-3); text-transform: uppercase; }
 .legal-page .legal-summary { margin: 0 0 var(--space-2); color: var(--muted); font-size: var(--text-lg); line-height: 1.5; }
 .legal-page .legal-meta { margin: 0 0 var(--space-5); font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
@@ -710,10 +706,24 @@ a { color: inherit; text-decoration: none; }
 .legal-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); }
 .legal-page .legal-choices-note { margin: var(--space-3) 0 0; }
 
-.consent-banner { position: fixed; left: 0; right: 0; bottom: 0; z-index: 70; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-4) clamp(12px, 4vw, 48px); background: var(--paper-2); border-top: 2px solid var(--ink); box-shadow: 0 -4px 0 rgba(23, 24, 19, .08); }
-.consent-banner-title { font-size: var(--text-md); }
-.consent-copy { margin: var(--space-1) 0 0; max-width: 78ch; color: var(--muted); font-size: var(--text-sm); line-height: 1.6; }
-.consent-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+/* A compact corner card with two one-click choices and a close button: it asks, it does not hold
+   the bottom of every page. Closing it records "essential only" (legal/consent.ts), so dismissing
+   is never a quiet way to opt into analytics. */
+.consent-banner { position: fixed; z-index: 95; right: max(12px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); width: min(372px, calc(100vw - 24px)); display: grid; gap: var(--space-3); padding: var(--space-4); background: var(--paper-2); border: 1px solid var(--ink); border-radius: var(--radius-md); box-shadow: 4px 4px 0 rgba(23, 24, 19, .16); }
+.consent-banner-title { font-size: var(--text-sm); text-transform: uppercase; letter-spacing: .06em; }
+.consent-copy { margin: 0; padding-right: var(--space-5); color: var(--muted); font-size: var(--text-xs); line-height: 1.5; }
+.consent-actions { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+.consent-actions .btn { min-height: 40px; padding-inline: 8px; font-size: var(--text-xs); }
+.consent-dismiss { position: absolute; top: 8px; right: 8px; width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--muted); }
+.consent-dismiss:hover { border-color: var(--ink); color: var(--ink); }
+/* The card floats over the page, so the page keeps room for it while it is up: no call to action
+   ends up underneath it. */
+body.has-consent { padding-bottom: 190px; }
+
+@media (max-width: 760px) {
+  .consent-banner { left: max(12px, env(safe-area-inset-left)); right: max(12px, env(safe-area-inset-right)); bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 10px); width: auto; }
+  body.has-consent { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 210px); }
+}
 
 @media (max-width: 1000px) {
   .dash-active, .dash-paused, .crew-head, .economy-split, .mine-info-lower { grid-template-columns: 1fr; }
@@ -756,9 +766,14 @@ a { color: inherit; text-decoration: none; }
 .sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .skip-link { position: fixed; left: var(--space-4); top: -60px; z-index: 200; padding: var(--space-3) var(--space-4); background: var(--ink); color: var(--acid); font: 900 var(--text-sm)/1 var(--font-display); text-transform: uppercase; border-radius: var(--radius-sm); transition: top var(--dur-med) var(--ease-out); }
 .skip-link:focus { top: var(--space-3); }
-main:focus { outline: none; }
-:where(a, button, input, textarea, select, summary, [tabindex]):focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; box-shadow: 0 0 0 5px var(--acid); }
-:where(.how-section, .final-cta, .mine-console, .dash-mine, .dash-paused, .real-rewards, .tab-bar, .modal-backdrop) :where(a, button, input, [tabindex]):focus-visible { outline-color: var(--acid); box-shadow: 0 0 0 5px rgba(215,255,63,.35); }
+/* The skip link's target is focused so a keyboard user lands inside the page, but a ring drawn
+   around <main> reads as the whole page being selected. tabindex="-1" exists to be focused by
+   script, never to be tabbed to, so it takes no focus ring at all; the shared ring below is for
+   the things a person actually tabs to. */
+:where(main, [tabindex="-1"]):focus,
+:where(main, [tabindex="-1"]):focus-visible { outline: none; box-shadow: none; }
+:where(a, button, input, textarea, select, summary, [tabindex]:not([tabindex="-1"])):focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; box-shadow: 0 0 0 5px var(--acid); }
+:where(.how-section, .final-cta, .mine-console, .dash-mine, .dash-paused, .real-rewards, .tab-bar, .modal-backdrop) :where(a, button, input, [tabindex]:not([tabindex="-1"])):focus-visible { outline-color: var(--acid); box-shadow: 0 0 0 5px rgba(215,255,63,.35); }
 .mono-label { color: var(--orange-ink); }
 .eyebrow { color: #55574e; }
 body.has-modal { overflow: hidden; }
@@ -837,10 +852,6 @@ body.has-modal { overflow: hidden; }
 .wallet-button.is-signed .wallet-dot { background: var(--acid); box-shadow: 0 0 0 3px rgba(215,255,63,.25); }
 .wallet-disconnect { width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--radius-sm); }
 .signed-wallet { display: flex; align-items: center; gap: 6px; }
-/* Sound is opt-in: the switch states its own state rather than only its action. */
-.sound-toggle { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid var(--ink); border-radius: var(--radius-sm); background: var(--paper-2); color: var(--muted); transition: background-color var(--dur-fast), color var(--dur-fast); }
-.sound-toggle:hover { background: white; color: var(--ink); }
-.sound-toggle.is-on { background: var(--acid); color: var(--ink); box-shadow: var(--shadow-hard-sm); }
 .wallet-menu-error { margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--danger); border-left-width: 4px; border-radius: var(--radius-sm); background: #fbe9e4; color: #6d1d10; font: 700 var(--text-xs)/1.5 var(--font-mono); }
 .menu-button { display: none; width: 42px; height: 42px; place-items: center; border: 1px solid var(--ink); border-radius: var(--radius-sm); background: var(--paper-2); color: var(--ink); }
 .site-menu { position: absolute; top: calc(100% + 1px); right: max(24px, calc((100vw - 1420px) / 2)); width: min(340px, calc(100vw - 28px)); max-height: calc(100vh - var(--header-h) - 12px); overflow: auto; padding: var(--space-4); display: grid; gap: var(--space-4); background: var(--paper); border: 1px solid var(--ink); box-shadow: 5px 5px 0 var(--acid); animation: menu-in var(--dur-med) var(--ease-out); }
@@ -868,7 +879,6 @@ body.has-modal { overflow: hidden; }
   .brand-slot-icon { display: inline-flex; }
   .brand-art, .brand-art-icon { width: 30px; height: 30px; object-fit: contain; }
   .wallet-button { height: 40px; padding: 0 12px; font-size: 11px; }
-  .sound-toggle { width: 36px; height: 36px; }
   .wallet-control:not(.signed-wallet) .wallet-button span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .site-menu { left: 14px; right: 14px; width: auto; }
   body { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); }

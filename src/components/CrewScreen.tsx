@@ -8,7 +8,7 @@
  * There is no money, no token payment and no purchase button anywhere on this screen: the only
  * currency in the game's progression loop is ORE, and ORE can never be bought (spec 9, 34).
  */
-import { useEffect, useRef, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { ArrowUpRight, Gem, Hammer, Hourglass, Lock, X } from "lucide-react";
 import type { PlayerProfile } from "../../shared/types";
 import {
@@ -23,7 +23,6 @@ import {
   type CrewLevels,
 } from "../../shared/economics";
 import { CREW_COMPONENTS, CREW_COMPONENT_GLYPHS, CREW_COMPONENT_LABELS, CREW_ROLES } from "../crewLabels";
-import { playSound } from "../sound";
 import { GameArt, MineScene } from "./MineScene";
 import { useDialog } from "./useDialog";
 
@@ -98,13 +97,6 @@ function orePerHour(player: PlayerProfile, levels: CrewLevels): number {
 export function CrewScreen({ player, pending, error, notice, onUpgrade, variant = "page", onClose }: CrewScreenProps) {
   const tier = crewTier(player.crewLevels);
   const totalLevel = CREW_COMPONENTS.reduce((sum, component) => sum + player.crewLevels[component], 0);
-
-  // The upgrade cue belongs to the server's confirmation, not to the click that asked for it.
-  const lastNotice = useRef(notice);
-  useEffect(() => {
-    if (notice && notice !== lastNotice.current) playSound("upgrade");
-    lastNotice.current = notice;
-  }, [notice]);
 
   const nextTier = DIGGO_CONFIG.crew.tiers.find((candidate) => candidate.minTotalLevel > totalLevel) ?? null;
   const tierFloor = tier.minTotalLevel;

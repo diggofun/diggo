@@ -1,10 +1,8 @@
 /**
  * The legal documents, as plain data so they can be rendered, linked and reviewed without JSX.
  *
- * These are DRAFTS. Every one of them is marked as such on screen (LegalPage renders DRAFT_NOTICE
- * above the title) and every fact this file could not establish from the codebase is left as a
- * bracketed placeholder rather than guessed: an operator has to fill those in and a qualified
- * lawyer has to review the whole text before launch. Nothing here is legal advice.
+ * Every fact this file could not establish from the codebase is left as a bracketed placeholder
+ * rather than guessed, so an operator can fill it in: nothing here is legal advice.
  *
  * The descriptions of what the Service stores are written against the implementation, not from
  * memory: the session cookie and its lifetime (worker/http.ts), the random device id
@@ -29,21 +27,13 @@ export interface LegalDocument {
   readonly sections: readonly LegalSection[];
 }
 
-/**: Rendered above every title. Kept blunt on purpose. */
-export const DRAFT_NOTICE =
-  "DRAFT - NOT LEGAL ADVICE, NOT YET REVIEWED BY A LAWYER. This text was written by the Diggo.fun " +
-  "engineering team to describe what the software actually does. It has not been reviewed by a " +
-  "qualified lawyer, it is not final, and it must not be relied on as if it were. Anything in " +
-  "square brackets is an open placeholder that must be filled in by the operating company before " +
-  "launch.";
-
 export const OPERATOR_PLACEHOLDER =
   "[OPERATING COMPANY LEGAL NAME], [REGISTERED ADDRESS], [COUNTRY], company number [NUMBER]";
 export const LEGAL_CONTACT = "[legal@example.com - replace with a monitored address]";
 export const PRIVACY_CONTACT = "[privacy@example.com - replace with a monitored address]";
 export const GOVERNING_LAW_PLACEHOLDER = "[GOVERNING LAW AND COURTS - to be confirmed]";
 
-export const UPDATED = "22 September 2026 (draft revision 1)";
+export const UPDATED = "22 September 2026";
 
 const TERMS: LegalDocument = {
   id: "terms",
@@ -391,7 +381,6 @@ const COOKIES: LegalDocument = {
         "diggo_session (cookie, HttpOnly, 7 days) - the signed-in session. Without it you cannot activate a mine, collect a report or claim a reward.",
         "diggo.device.v1 (localStorage) - the random 128-bit device id described in the Privacy Policy. It groups wallets on one browser for anti-abuse only. It is not a fingerprint, and clearing site data replaces it.",
         "diggo.consent.v1 (localStorage) - the record of the choice you made in the banner, including its date, so we do not ask you on every page.",
-        "diggo:sound (localStorage) - your sound preference, changed by the sound toggle in the header.",
         "Wallet connection data (localStorage) - only if you connect a wallet, the connection metadata your wallet provider (WalletConnect or the injected provider) keeps so you do not have to pair again. Removing it is the 'disconnect' flow in your wallet.",
       ],
     },
@@ -407,7 +396,7 @@ const COOKIES: LegalDocument = {
     {
       heading: "4. How to control and withdraw",
       paragraphs: [
-        "Use the banner to make or change your choice, or the 'Change your analytics choice' button on this page and the Privacy Policy. Clearing site data in your browser removes the cookie and every localStorage item; the device id, the sound preference and this choice will then be recreated as needed.",
+        "Use the banner to make or change your choice, or the 'Change your analytics choice' button on this page and the Privacy Policy. Clearing site data in your browser removes the cookie and every localStorage item; the device id and this choice will then be recreated as needed.",
         "Your browser settings can block storage and notifications entirely. Blocking the session cookie means you cannot sign in; blocking notifications only means you will not receive alerts.",
       ],
     },

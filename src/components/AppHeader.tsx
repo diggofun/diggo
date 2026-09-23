@@ -166,7 +166,6 @@ export function AppHeader({
           <a className="launch-button" href="/create" aria-current={page === "create" ? "page" : undefined}>
             <Plus size={16} /> Create coin
           </a>
-          <SoundToggle />
           <NotificationsBell signedIn={signedIn} />
           <WalletControl session={session} onAuthenticated={onAuthenticated} />
           <button
