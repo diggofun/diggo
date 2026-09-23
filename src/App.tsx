@@ -34,10 +34,14 @@ import { TURNSTILE_SITE_KEY } from "./constants";
 import { NEUTRAL_VERIFICATION_TEXT, runGated, VerificationRequiredError } from "./verification";
 import { CREW_COMPONENT_LABELS, CREW_COMPONENTS } from "./crewLabels";
 import { useDiggoWallet } from "./wallet";
+import { clearEquippedCosmetics, loadEquippedCosmetics } from "./cosmetics";
 import { AppHeader, type PageId } from "./components/AppHeader";
 import { ExploreBoard, FinalCta, HomeHero, HowItWorks, SelectedMine, SiteFooter, Ticker } from "./components/HomeSections";
 import { EmptyState, ErrorState, LoadingScreen, RouteFallback } from "./components/StatusViews";
 import { useVerificationGate } from "./components/VerificationGate";
+import { ConsentBanner } from "./components/ConsentBanner";
+import { PushToggle } from "./components/PushToggle";
+import { isLegalPath } from "./components/legal/routes";
 
 /*
  * Every screen below the landing page is its own chunk: the swap terminal (lightweight-charts and
@@ -56,6 +60,8 @@ const MineInfoPanel = lazy(() => import("./components/MineInfoPanel").then((modu
 const MiningReportModal = lazy(() => import("./components/MiningReportModal").then((module) => ({ default: module.MiningReportModal })));
 const SwapPanel = lazy(() => import("./components/SwapPanel").then((module) => ({ default: module.SwapPanel })));
 const SwitchMineModal = lazy(() => import("./components/SwitchMineModal").then((module) => ({ default: module.SwitchMineModal })));
+/** Terms, Privacy, Risk and Cookies: their own chunk, because most visits never open one. */
+const LegalRoute = lazy(() => import("./components/legal/LegalPage").then((module) => ({ default: module.LegalRoute })));
 /** Design review gallery; only exists in the Vite dev server and is dropped from production builds. */
 const UiGallery = import.meta.env.DEV ? lazy(() => import("./dev/UiGallery").then((module) => ({ default: module.UiGallery }))) : null;
 
@@ -121,6 +127,12 @@ export default function App() {
     vanitySuffix: "diggo",
   });
   const connected = useDiggoWallet();
+  /**
+   * The connected address as a primitive. Effects and callbacks depend on this rather than on the
+   * connection object, so their identity only changes when the wallet itself does. src/wallet.ts
+   * memoizes the object too, but depending on the address keeps that guarantee local here.
+   */
+  const walletAddress = connected?.address ?? null;
   const [mineInfo, setMineInfo] = useState<MineInfo | null>(null);
   const [mineInfoLoading, setMineInfoLoading] = useState(false);
   const [mineInfoError, setMineInfoError] = useState("");
@@ -167,6 +179,11 @@ export default function App() {
   );
 
   const page: PageId = useMemo(() => ROUTES[window.location.pathname] ?? "home", []);
+  /**
+   * The legal documents render in place of the home page at their own paths. They get no PageId on
+   * purpose: that union is AppHeader.tsx's, and a legal notice belongs nowhere in the game nav.
+   */
+  const legal = useMemo(() => isLegalPath(window.location.pathname), []);
 
   useEffect(() => {
     const title = PAGE_TITLES[page];
@@ -210,16 +227,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!session || !connected || session !== connected.address) {
+    if (!session || !walletAddress || session !== walletAddress) {
       setPlayer(null);
       return;
     }
-    getPlayerProfile(connected.address).then(setPlayer).catch(() => setPlayer(null));
-  }, [session, connected]);
+    getPlayerProfile(walletAddress).then(setPlayer).catch(() => setPlayer(null));
+  }, [session, walletAddress]);
 
   const featured = selected ?? tokens[0] ?? null;
   const isMiningActive = player?.activationState === "ACTIVE";
-  const signedIn = Boolean(session && connected && session === connected.address);
+  const signedIn = Boolean(session && walletAddress && session === walletAddress);
 
   const loadMineInfo = useCallback(async (mint: string): Promise<void> => {
     setMineInfoLoading(true);
@@ -234,30 +251,30 @@ export default function App() {
   }, []);
 
   const refreshClaims = useCallback(async (): Promise<void> => {
-    if (!connected || !signedIn) {
+    if (!walletAddress || !signedIn) {
       setClaims([]);
       return;
     }
     setClaimsLoading(true);
     try {
-      setClaims(await getPlayerRewards(connected.address));
+      setClaims(await getPlayerRewards(walletAddress));
       setClaimError("");
     } catch {
       setClaimError("Could not load your reward ledger.");
     } finally {
       setClaimsLoading(false);
     }
-  }, [connected, signedIn]);
+  }, [walletAddress, signedIn]);
 
   const refreshDiscoveries = useCallback(async (): Promise<void> => {
-    if (!connected || !signedIn) {
+    if (!walletAddress || !signedIn) {
       setDiscoveries([]);
       setOpportunity(null);
       return;
     }
     setDiscoveriesLoading(true);
     try {
-      const result = await getDiscoveries(connected.address);
+      const result = await getDiscoveries(walletAddress);
       setDiscoveries(result.discoveries);
       setOpportunity(result.opportunity);
       setDiscoveryError("");
@@ -266,7 +283,7 @@ export default function App() {
     } finally {
       setDiscoveriesLoading(false);
     }
-  }, [connected, signedIn]);
+  }, [walletAddress, signedIn]);
 
   useEffect(() => {
     void refreshClaims();
@@ -275,6 +292,26 @@ export default function App() {
   useEffect(() => {
     void refreshDiscoveries();
   }, [refreshDiscoveries]);
+
+  /**
+   * The dashboard draws the player's mine, so it needs the equipped cosmetics too. Loading them
+   * once here means the look is right on the first visit to the dashboard rather than only after
+   * a trip to the cosmetics page; src/cosmetics.ts de-duplicates the request with that screen.
+   */
+  useEffect(() => {
+    if (signedIn) void loadEquippedCosmetics();
+    else clearEquippedCosmetics();
+  }, [signedIn]);
+
+  /**
+   * A reward the player collected on chain has just been confirmed to the backend, so the ledger
+   * it came from is stale: re-read it rather than guessing what the row now says. Without this the
+   * panel keeps offering a claim whose tokens are already in the wallet, and the reconciliation
+   * sweep sees a settled reward it cannot match to a signature.
+   */
+  const handleCollected = useCallback((): void => {
+    void refreshClaims();
+  }, [refreshClaims]);
 
   async function handleCollectReport(): Promise<void> {
     if (!signedIn) return;
@@ -541,6 +578,7 @@ export default function App() {
       claimError={claimError}
       onClaim={(claim) => void handleClaimReward(claim)}
       onOpenToken={openTokenPage}
+      onCollected={handleCollected}
     />
   );
   const mineInfoPanel = (token: TokenSummary | null, canSwitch: boolean) =>
@@ -573,7 +611,9 @@ export default function App() {
         )}
 
         <Suspense fallback={<RouteFallback />}>
-          {page === "home" && (
+          {legal && <LegalRoute pathname={window.location.pathname} />}
+
+          {!legal && page === "home" && (
             <>
               <HomeHero
                 featured={featured}
@@ -710,6 +750,8 @@ export default function App() {
           {page === "admin" && <AdminScreen signedIn={signedIn} />}
           {page === "ui" && UiGallery && <UiGallery />}
         </Suspense>
+
+        <PushToggle />
       </main>
 
       <SiteFooter />
@@ -763,6 +805,7 @@ export default function App() {
         )}
       </Suspense>
       {verification.verificationModal}
+      <ConsentBanner />
     </div>
   );
 }

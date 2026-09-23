@@ -32,6 +32,7 @@ import { GAMEPLAY_DEFAULTS } from "../../shared/economics";
 import { compact, countdown, money, shortAddress } from "../format";
 import { requestWalletMenu } from "../wallet";
 import { BrandMark } from "./AppHeader";
+import { LEGAL_ROUTES } from "./legal/routes";
 import { EmptyState } from "./StatusViews";
 import { TokenOrb } from "./TokenOrb";
 
@@ -374,6 +375,13 @@ export function SiteFooter() {
       <BrandMark />
       <p>Finite supply. Infinite memes.</p>
       <div><a href="/mines">Mines</a><a href="/leaderboards">Leaderboards</a><a href="/create">Launch</a></div>
+      <nav className="site-footer-legal" aria-label="Legal">
+        {LEGAL_ROUTES.map((route) => (
+          <a key={route.id} href={route.path}>
+            {route.short}
+          </a>
+        ))}
+      </nav>
       <small>© 2026 Diggo.fun · Devnet MVP</small>
     </footer>
   );

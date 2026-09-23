@@ -7,7 +7,6 @@
  */
 import { useEffect, useRef, useState, type ComponentType } from "react";
 import { useConnect, useDisconnect, useWallets } from "@solana/kit-plugin-wallet/react";
-import { useAppKit, useDisconnect as useAppKitDisconnect } from "@reown/appkit/react";
 import bs58 from "bs58";
 import {
   Gem,
@@ -30,7 +29,10 @@ import { track } from "../analytics";
 import { shortAddress } from "../format";
 import { solanaClient } from "../solana";
 import { OPEN_WALLET_EVENT, useDiggoWallet } from "../wallet";
+import { disconnectWalletConnect, openWalletConnect } from "../walletConnect";
+import { GameArt } from "./MineScene";
 import { NotificationsBell } from "./NotificationsBell";
+import { SoundToggle } from "./SoundToggle";
 
 export type PageId =
   | "home"
@@ -83,14 +85,43 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
 const TAB_BAR: PageId[] = ["mine", "crew", "discoveries", "explore", "trade"];
 const ALL_ITEMS = NAV_GROUPS.flatMap((group) => group.items);
 
+/** The drawn brand, used until (and instead of) the generated lockup or icon. */
+const BRAND_FALLBACK = (
+  <>
+    <span className="brand-mark" aria-hidden="true">
+      <Pickaxe size={19} strokeWidth={2.8} />
+    </span>
+    <span aria-hidden="true">
+      DIGGO<span className="brand-dot">.FUN</span>
+    </span>
+  </>
+);
+
 export function BrandMark() {
   return (
     <a className="brand" href="/" aria-label="Diggo.fun home">
-      <span className="brand-mark" aria-hidden="true">
-        <Pickaxe size={19} strokeWidth={2.8} />
+      {/* The generated lockup with room to breathe, the square icon in the narrow header. */}
+      <span className="brand-slot brand-slot-wide">
+        <GameArt
+          name="logo"
+          alt="Diggo.fun"
+          width={1024}
+          height={476}
+          className="brand-art"
+          eager
+          fallback={BRAND_FALLBACK}
+        />
       </span>
-      <span aria-hidden="true">
-        DIGGO<span className="brand-dot">.FUN</span>
+      <span className="brand-slot brand-slot-icon">
+        <GameArt
+          name="logo-icon"
+          alt="Diggo.fun"
+          width={512}
+          height={512}
+          className="brand-art brand-art-icon"
+          eager
+          fallback={BRAND_FALLBACK}
+        />
       </span>
     </a>
   );
@@ -135,6 +166,7 @@ export function AppHeader({
           <a className="launch-button" href="/create" aria-current={page === "create" ? "page" : undefined}>
             <Plus size={16} /> Create coin
           </a>
+          <SoundToggle />
           <NotificationsBell signedIn={signedIn} />
           <WalletControl session={session} onAuthenticated={onAuthenticated} />
           <button
@@ -197,9 +229,8 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
   const connected = useDiggoWallet();
   const connect = useConnect(solanaClient);
   const standardDisconnect = useDisconnect(solanaClient);
-  const { disconnect: wcDisconnect } = useAppKitDisconnect();
-  const { open: openWalletConnect } = useAppKit();
   const [open, setOpen] = useState(false);
+  const [walletConnectError, setWalletConnectError] = useState("");
   const [signingIn, setSigningIn] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -246,7 +277,7 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
   }
 
   async function disconnectWallet() {
-    if (connected?.kind === "walletconnect") await wcDisconnect({ namespace: "solana" });
+    if (connected?.kind === "walletconnect") await disconnectWalletConnect();
     else standardDisconnect.dispatch();
   }
 
@@ -304,14 +335,20 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
             type="button"
             className="wallet-walletconnect-button"
             onClick={() => {
-              setOpen(false);
-              void openWalletConnect({ view: "Connect", namespace: "solana" });
               track("walletconnect_opened", { network: "solana-devnet" });
+              // The AppKit chunk is fetched here, on first use, rather than with the main bundle.
+              void openWalletConnect().then((opened) => {
+                setWalletConnectError(
+                  opened ? "" : "Could not load WalletConnect. Check your connection and try again.",
+                );
+                if (opened) setOpen(false);
+              });
             }}
           >
             <Wallet size={16} /> Connect Wallet
           </button>
           <small>WalletConnect covers phones and any wallet not detected above.</small>
+          {walletConnectError && <p className="wallet-menu-error" role="alert">{walletConnectError}</p>}
         </div>
       )}
     </div>

@@ -5,6 +5,9 @@
  * Power, what is left of the reserve, the reduction schedule, and how far the mine is from being
  * fully mined. The share figure always carries the server's own label, and never appears as a
  * return, an ROI or an APY, because a block share moves with every other crew that joins the mine.
+ *
+ * Built from the shared design-system primitives (.card, .stat, .badge, .btn, .error-state) so it
+ * reads as the same product as the dashboard and the crew board.
  */
 import { AlertTriangle, Clock3, Gauge, Layers, Pickaxe, Repeat2, Users } from "lucide-react";
 import type { MineInfo, MiningAccounting } from "../../shared/types";
@@ -42,7 +45,20 @@ export function MineInfoPanel({
   if (!mine) {
     return (
       <section className="mine-info page-shell" id="mine-info">
-        {loading ? <div className="mine-info-loading" aria-busy="true"><span className="skeleton" /><span className="sr-only">Loading mine information…</span></div> : error ? <span className="form-message" role="alert">{error}</span> : null}
+        {loading ? (
+          <div className="mine-info-loading" aria-busy="true">
+            <span className="skeleton" />
+            <span className="sr-only">Loading mine information…</span>
+          </div>
+        ) : error ? (
+          <div className="error-state" role="alert">
+            <AlertTriangle size={18} aria-hidden="true" />
+            <div>
+              <strong>Mine information is unavailable</strong>
+              <p>{error}</p>
+            </div>
+          </div>
+        ) : null}
       </section>
     );
   }
@@ -68,45 +84,49 @@ export function MineInfoPanel({
           <h3>{mineName ?? mine.symbol}</h3>
         </div>
         {fullyMined ? (
-          <span className="fully-mined-badge">
-            <AlertTriangle size={13} /> FULLY_MINED
+          <span className="badge badge-danger">
+            <AlertTriangle size={13} aria-hidden="true" /> FULLY_MINED
           </span>
         ) : (
-          <button className="outline-button switch-here" disabled={!canSwitch || switching} onClick={onSwitchHere}>
-            {switching ? "Switching…" : "Switch crew to this mine"} <Repeat2 size={14} />
+          <button
+            className="btn btn-ghost btn-sm switch-here"
+            disabled={!canSwitch || switching}
+            onClick={onSwitchHere}
+          >
+            {switching ? "Switching…" : "Switch crew to this mine"} <Repeat2 size={14} aria-hidden="true" />
           </button>
         )}
       </div>
 
       <div className="mine-info-grid">
-        <article>
+        <article className="card stat">
           <span>
-            <Pickaxe size={13} /> BLOCK REWARD
+            <Pickaxe size={13} aria-hidden="true" /> BLOCK REWARD
           </span>
           <strong>
             {compact(mine.blockReward)} <small>{mine.symbol}</small>
           </strong>
           <small>paid per block to every active crew, split by Mining Power</small>
         </article>
-        <article>
+        <article className="card stat">
           <span>
-            <Gauge size={13} /> TOTAL MINING POWER
+            <Gauge size={13} aria-hidden="true" /> TOTAL MINING POWER
           </span>
           <strong>{compact(mine.totalMiningPower)}</strong>
           <small>{powerDetail}</small>
         </article>
-        <article>
+        <article className="card stat">
           <span>
-            <Layers size={13} /> REMAINING RESERVE
+            <Layers size={13} aria-hidden="true" /> REMAINING RESERVE
           </span>
           <strong>
             {compact(mine.remainingReserve)} <small>{mine.symbol}</small>
           </strong>
           <small>of {compact(mine.reserveTotal)} allocated to mining</small>
         </article>
-        <article>
+        <article className="card stat is-featured">
           <span>
-            <Users size={13} /> ESTIMATED SHARE
+            <Users size={13} aria-hidden="true" /> ESTIMATED SHARE
           </span>
           <strong>{shareLabel}</strong>
           <small>{shareDetail}</small>
@@ -118,7 +138,7 @@ export function MineInfoPanel({
         <div className="reduction-schedule">
           <div className="mine-info-subhead">
             <span>
-              <Clock3 size={13} /> REDUCTION SCHEDULE
+              <Clock3 size={13} aria-hidden="true" /> REDUCTION SCHEDULE
             </span>
             <small>
               next reduction in {countdown(mine.epochEndsAt, now)}, epoch {mine.epoch}
@@ -143,7 +163,11 @@ export function MineInfoPanel({
             <span>MINED SO FAR</span>
             <small>{percent(mine.fullyMinedProgress)}</small>
           </div>
-          <div className="progress-track" role="img" aria-label={"Mine " + percent(mine.fullyMinedProgress) + " mined"}>
+          <div
+            className="tier-progress-bar"
+            role="img"
+            aria-label={"Mine " + percent(mine.fullyMinedProgress) + " mined"}
+          >
             <i style={{ width: percent(mine.fullyMinedProgress) }} />
           </div>
           <p>{accountingNote(mine.accounting)}</p>
@@ -152,3 +176,4 @@ export function MineInfoPanel({
     </section>
   );
 }
+

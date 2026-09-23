@@ -8,10 +8,13 @@
  *
  * Claims need their own wallet-signed, single-use challenge, exactly like reward claims.
  */
+import { useEffect, useRef } from "react";
 import { Compass, ExternalLink, Gem, Pickaxe, Repeat2, Sparkles, TrendingUp } from "lucide-react";
 import type { DiscoveryOpportunity, DiscoveryRecord, TokenSummary } from "../../shared/types";
 import { tokenAmount } from "../format";
+import { discoveryRarityOf, playSound, useReducedMotion } from "../sound";
 import { requestWalletMenu } from "../wallet";
+import { DiscoveryArt } from "./MineScene";
 import { EmptyState } from "./StatusViews";
 
 export interface DiscoveriesPanelProps {
@@ -39,6 +42,20 @@ function symbolOf(tokens: TokenSummary[], mint: string): string {
 export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
   const { signedIn, discoveries, opportunity, tokens, loading, rolling, claimingId, error, notice } = props;
   const claimable = discoveries.filter((discovery) => discovery.claimable);
+  const reducedMotion = useReducedMotion();
+  const newest = discoveries[0]?.id ?? "";
+
+  // The reveal cue belongs to a discovery the server has just produced, not to a re-render.
+  const lastDiscovery = useRef(newest);
+  useEffect(() => {
+    if (newest && newest !== lastDiscovery.current) {
+      playSound("discovery", {
+        rarity: discoveryRarityOf(discoveries.find((entry) => entry.id === newest)?.rarity),
+      });
+    }
+    lastDiscovery.current = newest;
+  }, [newest, discoveries]);
+
   const spent = opportunity !== null && opportunity.status !== "PENDING" && opportunity.status !== "ELIGIBLE";
   const rollLabel = rolling ? "Digging" : spent ? "Window spent" : opportunity ? "Roll this window" : "Ask for an opportunity";
   const rollHint = !signedIn
@@ -117,7 +134,7 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
                   </small>
                 </div>
                 <div className="discovery-row-actions">
-                  <button className="ledger-token" onClick={() => props.onOpenToken(discovery.mint)}>
+                  <button className="badge ledger-token" onClick={() => props.onOpenToken(discovery.mint)}>
                     View token <ExternalLink size={11} />
                   </button>
                   <button disabled={claimingId === discovery.id} onClick={() => props.onClaim(discovery)}>
@@ -132,24 +149,29 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
 
       <div className="discovery-grid">
         {discoveries.map((discovery) => (
-          <article className={"discovery-card rarity-" + discovery.rarity} key={discovery.id}>
+          <article
+            className={"discovery-card rarity-" + discovery.rarity + (reducedMotion ? " is-quiet" : "")}
+            key={discovery.id}
+          >
             <header>
               <span className={"rarity-tag rarity-" + discovery.rarity}>{discovery.rarity.toUpperCase()}</span>
               <em className={"reward-status status-" + discovery.status.toLowerCase()}>{discovery.status}</em>
             </header>
+            {/* Generated art for the rarity; a rarity without art keeps the drawn rarity tag. */}
+            <DiscoveryArt rarity={discovery.rarity} className="discovery-card-art" />
             <h4>{discovery.visualEvent}</h4>
             <strong>
               {tokenAmount(discovery.tokenAmount)} {symbolOf(tokens, discovery.mint)}
             </strong>
             <small>{new Date(discovery.createdAt * 1_000).toLocaleString()}</small>
             <div className="discovery-card-actions">
-              <button className="ledger-token" onClick={() => props.onOpenToken(discovery.mint)}>
+              <button className="badge ledger-token" onClick={() => props.onOpenToken(discovery.mint)}>
                 Token page
               </button>
-              <button className="ledger-token" onClick={() => props.onTrade(discovery.mint)}>
+              <button className="badge ledger-token" onClick={() => props.onTrade(discovery.mint)}>
                 <TrendingUp size={12} /> Trade
               </button>
-              <button className="ledger-token" onClick={() => props.onSwitchCrew(discovery.mint)}>
+              <button className="badge ledger-token" onClick={() => props.onSwitchCrew(discovery.mint)}>
                 <Repeat2 size={12} /> Switch crew to this mine
               </button>
             </div>

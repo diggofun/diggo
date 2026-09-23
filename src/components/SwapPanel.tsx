@@ -1,33 +1,45 @@
 /**
- * DiggoSwap: real buys and sells against a mine's own bonding curve, with a live price chart fed
+ * DiggoSwap: real buys and sells against a mine's own trading venue, with a live price chart fed
  * by the Worker's WebSocket. Loaded lazily so lightweight-charts and the Solana program client
  * only ship on the pages that trade.
+ *
+ * The venue is read from the decoded market account on every load and after every trade: a market
+ * trades its bonding curve until `graduate_market` moves that liquidity into the program-owned
+ * locked pool, and after that the program only accepts pool buys and sells (docs/ONCHAIN.md). The
+ * quote and the slippage floor shown here come from the shared mirrors of the program's own math,
+ * so what the form promises is what the program will enforce.
  */
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
 import { Check, Radio, TrendingUp, Wallet, Zap } from "lucide-react";
 import type { MarketTrade, TokenSummary } from "../../shared/types";
-import type { DecodedLaunchMarket, DecodedMine } from "../../shared/program";
 import { recordTrade } from "../api";
 import { track } from "../analytics";
 import { compact } from "../format";
 import { requestWalletMenu } from "../wallet";
 import {
   address,
-  bondingCurveSpotPriceLamports,
-  buyOnChain,
-  fetchMineAndMarket,
+  DEFAULT_SLIPPAGE_BPS,
+  executeSwap,
+  fetchMarketVenue,
   fetchSolBalance,
   fetchTokenBalance,
-  quoteBuy,
-  quoteSell,
-  sellOnChain,
+  quoteSwap,
+  swapAmountRaw,
+  venueSpotPriceSol,
   type DiggoWallet,
+  type MarketVenueState,
 } from "../solanaProgram";
 
 function formatTokenAmount(raw: bigint, decimals: number): string {
   const whole = Number(raw) / 10 ** decimals;
   return whole.toLocaleString(undefined, { maximumFractionDigits: whole < 1 ? 6 : 2 });
+}
+
+/** A fee in basis points as a percentage label: 100 -> "1", 250 -> "2.5". */
+function formatFeeBps(bps: number): string {
+  const percent = bps / 100;
+  return Number.isInteger(percent) ? String(percent) : percent.toFixed(2).replace(/0+$/, "");
 }
 
 export function SwapPanel({
@@ -54,7 +66,7 @@ export function SwapPanel({
   const [error, setError] = useState("");
   const [solBalance, setSolBalance] = useState<bigint | null>(null);
   const [tokenBalance, setTokenBalance] = useState<bigint | null>(null);
-  const [chainState, setChainState] = useState<{ mine: DecodedMine; market: DecodedLaunchMarket } | null>(null);
+  const [venueState, setVenueState] = useState<MarketVenueState | null>(null);
 
   // chart setup — created once per mount, data re-seeded whenever the mint changes
   useEffect(() => {
@@ -91,7 +103,7 @@ export function SwapPanel({
   useEffect(() => {
     setTradeCount(0);
     setRecentTrades([]);
-    setChainState(null);
+    setVenueState(null);
     const protocol = "wss:";
     const host = window.location.host;
     const proto = window.location.protocol === "https:" ? protocol : "ws:";
@@ -125,10 +137,10 @@ export function SwapPanel({
 
   const refreshChainState = useCallback(async () => {
     try {
-      const result = await fetchMineAndMarket(address(programAddress), address(token.mint));
-      setChainState(result);
+      const result = await fetchMarketVenue(address(programAddress), address(token.mint));
+      setVenueState(result);
     } catch {
-      setChainState(null);
+      setVenueState(null);
     }
   }, [programAddress, token.mint]);
 
@@ -148,16 +160,33 @@ export function SwapPanel({
   }, [walletAddress, token.mint, tradeCount]);
 
   const decimals = token.decimals;
+  /** The form's slippage floor, the same number the quote and the on-chain min-out use. */
+  const slippageBps = DEFAULT_SLIPPAGE_BPS;
   const parsedAmount = Number(amount);
-  const quoteOut = useMemo(() => {
-    if (!chainState || !Number.isFinite(parsedAmount) || parsedAmount <= 0) return null;
-    if (side === "buy") {
-      const lamportsIn = BigInt(Math.round(parsedAmount * 1_000_000_000));
-      return quoteBuy(chainState.market, lamportsIn);
-    }
-    const rawIn = BigInt(Math.round(parsedAmount * 10 ** decimals));
-    return quoteSell(chainState.market, rawIn);
-  }, [chainState, parsedAmount, side, decimals]);
+  const venue = venueState?.venue ?? null;
+  const poolUnreadable = venue === "pool" && !venueState?.pool;
+  /**
+   * The quote for the current input, on the venue the market is actually on: the curve's own
+   * math before graduation, the locked pool's x*y=k after it. The fees the program takes off the
+   * top are included, so `outRaw` is what the wallet really receives and `minOutRaw` is the
+   * floor to send on-chain.
+   */
+  const quote = useMemo(() => {
+    if (!venueState || !Number.isFinite(parsedAmount) || parsedAmount <= 0) return null;
+    return quoteSwap(venueState, side, swapAmountRaw(parsedAmount, side, decimals), slippageBps);
+  }, [venueState, parsedAmount, side, decimals, slippageBps]);
+  const quoteOut = quote?.outRaw ?? null;
+
+  /**
+   * Trading is only possible against a quote that can produce a floor. Without one the trade is
+   * priced again — and refused — in submitTrade; the button says so before it is clicked.
+   */
+  const quoteReady = quote !== null && quote.minOutRaw > 0n;
+
+  const slippageLabel = `${(slippageBps / 100).toFixed(0)}%`;
+  const feeSol = quote ? Number(quote.feeRaw) / 1_000_000_000 : 0;
+  const creatorFeePercent = venueState ? formatFeeBps(venueState.market.creatorFeeBps) : null;
+  const platformFeePercent = venueState ? formatFeeBps(venueState.market.platformFeeBps) : null;
 
   async function submitTrade(event: FormEvent) {
     event.preventDefault();
@@ -172,25 +201,27 @@ export function SwapPanel({
     }
     setBusy(true);
     try {
-      const programAddr = address(programAddress);
-      const mint = address(token.mint);
-      let result: { signature: string };
-      let recordedAmount: number;
-      if (side === "buy") {
-        const minOut = quoteOut !== null ? (quoteOut * 98n) / 100n : 0n;
-        result = await buyOnChain(programAddr, signer, mint, parsedAmount, minOut);
-        recordedAmount = quoteOut !== null ? Number(quoteOut) / 10 ** decimals : 0;
-      } else {
-        const rawIn = BigInt(Math.round(parsedAmount * 10 ** decimals));
-        const minOutLamports = quoteOut !== null ? (quoteOut * 98n) / 100n : 0n;
-        result = await sellOnChain(programAddr, signer, mint, rawIn, minOutLamports);
-        recordedAmount = parsedAmount;
-      }
-      await recordTrade(token.mint, { signature: result.signature, side, amount: recordedAmount });
-      setLastSignature(result.signature);
+      // The displayed quote may be stale and the venue read behind it may have failed outright, so
+      // the trade is priced again from a fresh account read here, immediately before signing. A
+      // trade with no live quote is refused rather than sent with a zero slippage floor.
+      const execution = await executeSwap({
+        programAddress: address(programAddress),
+        wallet: signer,
+        mint: address(token.mint),
+        side,
+        amount: parsedAmount,
+        decimals,
+        slippageBps,
+      });
+      setVenueState(execution.state);
+      await recordTrade(token.mint, {
+        signature: execution.signature,
+        side,
+        amount: execution.recordedAmount,
+      });
+      setLastSignature(execution.signature);
       track(side === "buy" ? "swap_buy" : "swap_sell", { network: "solana-devnet" });
       setAmount("");
-      await refreshChainState();
       onTraded();
     } catch (tradeError) {
       setError(tradeError instanceof Error ? tradeError.message : "Trade failed");
@@ -199,7 +230,7 @@ export function SwapPanel({
     }
   }
 
-  const spotPriceSol = chainState ? bondingCurveSpotPriceLamports(chainState.market, decimals) / 1_000_000_000 : token.priceSol;
+  const spotPriceSol = (venueState && venueSpotPriceSol(venueState, decimals)) ?? token.priceSol;
 
   return (
     <section className="swap-terminal page-shell" id="swap">
@@ -208,6 +239,7 @@ export function SwapPanel({
         <div className="swap-price-tag">
           <span>SPOT PRICE</span>
           <strong>{spotPriceSol < 0.000001 ? spotPriceSol.toExponential(3) : spotPriceSol.toFixed(9)} SOL</strong>
+          <span>{venue === "pool" ? "LOCKED POOL · GRADUATED" : "BONDING CURVE"}</span>
         </div>
       </div>
       <div className="swap-grid">
@@ -248,15 +280,23 @@ export function SwapPanel({
             />
           </label>
           <div className="swap-quote">
-            <span>YOU RECEIVE (EST., 2% SLIPPAGE FLOOR)</span>
+            <span>YOU RECEIVE (EST., {slippageLabel} SLIPPAGE FLOOR)</span>
             <strong>
               {quoteOut !== null
                 ? side === "buy"
                   ? `${formatTokenAmount(quoteOut, decimals)} $${token.symbol}`
                   : `${(Number(quoteOut) / 1_000_000_000).toFixed(6)} SOL`
-                : "—"}
+                : poolUnreadable
+                  ? "POOL STATE UNAVAILABLE — RETRY"
+                  : "—"}
             </strong>
           </div>
+          {venueState && creatorFeePercent !== null && platformFeePercent !== null && (
+            <div className="swap-quote">
+              <span>TRADING FEE ({creatorFeePercent}% CREATOR + {platformFeePercent}% PLATFORM)</span>
+              <strong>{feeSol > 0 ? `${feeSol.toFixed(6)} SOL` : "—"}</strong>
+            </div>
+          )}
           {walletAddress && (
             <div className="swap-balances">
               <span>{solBalance !== null ? (Number(solBalance) / 1_000_000_000).toFixed(4) : "…"} SOL</span>
@@ -266,7 +306,7 @@ export function SwapPanel({
           {error && <p className="form-message" role="alert">{error}</p>}
           {lastSignature && <a className="tx-success" href={`https://explorer.solana.com/tx/${lastSignature}?cluster=devnet`} target="_blank" rel="noreferrer"><Check size={13} /> Confirmed on devnet · View transaction</a>}
           {signer ? (
-            <button className="primary-button swap-submit" disabled={busy}>
+            <button className="primary-button swap-submit" disabled={busy || !quoteReady}>
               {busy ? "Confirming…" : side === "buy" ? "Buy on-chain" : "Sell on-chain"} <Zap size={16} />
             </button>
           ) : (
@@ -274,9 +314,27 @@ export function SwapPanel({
               Connect wallet <Wallet size={16} />
             </button>
           )}
+          {signer && !quoteReady && parsedAmount > 0 && !busy && (
+            <p className="swap-note" role="status">
+              No live quote for this order yet, and a trade is never sent without a slippage floor.
+              {poolUnreadable
+                ? " The market's locked pool could not be read — retry in a moment."
+                : " Retry in a moment."}
+            </p>
+          )}
           <p className="swap-note">
-            Real SOL moves through the mine's own bonding curve — this is the same liquidity a
-            graduation threshold is measured against. Nothing here is simulated.
+            {venue === "pool" ? (
+              <>
+                This market has graduated: its liquidity now sits in a program-owned constant-product
+                pool that no key can withdraw from, and every trade is priced by x*y=k against those
+                reserves. Nothing here is simulated.
+              </>
+            ) : (
+              <>
+                Real SOL moves through the mine's own bonding curve — this is the same liquidity a
+                graduation threshold is measured against. Nothing here is simulated.
+              </>
+            )}
           </p>
         </form>
       </div>

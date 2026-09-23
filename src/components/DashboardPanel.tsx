@@ -13,6 +13,7 @@ import type { MineInfo, PlayerProfile, TokenSummary } from "../../shared/types";
 import { CREW_COMPONENT_LABELS, CREW_COMPONENTS } from "../crewLabels";
 import { compact, countdown, oreAmount } from "../format";
 import { DIGGO_CONFIG, GAMEPLAY_DEFAULTS, crewTier } from "../../shared/economics";
+import { useEquippedCosmetics } from "../cosmetics";
 import { requestWalletMenu } from "../wallet";
 import { MineScene } from "./MineScene";
 import { TokenOrb } from "./TokenOrb";
@@ -52,6 +53,9 @@ export function DashboardPanel({
 }: DashboardPanelProps) {
   const active = player?.activationState === "ACTIVE";
   const tier = player ? crewTier(player.crewLevels) : null;
+  // The same equipped map the cosmetics page publishes, so the mine a player sees here is the one
+  // they dressed. Empty while it has not loaded, which MineScene draws as the default look.
+  const equipped = useEquippedCosmetics();
   const mineSymbol = mine?.symbol ?? (player?.activeMint ? "—" : null);
   const nowSeconds = Math.floor(now / 1_000);
   const windowSeconds = player?.activationExpiresAt ? Math.max(0, player.activationExpiresAt - nowSeconds) : 0;
@@ -165,7 +169,7 @@ export function DashboardPanel({
                   <small>{mineSymbol ? "$" + mineSymbol : "Mine symbol syncing…"}</small>
                 </div>
               </div>
-              <MineScene tier={tier?.tier ?? 1} active compact label={tier?.name} />
+              <MineScene tier={tier?.tier ?? 1} active compact cosmetics={equipped} label={tier?.name} />
               <div className="dash-counters">
                 <div>
                   <span>
@@ -271,7 +275,7 @@ export function DashboardPanel({
             </div>
           </div>
           <div className="paused-visual">
-            <MineScene tier={tier?.tier ?? 1} label={tier?.name} />
+            <MineScene tier={tier?.tier ?? 1} cosmetics={equipped} label={tier?.name} />
             <div className="paused-visual-note">
               <strong>{tier?.name ?? "Backyard Diggers"}</strong>
               <span>{player.power.toLocaleString()} Mining Power on standby</span>

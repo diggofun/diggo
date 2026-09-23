@@ -8,7 +8,7 @@
  * There is no money, no token payment and no purchase button anywhere on this screen: the only
  * currency in the game's progression loop is ORE, and ORE can never be bought (spec 9, 34).
  */
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { ArrowUpRight, Gem, Hammer, Hourglass, Lock, X } from "lucide-react";
 import type { PlayerProfile } from "../../shared/types";
 import {
@@ -23,8 +23,18 @@ import {
   type CrewLevels,
 } from "../../shared/economics";
 import { CREW_COMPONENTS, CREW_COMPONENT_GLYPHS, CREW_COMPONENT_LABELS, CREW_ROLES } from "../crewLabels";
-import { MineScene } from "./MineScene";
+import { playSound } from "../sound";
+import { GameArt, MineScene } from "./MineScene";
 import { useDialog } from "./useDialog";
+
+/** Generated art per crew branch; the drawn glyph is the fallback when a file is missing. */
+const CREW_COMPONENT_ART: Readonly<Record<(typeof CREW_COMPONENTS)[number], string>> = {
+  miners: "miner",
+  drills: "drill",
+  carts: "cart",
+  foreman: "foreman",
+  storage: "storage",
+};
 
 export interface CrewScreenProps {
   player: PlayerProfile;
@@ -88,6 +98,14 @@ function orePerHour(player: PlayerProfile, levels: CrewLevels): number {
 export function CrewScreen({ player, pending, error, notice, onUpgrade, variant = "page", onClose }: CrewScreenProps) {
   const tier = crewTier(player.crewLevels);
   const totalLevel = CREW_COMPONENTS.reduce((sum, component) => sum + player.crewLevels[component], 0);
+
+  // The upgrade cue belongs to the server's confirmation, not to the click that asked for it.
+  const lastNotice = useRef(notice);
+  useEffect(() => {
+    if (notice && notice !== lastNotice.current) playSound("upgrade");
+    lastNotice.current = notice;
+  }, [notice]);
+
   const nextTier = DIGGO_CONFIG.crew.tiers.find((candidate) => candidate.minTotalLevel > totalLevel) ?? null;
   const tierFloor = tier.minTotalLevel;
   const tierProgress = nextTier ? Math.min(1, Math.max(0, (totalLevel - tierFloor) / Math.max(1, nextTier.minTotalLevel - tierFloor))) : 1;
@@ -131,7 +149,16 @@ export function CrewScreen({ player, pending, error, notice, onUpgrade, variant 
           return (
             <article className={`crew-card${preview_.cost === null ? " is-max" : ""}`} key={component}>
               <header>
-                <span className="crew-card-glyph">{CREW_COMPONENT_GLYPHS[component]}</span>
+                <span className="crew-card-glyph">
+                  <GameArt
+                    name={CREW_COMPONENT_ART[component]}
+                    alt=""
+                    width={768}
+                    height={768}
+                    className="crew-card-art"
+                    fallback={<>{CREW_COMPONENT_GLYPHS[component]}</>}
+                  />
+                </span>
                 <div>
                   <strong>{CREW_COMPONENT_LABELS[component]}</strong>
                   <small>{role.deltaLabel}</small>
@@ -144,7 +171,7 @@ export function CrewScreen({ player, pending, error, notice, onUpgrade, variant 
                 {preview_.also && <small>{preview_.also}</small>}
               </div>
               <button
-                className="crew-upgrade-button"
+                className="btn btn-primary btn-block crew-upgrade-button"
                 disabled={preview_.cost === null || !affordable || pending === component}
                 onClick={() => onUpgrade(component)}
                 title={

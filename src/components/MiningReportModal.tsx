@@ -7,10 +7,13 @@
  * belongs to it. The UI renders the event; it never picks a rarity, a token or an amount, and
  * there is no client-side randomness anywhere in this file (spec 55).
  */
+import { useEffect, useRef } from "react";
 import { Coins, Compass, Hammer, Repeat2, Sparkles, X } from "lucide-react";
 import type { DiscoveryVisualEvent, MiningReport } from "../../shared/types";
 import { duration, oreAmount, tokenAmount } from "../format";
+import { discoveryRarityOf, playSound, useReducedMotion } from "../sound";
 import { CountUp } from "./CountUp";
+import { DiscoveryArt, GameArt } from "./MineScene";
 import { useDialog } from "./useDialog";
 
 export interface MiningReportModalProps {
@@ -50,6 +53,24 @@ export function MiningReportModal({
   const rewards = report.blockRewards ?? [];
   const mineLabel = mineSymbol ? dollar(mineSymbol) : "the mine";
   const dialogRef = useDialog<HTMLElement>(onClose);
+  const reducedMotion = useReducedMotion();
+
+  // The discovery cue announces what the server rolled; the collect cue marks the player's own
+  // confirmation. Neither reads anything back into the report.
+  const discoveryId = report.discovery?.id ?? "";
+  const announced = useRef("");
+  useEffect(() => {
+    if (discoveryId && discoveryId !== announced.current) {
+      announced.current = discoveryId;
+      playSound("discovery", { rarity: discoveryRarityOf(report.discovery?.rarity) });
+    }
+  }, [discoveryId, report.discovery]);
+
+  const wasCollected = useRef(collected);
+  useEffect(() => {
+    if (collected && !wasCollected.current) playSound("collect");
+    wasCollected.current = collected;
+  }, [collected]);
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
@@ -77,6 +98,7 @@ export function MiningReportModal({
         <div className="report-grid">
           <div className="report-ore">
             <span>ORE MINED</span>
+            <GameArt name="cart" alt="" width={768} height={768} className="report-ore-art" />
             <strong>
               +<CountUp value={report.oreGained} format={oreAmount} />
             </strong>
@@ -130,6 +152,7 @@ export function MiningReportModal({
               <i />
               <i />
             </div>
+            <DiscoveryArt rarity={discovery.rarity} className="discovery-event-art" />
             <div className="discovery-event-copy">
               <span className={"rarity-tag rarity-" + discovery.rarity}>
                 {discovery.rarity.toUpperCase()} · {discovery.visualEvent.toUpperCase()}
@@ -179,7 +202,7 @@ export function MiningReportModal({
         {error && <p className="form-message">{error}</p>}
 
         <div className="report-actions">
-          {collected && (
+          {collected && !reducedMotion && (
             <div className="collect-burst" aria-hidden="true">
               <i /><i /><i /><i /><i /><i /><i /><i />
             </div>

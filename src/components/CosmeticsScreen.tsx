@@ -5,17 +5,25 @@
  * a display piece that is not for sale yet. Purchasable entries are shown with a "coming soon"
  * badge and cannot be equipped, because payments are not implemented and a cosmetic must never be
  * able to touch Mining Power, ORE or discovery odds.
+ *
+ * Equipping something is visible immediately: the preview below the header is the real MineScene
+ * rendered with the server's equipped map, so an outfit, a cart or a mine theme shows up exactly
+ * where it will be seen while digging.
  */
 import { useCallback, useEffect, useState } from "react";
 import { Check, Lock, Shirt, Sparkles } from "lucide-react";
 import type { CosmeticsView } from "../../shared/types";
 import { equipCosmetic, getCosmetics, unequipCosmetic } from "../api";
+import { setEquippedCosmetics } from "../cosmetics";
+import { MineScene } from "./MineScene";
 
 export interface CosmeticsScreenProps {
   signedIn: boolean;
+  /** Crew tier the preview mine is drawn at; the real scene uses the player's own tier. */
+  previewTier?: number;
 }
 
-export function CosmeticsScreen({ signedIn }: CosmeticsScreenProps) {
+export function CosmeticsScreen({ signedIn, previewTier = 3 }: CosmeticsScreenProps) {
   const [view, setView] = useState<CosmeticsView | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -28,7 +36,11 @@ export function CosmeticsScreen({ signedIn }: CosmeticsScreenProps) {
     }
     setLoading(true);
     try {
-      setView(await getCosmetics());
+      const loaded = await getCosmetics();
+      setView(loaded);
+      // Publish to src/cosmetics.ts so the dashboard and crew board draw the same loadout without
+      // asking the Worker for it a second time.
+      setEquippedCosmetics(loaded.equipped);
       setError("");
     } catch {
       setError("Your cosmetics are unavailable right now.");
@@ -46,6 +58,7 @@ export function CosmeticsScreen({ signedIn }: CosmeticsScreenProps) {
     setError("");
     try {
       const result = await equipCosmetic(cosmeticId);
+      setEquippedCosmetics(result.equipped);
       setView((current) =>
         current
           ? {
@@ -70,6 +83,7 @@ export function CosmeticsScreen({ signedIn }: CosmeticsScreenProps) {
     setBusy(slot);
     try {
       const result = await unequipCosmetic(slot);
+      setEquippedCosmetics(result.equipped);
       setView((current) =>
         current
           ? {
@@ -89,6 +103,7 @@ export function CosmeticsScreen({ signedIn }: CosmeticsScreenProps) {
   const slots = view?.slots ?? [];
   const earned = view?.catalog.filter((item) => item.unlocked).length ?? 0;
   const total = view?.catalog.length ?? 0;
+  const equippedCount = view ? Object.keys(view.equipped).length : 0;
 
   return (
     <section className="cosmetics page-shell" id="cosmetics">
@@ -117,8 +132,38 @@ export function CosmeticsScreen({ signedIn }: CosmeticsScreenProps) {
       </p>
 
       {!signedIn && <p className="board-empty">Sign in to unlock and equip your cosmetics.</p>}
-      {signedIn && loading && !view && <p className="board-empty">Loading your loadout…</p>}
-      {error && <p className="form-message">{error}</p>}
+      {signedIn && loading && !view && (
+        <div className="cosmetics-loading" aria-busy="true">
+          <span className="skeleton skeleton-card" />
+          <span className="skeleton skeleton-card" />
+          <span className="skeleton skeleton-card" />
+        </div>
+      )}
+      {error && (
+        <p className="form-message" role="alert">
+          {error}
+        </p>
+      )}
+
+      {signedIn && view && (
+        <div className="cosmetics-preview">
+          <div className="mine-info-subhead">
+            <span>
+              <Sparkles size={13} aria-hidden="true" /> PREVIEW · TIER {previewTier}
+            </span>
+            <small>
+              {equippedCount === 0
+                ? "nothing equipped yet — the mine is wearing its defaults"
+                : equippedCount + (equippedCount === 1 ? " slot equipped" : " slots equipped")}
+            </small>
+          </div>
+          <MineScene tier={previewTier} active cosmetics={view.equipped} label="Your loadout" />
+          <p>
+            This is the mine your crew digs in. Colours and themes only — the preview has no effect
+            on Mining Power, block rewards or discovery odds.
+          </p>
+        </div>
+      )}
 
       {signedIn &&
         view &&
@@ -131,7 +176,7 @@ export function CosmeticsScreen({ signedIn }: CosmeticsScreenProps) {
               <div className="cosmetic-slot-head">
                 <span>{slot.replaceAll("_", " ")}</span>
                 {equippedId && (
-                  <button className="ledger-token" disabled={busy === slot} onClick={() => void unequip(slot)}>
+                  <button className="btn btn-ghost btn-sm" disabled={busy === slot} onClick={() => void unequip(slot)}>
                     Clear slot
                   </button>
                 )}
@@ -142,20 +187,20 @@ export function CosmeticsScreen({ signedIn }: CosmeticsScreenProps) {
                   const locked = !item.unlocked;
                   return (
                     <article
-                      className={"cosmetic-card" + (item.equipped ? " is-equipped" : "") + (locked ? " is-locked" : "")}
+                      className={"card cosmetic-card" + (item.equipped ? " is-equipped" : "") + (locked ? " is-locked" : "")}
                       key={item.id}
                     >
                       <header>
                         <strong>{item.name}</strong>
-                        {comingSoon && <em className="cosmetic-soon">coming soon</em>}
+                        {comingSoon && <em className="badge badge-idle">coming soon</em>}
                         {!comingSoon && locked && (
-                          <em className="cosmetic-locked">
-                            <Lock size={11} /> locked
+                          <em className="badge badge-idle">
+                            <Lock size={11} aria-hidden="true" /> locked
                           </em>
                         )}
                         {item.equipped && (
-                          <em className="cosmetic-equipped">
-                            <Check size={11} /> equipped
+                          <em className="badge badge-active">
+                            <Check size={11} aria-hidden="true" /> equipped
                           </em>
                         )}
                       </header>
@@ -164,7 +209,7 @@ export function CosmeticsScreen({ signedIn }: CosmeticsScreenProps) {
                       {item.unlockKind === "tier" && <small>Unlocks at crew tier {item.unlockRef}</small>}
                       {item.unlockKind === "achievement" && <small>Unlocks with {item.unlockRef}</small>}
                       <button
-                        className="ledger-token"
+                        className="btn btn-ghost btn-sm"
                         disabled={comingSoon || locked || item.equipped || busy === item.id}
                         onClick={() => void equip(item.id, slot)}
                       >
