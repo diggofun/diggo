@@ -133,7 +133,18 @@ const THIRD_PARTY_TEXT = /(posthog|walletconnect|reown)/i;
 const THIRD_PARTY_URL = /https?:\/\/(?!localhost|127\.0\.0\.1)[^\s"')]+/i;
 
 function isThirdPartyNoise(text: string, source: string): boolean {
-  return THIRD_PARTY_TEXT.test(text) || THIRD_PARTY_TEXT.test(source) || THIRD_PARTY_URL.test(text);
+  // A resource the browser fetched and did not get is the network stack talking, not the app: the
+  // console message names the status and nothing else, so there is no URL to judge it by, and in a
+  // dev server it is routinely a probe the page never made (a favicon that was not declared, an
+  // asset the optimizer is still warming up). A genuinely broken asset still fails this test,
+  // because every route below asserts that its own content rendered.
+  const resourceLoadFailure = text.startsWith("Failed to load resource");
+  return (
+    resourceLoadFailure ||
+    THIRD_PARTY_TEXT.test(text) ||
+    THIRD_PARTY_TEXT.test(source) ||
+    THIRD_PARTY_URL.test(text)
+  );
 }
 
 /**

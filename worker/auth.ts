@@ -28,6 +28,7 @@ import {
 import { fingerprintRequest, recordActivityRow } from "./signals";
 import { METRIC, metric } from "./telemetry";
 import { gateAction, type GateResult } from "./risk";
+import { captureAttribution } from "./referrals";
 
 export interface ChallengeRecord {
   wallet: string;
@@ -382,6 +383,7 @@ export async function verifyWallet(request: Request, env: RuntimeEnv): Promise<R
   const session = crypto.randomUUID().replaceAll("-", "");
   await recordAuthOutcome(env, request, body.wallet, "ok");
   await env.TOKEN_CACHE.put(`auth:session:${session}`, body.wallet, { expirationTtl: SESSION_TTL_SECONDS });
+  await captureAttribution(env, body.wallet, new URL(request.url).searchParams.get("ref"));
   return json(
     { wallet: body.wallet, expiresIn: SESSION_TTL_SECONDS },
     { headers: { "set-cookie": sessionCookie(session), "cache-control": "no-store" } },

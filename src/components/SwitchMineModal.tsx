@@ -5,8 +5,8 @@
  * dialog only has to answer one question: which mine should the crew work next. Fully mined mines
  * are not offered — there is nothing left in them to pay.
  */
-import { Pickaxe, Repeat2, X } from "lucide-react";
 import type { TokenSummary } from "../../shared/types";
+import { IconClose, IconMine, IconSwap } from "../icons";
 import { compact } from "../format";
 import { emissionEnded } from "../mineView";
 import { TokenOrb } from "./TokenOrb";
@@ -55,10 +55,10 @@ export function SwitchMineModal({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <button className="modal-close" onClick={onClose} aria-label="Close">
-          <X size={20} />
+          <IconClose size={20} />
         </button>
         <div className="eyebrow">
-          <Repeat2 size={14} /> Switch mine
+          <IconSwap size={14} /> Switch mine
         </div>
         <h2>Move the crew.</h2>
         <p className="modal-intro">
@@ -87,7 +87,7 @@ export function SwitchMineModal({
                     "Current mine"
                   ) : (
                     <>
-                      <Pickaxe size={14} /> Switch crew here
+                      <IconMine size={14} /> Switch crew here
                     </>
                   )}
                 </button>

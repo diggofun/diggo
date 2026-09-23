@@ -20,7 +20,17 @@ test-ledger/
 e2e/.report/
 e2e/.artifacts/
 .e2e-logs/
+# Scratch directories written by parallel build and test workers. They hold throwaway
+# sync scripts, probe harnesses and copied Rust spines; nothing in them is a source file.
+scripts/tmp/
 # Output of a `npm run dev:local` restarted as a hidden background process.
 dev-local.*.log
 test-results/
 playwright-report/
+# Scratch and generated QA artifacts
+.iconwork/
+_tmp_icons/
+/diggo-protocol/
+qa/
+qa-artifacts/
+__pycache__/

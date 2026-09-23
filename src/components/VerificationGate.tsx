@@ -7,7 +7,7 @@
  * in with.
  */
 import { useCallback, useRef, useState, type ReactNode } from "react";
-import { ShieldCheck, X } from "lucide-react";
+import { IconClose } from "../icons";
 import { NEUTRAL_VERIFICATION_TEXT, VerificationRequiredError } from "../verification";
 import { TurnstileBox } from "./TurnstileBox";
 
@@ -53,10 +53,10 @@ export function useVerificationGate(siteKey: string): VerificationGate {
     <div className="modal-backdrop" role="presentation">
       <section className="verify-modal" role="dialog" aria-modal="true" aria-labelledby="verify-title">
         <button className="modal-close" onClick={cancel} aria-label="Close">
-          <X size={20} />
+          <IconClose size={20} />
         </button>
         <div className="eyebrow">
-          <ShieldCheck size={14} /> Security check
+          Security check
         </div>
         <h2 id="verify-title">{NEUTRAL_VERIFICATION_TEXT}</h2>
         <p className="modal-intro">

@@ -11,7 +11,7 @@
  * and the record of the choice itself are essential and disclosed in the Cookie & Storage Notice.
  */
 import { useCallback, useEffect, useState, type ReactElement } from "react";
-import { X } from "lucide-react";
+import { IconClose } from "../icons";
 import {
   CONSENT_OPEN_EVENT,
   readConsent,
@@ -56,7 +56,7 @@ export function ConsentBanner(): ReactElement | null {
         aria-label="Dismiss — essential storage only"
         onClick={() => decide("essential")}
       >
-        <X size={14} />
+        <IconClose size={14} />
       </button>
       <div>
         <strong className="consent-banner-title">Cookies and storage</strong>

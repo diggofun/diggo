@@ -1,346 +1,346 @@
 /**
- * Token/mine reads and writes: the cached token list, per-slug lookup, launch registration,
- * artwork upload/delivery and trade recording. On-chain reads via ./chain stay authoritative;
- * D1 and KV are only ever a cache of them.
+ * The coin read API: `/api/tokens`, `/api/bootstrap`, `/api/tokens/:slug`, media, and the
+ * off-chain display metadata a coin may carry.
+ *
+ * Everything value-bearing here is read from the index, which is itself a copy of a program
+ * account. Nothing in this module can write to the chain, and the only writes it makes to D1 are
+ * the display metadata columns - a name, a description and an image key - which no instruction
+ * reads. A client can no longer report a trade either: trades are indexed from the trade
+ * instructions the program actually executed.
  */
-import { isCurveMiningDisabled } from "../shared/curve";
-import type { TokenStatus, TokenSummary } from "../shared/types";
-import { sessionWallet } from "./auth";
-import { getChainRpc, readTokenFromChain, syncTokenToD1 } from "./chain";
 import type { RuntimeEnv } from "./env";
 import { apiError, checkRateLimit, isBase58Address, json, readJson } from "./http";
+import { sessionWallet } from "./auth";
+import { TOKEN_CACHE_KEY, nowSeconds } from "./indexStore";
+import type { CoinListResponse, CoinSummary, CoinTrade } from "./v2/types";
+
+export { TOKEN_CACHE_KEY };
+
+/** The maximum number of coins one list response returns. */
+export const TOKEN_LIMIT_MAX = 500;
+export const TOKEN_LIMIT_DEFAULT = 100;
+
+export function tokenLimit(value: string | null): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return TOKEN_LIMIT_DEFAULT;
+  return Math.min(TOKEN_LIMIT_MAX, parsed);
+}
 
 interface TokenRow {
   mint: string;
+  coin: string;
   slug: string;
   name: string;
   symbol: string;
   description: string;
   creator: string;
   image_key: string | null;
-  status: TokenStatus;
-  price_usd: number;
+  decimals: number;
+  status: string;
   price_sol: number;
-  change_24h: number;
+  price_usd: number;
+  usd_price_available: number;
   market_cap_usd: number;
+  liquidity_sol: number;
+  liquidity_usd: number;
   reserve_remaining: number;
   reserve_total: number;
+  discovery_reserve_remaining: number;
+  discovery_reserve_total: number;
   reward_per_block: number;
   network_power: number;
+  bonded_power: number;
+  starter_power: number;
+  venue: string;
   next_block_at: number;
   next_epoch_at: number;
-  created_at: number;
-  decimals: number;
-  /** observed_at of the price sample change_24h was measured against; 0 means unknown. */
+  epoch_index: number;
+  epoch_seed_epoch: number;
+  epoch_seed_committed: number;
+  graduated: number;
+  discovery_paused: number;
+  change_24h: number;
   change_24h_at: number;
   volume_24h_usd: number;
   trades_24h: number;
-  venue: string;
+  synced_at: number;
+  created_at: number;
+  liquidity_lamports: string;
+  curve_mining_cap: string;
+  curve_mining_mined: string;
+  curve_mining_unpaid: string;
+  curve_mining_block_reward: string;
   curve_mining_open: number;
-  curve_mining_cap: number;
-  curve_mining_mined: number;
-  curve_mining_unpaid: number;
-  curve_mining_block_reward: number;
-  curve_sell_capacity_sol: number;
-  curve_sell_capacity_tokens: number | null;
 }
 
-// Bumped with the curve-mining and 24h-metric fields: a payload cached by an older revision
-// is a TokenSummary missing them, and serving it would hand a client undefined where the API
-// promises a number.
-export const TOKEN_CACHE_KEY = "tokens:v3:1000";
-const MAX_BOOTSTRAP_TOKENS = 1_000;
-const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
-const SUPABASE_MEDIA_BUCKET = "token-media";
-const IMAGE_CONTENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+/**
+ * The read model joined back to the raw `coins` row it was derived from.
+ *
+ * The join is what lets the response carry both: the program's own values as strings, and the
+ * labelled display conversions as numbers. A client never has to guess which one it is holding.
+ */
+const TOKEN_SELECT = `SELECT t.*,
+       CASE WHEN t.venue = 'pool' AND p.sol_reserve IS NOT NULL THEN p.sol_reserve
+            ELSE c.sol_reserve END AS liquidity_lamports,
+       c.curve_mining_cap, c.curve_mining_mined, c.curve_mining_unpaid,
+       c.curve_mining_block_reward, c.curve_mining_open
+  FROM tokens t
+  JOIN coins c ON c.mint = t.mint
+  LEFT JOIN pools p ON p.mint = t.mint`;
 
-function mapToken(row: TokenRow): TokenSummary {
-  // next_block_at / next_epoch_at are real on-chain timestamps refreshed every 5 minutes by
-  // the cron sync (see syncAllTokensFromChain) — they are not advanced synthetically here.
+function rowToSummary(row: TokenRow): CoinSummary {
+  const cap = Number(row.curve_mining_cap);
+  const mined = Number(row.curve_mining_mined);
   return {
     mint: row.mint,
+    coin: row.coin,
     slug: row.slug,
     name: row.name,
     symbol: row.symbol,
     description: row.description,
     creator: row.creator,
     imageUrl: row.image_key ? `/media/${row.image_key}` : null,
-    status: row.status,
+    decimals: row.decimals,
+    status: row.status as CoinSummary["status"],
+    venue: row.venue as CoinSummary["venue"],
+    graduated: row.graduated === 1,
     priceSol: row.price_sol,
     priceUsd: row.price_usd,
-    // change_24h_at is the record of whether the percentage was ever measured. Without it
-    // the column default of 0 would be served as a real, flat 24h change.
+    usdPriceAvailable: row.usd_price_available === 1,
+    marketCapUsd: row.market_cap_usd,
+    liquiditySol: row.liquidity_sol,
+    liquidityUsd: row.liquidity_usd,
+    liquidityLamports: row.liquidity_lamports,
+    reserveRemaining: row.reserve_remaining,
+    reserveTotal: row.reserve_total,
+    discoveryReserveRemaining: row.discovery_reserve_remaining,
+    discoveryReserveTotal: row.discovery_reserve_total,
+    rewardPerBlock: row.reward_per_block,
+    networkPower: row.network_power,
+    bondedPower: row.bonded_power,
+    starterPower: row.starter_power,
+    nextBlockAt: row.next_block_at,
+    nextEpochAt: row.next_epoch_at,
+    epochIndex: row.epoch_index,
+    epochSeedEpoch: row.epoch_seed_epoch,
+    epochSeedCommitted: row.epoch_seed_committed === 1,
+    discoveryPaused: row.discovery_paused === 1,
+    curveMining: {
+      open: row.curve_mining_open === 1 && row.graduated !== 1,
+      cap,
+      mined,
+      remaining: Math.max(0, cap - mined),
+      progress: cap === 0 ? 0 : mined / cap,
+      blockReward: Number(row.curve_mining_block_reward),
+      unpaid: Number(row.curve_mining_unpaid),
+    },
     change24h: row.change_24h_at > 0 ? row.change_24h : null,
     volume24hUsd: row.volume_24h_usd,
     trades24h: row.trades_24h,
-    curveMining: {
-      open: row.curve_mining_open === 1,
-      // A market on its curve that never had a budget at all — launched with a zero share, or
-      // written before the ledger existed, where a migration can only default the cap to zero.
-      // Read off the same rule the mine-info and chain-sync payloads use, so the list a client
-      // caches cannot describe a legacy market as a budget that is 0% spent.
-      disabled: isCurveMiningDisabled({
-        graduated: row.venue === "pool",
-        cap: BigInt(row.curve_mining_cap),
-        mined: BigInt(row.curve_mining_mined),
-        unpaid: BigInt(row.curve_mining_unpaid),
-        blockReward: BigInt(row.curve_mining_block_reward),
-      }),
-      onCurve: row.venue !== "pool",
-      cap: row.curve_mining_cap,
-      mined: row.curve_mining_mined,
-      remaining: Math.max(0, row.curve_mining_cap - row.curve_mining_mined),
-      progress:
-        row.curve_mining_cap > 0
-          ? Math.min(1, Math.max(0, row.curve_mining_mined / row.curve_mining_cap))
-          : 0,
-      blockReward: row.curve_mining_block_reward,
-      unpaid: row.curve_mining_unpaid,
-    },
-    sellCapacity: {
-      sol: row.curve_sell_capacity_sol,
-      tokens: row.curve_sell_capacity_tokens,
-    },
-    marketCapUsd: row.market_cap_usd,
-    reserveRemaining: row.reserve_remaining,
-    reserveTotal: row.reserve_total,
-    rewardPerBlock: row.reward_per_block,
-    networkPower: row.network_power,
-    nextBlockAt: row.next_block_at,
-    nextEpochAt: row.next_epoch_at,
     createdAt: row.created_at,
-    decimals: row.decimals,
+    syncedAt: row.synced_at,
   };
 }
 
-export function tokenLimit(value: string | null): number {
-  const parsed = Number(value ?? MAX_BOOTSTRAP_TOKENS);
-  if (!Number.isFinite(parsed)) return MAX_BOOTSTRAP_TOKENS;
-  return Math.min(Math.max(Math.trunc(parsed), 1), MAX_BOOTSTRAP_TOKENS);
-}
-
-export async function loadTokens(
-  env: RuntimeEnv,
-  ctx: ExecutionContext,
-  limit: number,
-): Promise<{ tokens: TokenSummary[]; source: "kv" | "d1" }> {
-  const cached = await env.TOKEN_CACHE.get<TokenSummary[]>(TOKEN_CACHE_KEY, "json");
-  if (cached) return { tokens: cached.slice(0, limit), source: "kv" };
-  const result = await env.DB.prepare(
-    "SELECT * FROM tokens ORDER BY CASE status WHEN 'MINING_ACTIVE' THEN 0 WHEN 'LAUNCHING' THEN 1 ELSE 2 END, market_cap_usd DESC LIMIT ?1",
-  ).bind(MAX_BOOTSTRAP_TOKENS).all<TokenRow>();
-  const tokens = result.results.map(mapToken);
-  ctx.waitUntil(env.TOKEN_CACHE.put(TOKEN_CACHE_KEY, JSON.stringify(tokens), { expirationTtl: 60 }));
-  return { tokens: tokens.slice(0, limit), source: "d1" };
-}
-
+/**
+ * The coin list. It is served from the index, and the index is refreshed by the cron sweep, so a
+ * just-launched coin can lag by one pass. The response says when it was synced rather than
+ * pretending to be live.
+ */
 export async function listTokens(
   env: RuntimeEnv,
   ctx: ExecutionContext,
-  limit: number,
+  limit = TOKEN_LIMIT_DEFAULT,
 ): Promise<Response> {
-  return json(await loadTokens(env, ctx, limit));
+  const cached = await env.TOKEN_CACHE.get<CoinListResponse>(cacheKey(limit), "json");
+  if (cached) return json(cached, { headers: { "cache-control": "public, max-age=15" } });
+  const rows = await env.DB.prepare(
+    `${TOKEN_SELECT} ORDER BY t.created_at DESC LIMIT ?1`,
+  )
+    .bind(limit)
+    .all<TokenRow>();
+  const body: CoinListResponse = {
+    tokens: (rows.results ?? []).map(rowToSummary),
+    syncedAt: nowSeconds(),
+  };
+  ctx.waitUntil(env.TOKEN_CACHE.put(cacheKey(limit), JSON.stringify(body), { expirationTtl: 60 }));
+  return json(body, { headers: { "cache-control": "public, max-age=15" } });
 }
 
+function cacheKey(limit: number): string {
+  return `${TOKEN_CACHE_KEY}:${limit}`;
+}
+
+/** The same list the frontend bootstraps from, plus the config it needs to render at all. */
 export async function bootstrap(
   env: RuntimeEnv,
   ctx: ExecutionContext,
-  limit: number,
+  limit = TOKEN_LIMIT_DEFAULT,
 ): Promise<Response> {
-  const tokenData = await loadTokens(env, ctx, limit);
+  const [list, protocol] = await Promise.all([
+    listTokens(env, ctx, limit).then((response) => response.json() as Promise<CoinListResponse>),
+    protocolView(env),
+  ]);
   return json({
-    ...tokenData,
-    config: {
-      cluster: env.SOLANA_CLUSTER,
-      posthogApiKey: env.POSTHOG_API_KEY,
-      posthogHost: env.POSTHOG_HOST,
-      turnstileSiteKey: env.TURNSTILE_SITE_KEY,
-      programId: env.DIGGO_PROGRAM_ID,
-      vanitySuffix: env.VANITY_SUFFIX,
-    },
+    ...list,
+    protocol,
+    cluster: env.SOLANA_CLUSTER,
+    programId: env.DIGGO_PROGRAM_ID,
+    posthogApiKey: env.POSTHOG_API_KEY,
+    posthogHost: env.POSTHOG_HOST,
+    turnstileSiteKey: env.TURNSTILE_SITE_KEY,
+    vanitySuffix: env.VANITY_SUFFIX,
   });
+}
+
+/**
+ * The governance parameters the UI shows, straight from the indexed ProtocolConfig.
+ *
+ * The bond price and the starter-efficiency factors are deliberately not served. The program
+ * retires them (`BOND_LAMPORTS` in its constants: no new bond may be posted and nothing a player
+ * does costs a lamport beyond rent and the transaction fee), so quoting a deposit here would put
+ * a price tag back on access that no wallet has to pay. The mirrored columns stay in D1, where a
+ * value written before the retirement is still readable without being advertised.
+ */
+export async function protocolView(env: RuntimeEnv): Promise<Record<string, unknown> | null> {
+  const row = await env.DB.prepare("SELECT * FROM protocol_config WHERE id = 1").first<
+    Record<string, unknown>
+  >();
+  if (!row) return null;
+  return {
+    authority: row.authority,
+    treasury: row.treasury,
+    crankPool: row.crank_pool,
+    creatorFeeBps: row.creator_fee_bps,
+    platformFeeBps: row.platform_fee_bps,
+    crankPoolFeeBps: row.crank_pool_fee_bps,
+    discoveryDailyCapLamports: row.discovery_daily_cap_lamports,
+    discoveryWeeklyCapLamports: row.discovery_weekly_cap_lamports,
+    discoveryGlobalDailyCapLamports: row.discovery_global_daily_cap_lamports,
+    discoveryEpochBudgetLamports: row.discovery_epoch_budget_lamports,
+    pausedFlags: row.paused_flags,
+    pausedUntil: row.paused_until,
+    indexedAt: row.indexed_at,
+  };
 }
 
 export async function tokenBySlug(slug: string, env: RuntimeEnv): Promise<Response> {
-  const row = await env.DB.prepare("SELECT * FROM tokens WHERE slug = ?1 OR mint = ?1")
+  const row = await env.DB.prepare(`${TOKEN_SELECT} WHERE t.slug = ?1`)
     .bind(slug)
     .first<TokenRow>();
-  return row ? json({ token: mapToken(row) }) : apiError("Token not found", 404);
+  if (!row) return apiError("Token not found", 404);
+  return json({ token: rowToSummary(row) });
 }
 
-export async function uploadMedia(request: Request, env: RuntimeEnv): Promise<Response> {
-  const wallet = await sessionWallet(request, env);
-  if (!wallet) return apiError("Wallet authentication required", 401);
-  const form = await request.formData();
-  const file = form.get("file");
-  if (!(file instanceof File) || !IMAGE_CONTENT_TYPES.has(file.type)) {
-    return apiError("Select a PNG, JPEG, or WebP image");
-  }
-  if (file.size > MAX_IMAGE_BYTES) return apiError("Image must be 2 MB or smaller", 413);
-  if (!env.SUPABASE_SERVICE_ROLE_KEY) return apiError("Token artwork uploads are not configured", 503);
-  const extension = file.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "bin";
-  const key = `uploads/${wallet}/${crypto.randomUUID()}.${extension}`;
-  const response = await fetch(`${env.SUPABASE_URL}/storage/v1/object/${SUPABASE_MEDIA_BUCKET}/${key}`, {
-    method: "POST",
-    headers: {
-      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-      authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-      "content-type": file.type,
-      "x-upsert": "false",
-    },
-    body: file.stream(),
+/** One coin's indexed trades, newest first. Read-only: the chain is where they come from. */
+export async function coinTrades(
+  env: RuntimeEnv,
+  mint: string,
+  limit = 100,
+): Promise<Response> {
+  if (!isBase58Address(mint)) return apiError("Invalid mint");
+  const rows = await env.DB.prepare(
+    "SELECT signature, side, price_sol, amount_in, amount_out, fill_source, block_time, venue" +
+      " FROM trades" +
+      " WHERE mint = ?1 ORDER BY block_time DESC LIMIT ?2",
+  )
+    .bind(mint, Math.min(500, Math.max(1, limit)))
+    .all<{
+      signature: string;
+      side: string;
+      price_sol: number;
+      amount_in: string;
+      amount_out: string;
+      fill_source: string;
+      block_time: number;
+      venue: string;
+    }>();
+  const trades: CoinTrade[] = (rows.results ?? []).map((row) => ({
+    signature: row.signature,
+    side: row.side === "BUY" ? "BUY" : "SELL",
+    priceSol: row.price_sol,
+    priceUsd: 0,
+    amount: Number(row.amount_in),
+    amountOut: Number(row.amount_out),
+    fillSource: row.fill_source === "meta" || row.fill_source === "event" ? row.fill_source : "instruction",
+    blockTime: row.block_time,
+  }));
+  return json({
+    mint,
+    trades,
+    note:
+      "amount is what the trader offered and amountOut what they received, read from the " +
+      "transaction's balance table; price_sol is the venue's observed spot price at that slot",
   });
-  if (!response.ok) {
-    console.warn(JSON.stringify({ event: "media.upload_failed", status: response.status }));
-    return apiError("Artwork upload failed", 502);
-  }
-  return json({ key, url: `/media/${key}` }, { status: 201 });
 }
 
 /**
- * Registers a token the caller's own wallet just launched directly on-chain (see
- * src/solanaProgram.ts — the frontend builds and sends the launch_token transaction itself;
- * there is no server-side vanity-mint queue any more, since the mint is a PDA and cannot be
- * ground for a vanity suffix). This endpoint never invents data: it reads the Mine/LaunchMarket
- * accounts straight from chain and refuses to proceed if they don't exist yet, and it only
- * accepts creator-supplied metadata (description/artwork) after confirming the session wallet
- * matches the on-chain creator recorded in the Mine account.
+ * Attaches off-chain display metadata to an already-indexed coin.
+ *
+ * The launch itself is on-chain and this endpoint cannot create a coin: it refuses a mint the
+ * indexer has never seen. That is the difference from v4, where a client-reported launch created
+ * a row - a coin that does not exist on chain now has no row to attach metadata to.
  */
 export async function registerLaunchedToken(request: Request, env: RuntimeEnv): Promise<Response> {
-  if (!(await checkRateLimit(request, env, "register"))) return apiError("Too many requests", 429);
+  if (!(await checkRateLimit(request, env, "register", 12))) return apiError("Too many requests", 429);
   const wallet = await sessionWallet(request, env);
-  if (!wallet) return apiError("Wallet authentication required", 401);
-  const body = await readJson<{ mint?: string; description?: string; imageUrl?: string }>(request);
-  if (!isBase58Address(body.mint)) return apiError("Invalid mint address");
-  if (body.description !== undefined && body.description.length > 280) {
-    return apiError("Description must be 280 characters or fewer");
+  if (!wallet) return apiError("Wallet session required", 401);
+  const body = await readJson<{
+    mint?: string;
+    description?: string;
+    imageKey?: string | null;
+  }>(request, 32_768);
+  if (!isBase58Address(body.mint)) return apiError("Invalid mint");
+  const coin = await env.DB.prepare("SELECT creator, slug FROM coins WHERE mint = ?1")
+    .bind(body.mint)
+    .first<{ creator: string; slug: string }>();
+  if (!coin) {
+    return apiError("That mint has not been indexed yet; launch it on-chain first", 404);
   }
-
-  let chainCreator: string;
-  try {
-    chainCreator = (await readTokenFromChain(env, body.mint)).creator;
-  } catch {
-    return apiError("This mint has not launched on-chain yet — wait for the transaction to confirm and retry", 404);
-  }
-  if (chainCreator !== wallet) return apiError("Only the launch creator can register this token", 403);
-
-  const imageKey = body.imageUrl?.startsWith("/media/") ? body.imageUrl.slice(7) : null;
-  const token = await syncTokenToD1(env, body.mint, {
-    description: body.description?.trim() ?? "",
-    imageKey,
-  });
+  if (coin.creator !== wallet) return apiError("Only the coin's creator may set its metadata", 403);
+  const description = (body.description ?? "").slice(0, 512);
+  const imageKey = typeof body.imageKey === "string" ? body.imageKey.slice(0, 200) : null;
   await env.DB.prepare(
-    "INSERT INTO launch_requests (id, creator, name, symbol, description, image_key, vanity_suffix, status, mint) VALUES (?1,?2,?3,?4,?5,?6,?7,'LAUNCHED',?8)",
+    "UPDATE tokens SET description = ?1, image_key = ?2 WHERE mint = ?3",
   )
-    .bind(crypto.randomUUID(), wallet, token.name, token.symbol, token.description, imageKey, env.VANITY_SUFFIX, body.mint)
+    .bind(description, imageKey, body.mint)
     .run();
   await env.TOKEN_CACHE.delete(TOKEN_CACHE_KEY);
-  console.log(JSON.stringify({ event: "launch.registered", wallet, mint: body.mint, symbol: token.symbol }));
-  return json({ token }, { status: 201 });
+  return json({ mint: body.mint, slug: coin.slug, description, imageKey });
 }
 
-/**
- * Records a trade the caller's own wallet just executed on-chain (buy or sell against a mine's
- * trading venue — see src/solanaProgram.ts) so the DiggoSwap chart has something to draw. This
- * only feeds display data, never account/reward state, so verification is deliberately light:
- * confirm the signature is a real, successful, recent transaction before trusting its side/amount.
- *
- * price/market_cap/liquidity in the `tokens` row are always re-derived from a fresh on-chain read,
- * never from anything the client sent. That read is venue-aware: before graduation the price comes
- * from the bonding curve, and after `graduate_market` the curve's reserves are zero and both the
- * price and the liquidity come from the program-owned pool (docs/ONCHAIN.md).
- */
-export async function recordTrade(request: Request, env: RuntimeEnv, mint: string): Promise<Response> {
-  if (!(await checkRateLimit(request, env, "trade-record", 60))) return apiError("Too many requests", 429);
-  const body = await readJson<{ signature?: string; side?: "buy" | "sell"; amount?: number | string }>(request);
-  // The client sends the amount as an exact decimal string (src/solanaProgram.ts recordedAmount): a
-  // raw base-unit figure above 2^53 does not survive a JS Number, and this is the record of what
-  // traded. A plain number is still accepted, because that is what an older client sends.
-  const amountText = typeof body.amount === "number" ? String(body.amount) : body.amount;
-  if (
-    !body.signature ||
-    (body.side !== "buy" && body.side !== "sell") ||
-    typeof amountText !== "string" ||
-    amountText.length > 40 ||
-    !/^\d+(\.\d+)?$/.test(amountText)
-  ) {
-    return apiError("Invalid trade payload");
-  }
-  const rpc = getChainRpc(env);
-  let confirmed = false;
-  try {
-    const status = await rpc
-      .getSignatureStatuses([body.signature as never])
-      .send();
-    const value = status.value[0];
-    confirmed = value !== null && value.err === null && value.confirmationStatus !== null;
-  } catch {
-    // A failed RPC leaves confirmed false, so the trade is rejected below.
-  }
-  if (!confirmed) return apiError("Transaction is not a confirmed on-chain signature", 400);
-
-  let chain;
-  try {
-    chain = await readTokenFromChain(env, mint);
-  } catch {
-    return apiError("Unknown mint", 404);
-  }
-
-  const timestamp = Math.floor(Date.now() / 1_000);
-  await env.DB.batch([
-    env.DB.prepare(
-      "INSERT OR IGNORE INTO trades (signature, mint, side, price_usd, price_sol, amount, block_time) VALUES (?1,?2,?3,?4,?5,?6,?7)",
-    ).bind(body.signature, mint, body.side, chain.priceUsd, chain.priceSol, amountText, timestamp),
-    env.DB.prepare(
-      "UPDATE tokens SET price_usd = ?1, price_sol = ?2, market_cap_usd = ?3, liquidity_usd = ?4 WHERE mint = ?5",
-    ).bind(
-      chain.priceUsd,
-      chain.priceSol,
-      chain.marketCapUsd,
-      chain.liquidityUsd,
-      mint,
-    ),
-  ]);
-  const market = env.MARKETS.getByName(mint);
-  await market.applyTrade({
-    signature: body.signature,
-    side: body.side,
-    priceSol: chain.priceSol,
-    priceUsd: chain.priceUsd,
-    // The Durable Object's tape and its 24h volume aggregate are display-only, so this one hop is
-    // allowed to be a float. The indexed row above keeps the exact figure.
-    amount: Number(amountText),
-    timestamp,
+/** Uploads one image to the media store. Cosmetics and coin art only; nothing value-bearing. */
+export async function uploadMedia(request: Request, env: RuntimeEnv): Promise<Response> {
+  if (!(await checkRateLimit(request, env, "media", 12))) return apiError("Too many requests", 429);
+  const wallet = await sessionWallet(request, env);
+  if (!wallet) return apiError("Wallet session required", 401);
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.startsWith("image/")) return apiError("Only images may be uploaded");
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.byteLength === 0) return apiError("Empty upload");
+  if (bytes.byteLength > 2_000_000) return apiError("Image too large (2 MB maximum)", 413);
+  const extension = contentType.split("/")[1]?.split(";")[0] ?? "bin";
+  const key = `${wallet.slice(0, 8)}-${crypto.randomUUID()}.${extension.replace(/[^a-z0-9]/g, "")}`;
+  await env.TOKEN_CACHE.put(`media:${key}`, bytes, {
+    metadata: { contentType, wallet, uploadedAt: nowSeconds() },
+    expirationTtl: 60 * 60 * 24 * 365,
   });
-  await env.TOKEN_CACHE.delete(TOKEN_CACHE_KEY);
-  console.log(
-    JSON.stringify({
-      event: "trade.recorded",
-      mint,
-      side: body.side,
-      venue: chain.venue,
-      priceSol: chain.priceSol,
-    }),
-  );
-  return json({ ok: true, priceUsd: chain.priceUsd, priceSol: chain.priceSol, venue: chain.venue });
+  return json({ imageKey: key, url: `/media/${key}` });
 }
 
+/** Serves an uploaded image from the media store. */
 export async function serveMedia(pathname: string, env: RuntimeEnv): Promise<Response> {
-  const key = decodeURIComponent(pathname.slice("/media/".length));
-  if (!key || key.includes("..")) return apiError("Invalid media key");
-  if (!env.SUPABASE_SERVICE_ROLE_KEY) return apiError("Media delivery is not configured", 503);
-  const response = await fetch(`${env.SUPABASE_URL}/storage/v1/object/${SUPABASE_MEDIA_BUCKET}/${key}`, {
+  const key = pathname.replace(/^\/media\//, "");
+  if (!/^[A-Za-z0-9._-]+$/.test(key)) return apiError("Not found", 404);
+  const stored = await env.TOKEN_CACHE.getWithMetadata<{ contentType?: string }>(
+    `media:${key}`,
+    "arrayBuffer",
+  );
+  if (!stored.value) return apiError("Not found", 404);
+  return new Response(stored.value, {
     headers: {
-      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-      authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "content-type": stored.metadata?.contentType ?? "application/octet-stream",
+      "cache-control": "public, max-age=31536000, immutable",
     },
   });
-  if (response.status === 404) return apiError("Media not found", 404);
-  if (!response.ok) return apiError("Media delivery failed", 502);
-  const headers = new Headers();
-  headers.set("content-type", response.headers.get("content-type") ?? "application/octet-stream");
-  const etag = response.headers.get("etag");
-  if (etag) headers.set("etag", etag);
-  headers.set("cache-control", "public, max-age=31536000, immutable");
-  return new Response(response.body, { headers });
 }

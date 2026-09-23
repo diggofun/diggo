@@ -16,20 +16,7 @@
  * and decide appeals. Every control can only slow an account down or stop doing so - none of them
  * can move, seize or redirect value, because no endpoint exists that could.
  */
-import { useCallback, useEffect, useState } from "react";
-import {
-  AlertOctagon,
-  Ban,
-  Check,
-  Eye,
-  Gavel,
-  Lock,
-  OctagonAlert,
-  RefreshCw,
-  ShieldAlert,
-  X,
-  Zap,
-} from "lucide-react";
+import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import {
   ApiError,
   adminSignedRequest,
@@ -41,10 +28,25 @@ import {
   type AdminMetrics,
 } from "../api";
 import { shortAddress } from "../format";
+import { IconReject } from "../icons";
 import { useDiggoWallet } from "../wallet";
+
+/**
+ * The sponsor console pulls in the on-chain client, so it is loaded only when an operator opens
+ * the admin screen rather than on every page.
+ */
+const SponsorEventsPanel = lazy(() =>
+  import("./SponsorEventsPanel").then((module) => ({ default: module.SponsorEventsPanel })),
+);
 
 export interface AdminScreenProps {
   signedIn: boolean;
+  /**
+   * The deployed program id, so the sponsor section can build its instructions. Omitted means the
+   * cluster has not been configured yet, and the sponsor section says so instead of rendering a
+   * button that cannot work.
+   */
+  programId?: string;
 }
 
 /** Mirrors the Worker's BREAKER_SCOPES; discovery_reserve is per mine. */
@@ -67,7 +69,104 @@ function formatStamp(seconds: number | null): string {
   return seconds === null ? "-" : new Date(seconds * 1_000).toLocaleString();
 }
 
-export function AdminScreen({ signedIn }: AdminScreenProps) {
+/**
+ * The claimed column's one decision (spec 67).
+ *
+ * adminAbuse answers with three things about an account's claimed value: the lamport sum the indexer
+ * totalled, that sum converted to USD at the display rate, and whether the rate existed at all. The
+ * conversion is zero when the oracle had no SOL/USD quote, and "0.00 USD" reads like an account that
+ * claimed nothing rather than like a rate that was missing. So the USD figure is printed only when
+ * the Worker says the rate was real; otherwise the exact lamport sum carries the column, in SOL, and
+ * the missing rate is named beside it.
+ */
+export interface ClaimedValueFields {
+  /** The converted figure, which is 0 whenever `usdPriceAvailable` is false. */
+  claimedValueUsd: number;
+  /** The exact sum as a decimal string, so no float stands between the indexer and the screen. */
+  claimedValueLamports?: string;
+  /** Whether the oracle supplied the SOL/USD rate the conversion used. */
+  usdPriceAvailable?: boolean;
+}
+
+export interface ClaimedValueDisplay {
+  /** The figure the cell prints. */
+  value: string;
+  /** A note beside it, naming the missing rate when only the exact figure could be shown. */
+  note: string | null;
+  /** The exact lamport sum and the provenance of the conversion, for the cell's tooltip. */
+  title: string;
+}
+
+const LAMPORTS_PER_SOL = 1_000_000_000n;
+
+const USD_UNAVAILABLE = "USD unavailable";
+
+/** Said once, so the tooltip and the note beside it cannot drift apart. */
+const NO_RATE_REASON = "no SOL/USD rate was reported";
+
+/**
+ * Lamports as an exact SOL string: "3000000000" becomes "3", "1" becomes "0.000000001". Anything
+ * that is not a lamport count reads as null, so a caller can say the value is unknown rather than
+ * print a figure it invented.
+ */
+export function lamportsToExactSol(lamports: string): string | null {
+  const digits = lamports.trim();
+  if (!/^\d+$/.test(digits)) return null;
+  const total = BigInt(digits);
+  const whole = (total / LAMPORTS_PER_SOL).toLocaleString("en");
+  const fraction = (total % LAMPORTS_PER_SOL).toString().padStart(9, "0").replace(/0+$/, "");
+  return fraction.length > 0 ? whole + "." + fraction : whole;
+}
+
+/** The exact count for a tooltip, e.g. "3,000,000,000 lamports". Null when it is not a count. */
+function lamportCount(lamports: string): string | null {
+  const digits = lamports.trim();
+  if (!/^\d+$/.test(digits)) return null;
+  return BigInt(digits).toLocaleString("en") + " lamports";
+}
+
+export function claimedValueDisplay(account: ClaimedValueFields): ClaimedValueDisplay {
+  const lamports = account.claimedValueLamports ?? "";
+  const exact = lamportsToExactSol(lamports);
+  const count = lamportCount(lamports);
+  if (account.usdPriceAvailable === true && Number.isFinite(account.claimedValueUsd)) {
+    return {
+      value: account.claimedValueUsd.toFixed(2) + " USD",
+      note: null,
+      title: (count ?? "The claimed value") + " converted at the display SOL/USD rate",
+    };
+  }
+  if (exact === null) {
+    return {
+      value: USD_UNAVAILABLE,
+      note: null,
+      title: "No claimed value can be shown: " + NO_RATE_REASON + ", and no exact lamport sum either",
+    };
+  }
+  return {
+    value: exact + " SOL",
+    note: USD_UNAVAILABLE,
+    title: (count === null ? exact + " SOL" : count) + " · " + NO_RATE_REASON + ", so the exact claimed amount is shown in SOL",
+  };
+}
+
+/** One claimed-value cell: the exact figure, and the name of the rate that was missing. */
+export function ClaimedCell({ account }: { account: ClaimedValueFields }) {
+  const claimed = claimedValueDisplay(account);
+  return (
+    <span title={claimed.title}>
+      {claimed.value}
+      {claimed.note !== null && (
+        <>
+          {" "}
+          <em className="mono-label">{claimed.note}</em>
+        </>
+      )}
+    </span>
+  );
+}
+
+export function AdminScreen({ signedIn, programId }: AdminScreenProps) {
   const connected = useDiggoWallet();
   const [abuse, setAbuse] = useState<AdminAbuseView | null>(null);
   const [metrics, setMetrics] = useState<AdminMetrics | null>(null);
@@ -221,7 +320,6 @@ export function AdminScreen({ signedIn }: AdminScreenProps) {
     return (
       <section className="admin-screen page-shell">
         <div className="admin-locked">
-          <Lock size={22} />
           <h2>Admin access required</h2>
           <p>
             This surface is only reachable by a signed-in wallet listed in the Worker's admin
@@ -243,7 +341,7 @@ export function AdminScreen({ signedIn }: AdminScreenProps) {
       <div className="section-heading">
         <div>
           <div className="eyebrow">
-            <ShieldAlert size={14} /> Anti-abuse
+            Anti-abuse
           </div>
           <h2>
             OPERATOR
@@ -252,7 +350,7 @@ export function AdminScreen({ signedIn }: AdminScreenProps) {
           </h2>
         </div>
         <button className="btn btn-ghost" disabled={loading} onClick={() => void load()}>
-          Refresh <RefreshCw size={13} />
+          Refresh
         </button>
       </div>
 
@@ -280,7 +378,6 @@ export function AdminScreen({ signedIn }: AdminScreenProps) {
       {notice && <p className="form-message admin-notice">{notice}</p>}
       {error && (
         <div className="error-state">
-          <AlertOctagon size={18} />
           <div>
             <strong>That change did not go through</strong>
             <p>{error}</p>
@@ -291,7 +388,7 @@ export function AdminScreen({ signedIn }: AdminScreenProps) {
       <div className="admin-block">
         <div className="admin-block-head">
           <span>
-            <Gavel size={13} /> APPEALS
+            APPEALS
           </span>
           <small>{appeals.length} appeal(s) in this view</small>
         </div>
@@ -356,10 +453,10 @@ export function AdminScreen({ signedIn }: AdminScreenProps) {
                     )}
                     <div className="admin-flags">
                       <button className="btn btn-primary btn-sm" onClick={() => void decideAppeal(appeal, "accepted")}>
-                        Accept <Check size={13} />
+                        Accept
                       </button>
                       <button className="btn btn-ghost btn-sm" onClick={() => void decideAppeal(appeal, "rejected")}>
-                        Reject <X size={13} />
+                        Reject <IconReject size={13} />
                       </button>
                     </div>
                   </div>
@@ -374,7 +471,7 @@ export function AdminScreen({ signedIn }: AdminScreenProps) {
       <div className="admin-block">
         <div className="admin-block-head">
           <span>
-            <Zap size={13} /> CIRCUIT BREAKERS
+            CIRCUIT BREAKERS
           </span>
           <small>a reason is required for every change</small>
         </div>
@@ -418,7 +515,7 @@ export function AdminScreen({ signedIn }: AdminScreenProps) {
       <div className="admin-block">
         <div className="admin-block-head">
           <span>
-            <OctagonAlert size={13} /> METRICS AND ALERTS
+            METRICS AND ALERTS
           </span>
           <small>{alerts.length} alert(s) firing</small>
         </div>
@@ -448,7 +545,7 @@ export function AdminScreen({ signedIn }: AdminScreenProps) {
       <div className="admin-block">
         <div className="admin-block-head">
           <span>
-            <Ban size={13} /> RESTRICTIONS
+            RESTRICTIONS
           </span>
           <small>restrictions only ever slow an account down</small>
         </div>
@@ -485,7 +582,7 @@ export function AdminScreen({ signedIn }: AdminScreenProps) {
       <div className="admin-block">
         <div className="admin-block-head">
           <span>
-            <AlertOctagon size={13} /> ANTI-ABUSE ACCOUNTS
+            ANTI-ABUSE ACCOUNTS
           </span>
           <small>{accounts.length} account(s)</small>
         </div>
@@ -495,7 +592,9 @@ export function AdminScreen({ signedIn }: AdminScreenProps) {
             <span>Risk</span>
             <span>Crew</span>
             <span>Discoveries</span>
-            <span>Claimed</span>
+            <span title="Exact claimed value: USD at the display rate while the oracle answers, otherwise the exact amount in SOL">
+              Claimed
+            </span>
             <span>Trust</span>
             <span>Linked</span>
             <span>Flags / restrictions</span>
@@ -509,7 +608,7 @@ export function AdminScreen({ signedIn }: AdminScreenProps) {
                   <>
                     {" "}
                     <em className="mono-label" title="What the score asked for while shadowing">
-                      <Eye size={11} /> {account.computedState}
+                      {account.computedState}
                     </em>
                   </>
                 )}
@@ -518,7 +617,7 @@ export function AdminScreen({ signedIn }: AdminScreenProps) {
                 tier {account.crewTier} ({account.crewLevel})
               </span>
               <span>{account.discoveries}</span>
-              <span>{account.claimedValueUsd.toFixed(2)} USD</span>
+              <ClaimedCell account={account} />
               <span>{account.trust.toFixed(0)}</span>
               <span>{account.relatedAccounts}</span>
               <span className="admin-flags">
@@ -560,6 +659,26 @@ export function AdminScreen({ signedIn }: AdminScreenProps) {
           </ul>
         </div>
       )}
+
+      {/*
+        Sponsorship is the one admin surface that is not governance: the vault belongs to the
+        operator's own wallet, holds lamports, and has no program authority. It lives on this
+        screen because it is an operator tool, and it is separated from the abuse tooling above
+        because a sponsor event cannot touch a player's power, rewards or discovery odds.
+      */}
+      <div className="admin-block">
+        <div className="admin-block-head">
+          <span>SPONSORSHIP</span>
+          <small>rent and fee subsidies, paid from your own vault</small>
+        </div>
+        {programId ? (
+          <Suspense fallback={<p className="admin-empty">Loading the sponsor console…</p>}>
+            <SponsorEventsPanel programAddress={programId} wallet={connected?.wallet ?? null} />
+          </Suspense>
+        ) : (
+          <p className="admin-empty">This cluster has no program id configured yet.</p>
+        )}
+      </div>
     </section>
   );
 }

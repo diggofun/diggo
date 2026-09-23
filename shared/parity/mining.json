@@ -1,0 +1,55 @@
+{
+  "generatedBy": "WS-C Rust unit test mining_parity_vectors; do not edit by hand",
+  "indexScale": "1000000000000",
+  "starterEfficiencyBps": 2500,
+  "starterTrancheBps": 1000,
+  "derivation": [
+    {"seedHex": "0101010101010101010101010101010101010101010101010101010101010101", "ownerHex": "0202020202020202020202020202020202020202020202020202020202020202", "windowIndex": 0, "digestHex": "c20a6fd2329070420058915cba61711a8fc14592e481cf85d6ef73097da840c4", "rollBps": 2754},
+    {"seedHex": "0101010101010101010101010101010101010101010101010101010101010101", "ownerHex": "0202020202020202020202020202020202020202020202020202020202020202", "windowIndex": 1, "digestHex": "6201108cccc1158bdc551eb4010d5b52aa630e4b6bcf2cc6aa6516a427300ee5", "rollBps": 354},
+    {"seedHex": "0101010101010101010101010101010101010101010101010101010101010101", "ownerHex": "0202020202020202020202020202020202020202020202020202020202020202", "windowIndex": 258, "digestHex": "f7ce5e6d1afcc20f6b21eeb0f398dde53f7002241adcafb70eccaf97500c2dd3", "rollBps": 2983},
+    {"seedHex": "0101010101010101010101010101010101010101010101010101010101010101", "ownerHex": "0202020202020202020202020202020202020202020202020202020202020202", "windowIndex": 65535, "digestHex": "9fc24d4796d7f1952eb07585628552ed7dab39bfd71a2bbbc73bd394953fec8f", "rollBps": 9823}
+  ],
+  "trancheSplit": [
+    {"bondedPower": "1000", "starterPower": "0", "reward": "10000", "cap": "1000", "bonded": "10000", "starter": "0"},
+    {"bondedPower": "1000", "starterPower": "250", "reward": "10000", "cap": "1000", "bonded": "9000", "starter": "1000"},
+    {"bondedPower": "1000", "starterPower": "4444", "reward": "10000", "cap": "1000", "bonded": "9000", "starter": "1000"},
+    {"bondedPower": "1000", "starterPower": "4445", "reward": "10000", "cap": "1000", "bonded": "9000", "starter": "1000"},
+    {"bondedPower": "7", "starterPower": "3", "reward": "9999", "cap": "999", "bonded": "9000", "starter": "999"},
+    {"bondedPower": "0", "starterPower": "1000", "reward": "10000", "cap": "1000", "bonded": "0", "starter": "1000"}
+  ],
+  "trancheIndex": [
+    {"bondedPower": "1000", "starterPower": "250", "blockReward": "10000", "blocks": 1, "bondedIndex": "9000000000000", "starterIndex": "4000000000000", "bondedClaim": "9000", "starterClaim": "1000", "reserveRemaining": "999990000"},
+    {"bondedPower": "1000", "starterPower": "250", "blockReward": "10000", "blocks": 4, "bondedIndex": "36000000000000", "starterIndex": "16000000000000", "bondedClaim": "36000", "starterClaim": "4000", "reserveRemaining": "999960000"},
+    {"bondedPower": "0", "starterPower": "1000", "blockReward": "10000", "blocks": 2, "bondedIndex": "0", "starterIndex": "2000000000000", "bondedClaim": "0", "starterClaim": "2000", "reserveRemaining": "999998000"},
+    {"bondedPower": "500", "starterPower": "2000", "blockReward": "9999", "blocks": 1, "bondedIndex": "18000000000000", "starterIndex": "499500000000", "bondedClaim": "9000", "starterClaim": "999", "reserveRemaining": "999990001"}
+  ],
+  "owed": [
+    {"index": "1000000000000", "power": "1000", "owed": "1000"},
+    {"index": "500000000000", "power": "1000", "owed": "500"},
+    {"index": "0", "power": "1000", "owed": "0"},
+    {"index": "3000000000007", "power": "333", "owed": "999"}
+  ],
+  "walk": [
+    {"bondedPower": "1000", "starterPower": "250", "blockReward": "10000", "blocks": 1, "rewardIndex": "9000000000000", "reserveRemaining": "999990000", "cumulativeDistributed": "10000", "outstandingClaims": "10000"},
+    {"bondedPower": "1000", "starterPower": "0", "blockReward": "10000", "blocks": 4, "rewardIndex": "40000000000000", "reserveRemaining": "999960000", "cumulativeDistributed": "40000", "outstandingClaims": "40000"},
+    {"bondedPower": "500", "starterPower": "2000", "blockReward": "9999", "blocks": 1, "rewardIndex": "18000000000000", "reserveRemaining": "999990001", "cumulativeDistributed": "9999", "outstandingClaims": "9999"}
+  ],
+  "seedReveal": [
+    {"targetSlot": 1000, "currentSlot": 1000, "maxLatenessSlots": 512, "delaySlots": 32, "plan": "target", "rearmSlot": 0},
+    {"targetSlot": 1000, "currentSlot": 1511, "maxLatenessSlots": 512, "delaySlots": 32, "plan": "target", "rearmSlot": 0},
+    {"targetSlot": 1000, "currentSlot": 1512, "maxLatenessSlots": 512, "delaySlots": 32, "plan": "oldest", "rearmSlot": 0},
+    {"targetSlot": 1000, "currentSlot": 1513, "maxLatenessSlots": 512, "delaySlots": 32, "plan": "rearm", "rearmSlot": 1545},
+    {"targetSlot": 1000, "currentSlot": 2000, "maxLatenessSlots": 2048, "delaySlots": 32, "plan": "oldest", "rearmSlot": 0}
+  ],
+  "rarity": {
+    "cumulativeChanceBps": [7000, 9000, 9700, 9950, 9995, 10000],
+    "rolls": [
+      {"rollBps": 0, "tier": 0},
+      {"rollBps": 6999, "tier": 0},
+      {"rollBps": 7000, "tier": 1},
+      {"rollBps": 8999, "tier": 1},
+      {"rollBps": 9000, "tier": 2},
+      {"rollBps": 9999, "tier": 5}
+    ]
+  }
+}

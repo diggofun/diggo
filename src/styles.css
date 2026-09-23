@@ -61,7 +61,7 @@
 
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
-body { margin: 0; min-width: 320px; background: var(--paper); }
+body { margin: 0; background: var(--paper); }
 button, input, textarea { font: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
 button { cursor: pointer; }
@@ -70,6 +70,7 @@ a { color: inherit; text-decoration: none; }
 
 .site-header { min-height: 76px; padding: 0 max(24px, calc((100vw - 1420px) / 2)); display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 80; background: rgba(241,238,228,.94); backdrop-filter: blur(14px); }
 .brand { display: inline-flex; align-items: center; gap: 9px; font: 900 19px/1 Arial Black, sans-serif; letter-spacing: -1px; user-select: none; -webkit-user-select: none; }
+.brand strong { font: 950 17px/1 var(--font-display); letter-spacing: -.04em; }
 .brand-mark { width: 34px; height: 34px; display: grid; place-items: center; color: var(--acid); background: var(--ink); border-radius: 50%; transform: rotate(-8deg); }
 .brand-art { height: 34px; width: auto; -webkit-user-drag: none; }
 /* One slot per logo shape: the lockup when there is room, the square icon in the narrow header. */
@@ -96,6 +97,7 @@ a { color: inherit; text-decoration: none; }
 .recover-launch { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }.recover-launch summary { cursor: pointer; font-size: 11px; font-weight: 900; text-transform: uppercase; }.recover-launch p { margin: 8px 0; color: var(--muted); font-size: 11px; line-height: 1.5; }.recover-launch form { display: flex; gap: 8px; }.recover-launch input { min-width: 0; flex: 1; height: 40px; border: 1px solid var(--line); padding: 0 10px; font: 12px/1 monospace; }.recover-launch .outline-button { min-height: 40px; padding: 0 10px; font-size: 10px; white-space: nowrap; }
 
 .hero { min-height: 650px; display: grid; grid-template-columns: 1.04fr .96fr; gap: 76px; align-items: center; padding-block: 62px 70px; }
+.hero > * { min-width: 0; }
 .eyebrow { display: inline-flex; align-items: center; gap: 8px; text-transform: uppercase; letter-spacing: .14em; font-size: 11px; font-weight: 900; color: #66685f; }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #72b93c; box-shadow: 0 0 0 4px rgba(114,185,60,.16); }
 .hero h1, .section-heading h2, .how-section h2, .protocol h2, .final-cta h2, .launch-modal h2 { margin: 18px 0 22px; font: 950 clamp(54px, 6.5vw, 94px)/.84 Arial Black, Impact, sans-serif; letter-spacing: -.075em; }
@@ -189,11 +191,11 @@ a { color: inherit; text-decoration: none; }
 .protocol { padding-block: 110px; display: grid; grid-template-columns: .8fr 1.2fr; align-items: center; gap: 100px; }.protocol-copy > p { color: var(--muted); max-width: 460px; line-height: 1.7; }.protocol-copy > a { display: inline-flex; align-items: center; gap: 8px; margin-top: 22px; text-transform: uppercase; font-size: 11px; font-weight: 900; border-bottom: 1px solid; padding-bottom: 7px; }
 .stack-map { min-height: 490px; background: #e6e1d5; border: 1px solid var(--ink); padding: 48px 28px 28px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; position: relative; box-shadow: 10px 10px 0 var(--ink); }.map-label { position: absolute; top: 17px; left: 22px; font: 800 9px monospace; color: var(--muted); }.stack-node { background: var(--paper); border: 1px solid var(--ink); min-height: 120px; padding: 18px; display: flex; flex-direction: column; gap: 10px; font-weight: 900; text-transform: uppercase; font-size: 12px; }.stack-node svg { color: var(--orange); }.stack-node small { color: var(--muted); font: 700 9px monospace; text-transform: none; }.main-node { grid-column: 1/-1; min-height: 100px; background: var(--acid); }.stack-footer { grid-column: 1/-1; display: flex; align-items: center; justify-content: space-between; padding: 10px; font: 800 9px monospace; text-transform: uppercase; }.stack-footer i { flex: 1; height: 1px; background: var(--ink); margin: 0 9px; position: relative; }.stack-footer i::after { content: "›"; position: absolute; right: -2px; top: -9px; }
 
-.final-cta { background: var(--orange); border-block: 1px solid var(--ink); }.final-cta .page-shell { min-height: 280px; display: flex; align-items: center; gap: 30px; }.huge-pick { width: 120px; height: 120px; display: grid; place-items: center; border-radius: 50%; background: var(--ink); color: var(--acid); transform: rotate(-8deg); }.huge-pick svg { width: 68px; height: 68px; }.final-cta div > span { font: 800 10px monospace; letter-spacing: .1em; }.final-cta h2 { margin: 7px 0 0; font-size: clamp(52px, 7vw, 94px); }.final-cta .primary-button { margin-left: auto; }.primary-button.invert { background: var(--ink); color: white; box-shadow: 4px 4px 0 var(--acid); }
-.site-footer { min-height: 150px; display: flex; align-items: center; gap: 40px; color: var(--muted); font-size: 12px; }.site-footer > div { margin-left: auto; display: flex; gap: 22px; text-transform: uppercase; font-weight: 800; font-size: 10px; }.site-footer small { font: 700 9px monospace; }
+.final-cta { background: var(--orange); border-block: 1px solid var(--ink); }.final-cta .page-shell { min-height: 280px; display: flex; align-items: center; gap: 30px; }.huge-pick { width: 120px; height: 120px; display: grid; place-items: center; border-radius: 50%; background: var(--ink); color: var(--acid); transform: rotate(-8deg); }.huge-pick .icon { width: 48px; height: 48px; }.final-cta div > span { font: 800 10px monospace; letter-spacing: .1em; }.final-cta h2 { margin: 7px 0 0; font-size: clamp(52px, 7vw, 94px); }.final-cta .primary-button { margin-left: auto; }.primary-button.invert { background: var(--ink); color: white; box-shadow: 4px 4px 0 var(--acid); }
+.site-footer { min-height: 150px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; }.site-footer-content { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 24px 34px; }.site-footer-product { display: flex; gap: 22px; text-transform: uppercase; font-weight: 800; font-size: 10px; }.site-footer small { font: 700 9px monospace; }
 /* The legal cluster reads as its own group: same scale as the product nav, dimmer, and behind a
    rule, so a visitor can tell the game's pages from the notices. */
-.site-footer-legal { display: flex; gap: 18px; padding-left: 40px; border-left: 1px solid var(--line); text-transform: uppercase; font-weight: 800; font-size: 10px; }
+.site-footer-legal { display: flex; gap: 18px; padding-left: 34px; border-left: 1px solid var(--line); text-transform: uppercase; font-weight: 800; font-size: 10px; }
 .site-footer-legal a { color: var(--muted); }
 .site-footer-legal a:hover { color: var(--ink); }
 
@@ -316,7 +318,8 @@ a { color: inherit; text-decoration: none; }
 }
 
 @media (max-width: 680px) {
-  .page-shell { width: min(100% - 28px, 1240px); }.site-header { padding-inline: 14px; position: relative; }.site-header .launch-button { display: none; }.site-header nav { justify-content: flex-start; }.site-header nav a, .site-header nav button { padding-inline: 7px; }.wallet-button { max-width: 150px; overflow: hidden; }.wallet-menu { width: min(280px, calc(100vw - 28px)); }.hero { padding-block: 50px; }.hero h1 { font-size: clamp(47px, 15vw, 70px); }.hero-copy > p { font-size: 15px; }.hero-actions { flex-direction: column; gap: 12px; }.trust-row { gap: 10px; }.mine-console { transform: none; }.mine-scene { height: 210px; }.block-stats div { padding: 13px 9px; }.block-stats strong { font-size: 12px; }.ticker { animation-duration: 20s; }.dashboard-title { align-items: flex-start; flex-direction: column; gap: 14px; }.dashboard-kpis { grid-template-columns: 1fr; }.dashboard-kpis article { border-right: 0; }.discover { padding-block: 72px; }.section-heading { align-items: flex-start; flex-direction: column; }.filter-tabs { width: 100%; flex-wrap: nowrap; overflow-x: auto; }.filter-tabs button { white-space: nowrap; }.token-grid { grid-template-columns: 1fr; }.leaderboard-row { grid-template-columns: 34px minmax(110px,1.5fr) 1fr; padding-inline: 9px; }.leaderboard-row > :last-child { display: none; }.selected-heading { align-items: flex-start; flex-direction: column; gap: 18px; }.selected-grid { grid-template-columns: 1fr; }.selected-grid > div { border-right: 0; }.steps { grid-template-columns: 1fr; }.steps article { min-height: 260px; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.16); }.protocol { padding-block: 75px; }.stack-map { grid-template-columns: 1fr; padding: 48px 16px 16px; }.stack-node, .main-node, .stack-footer { grid-column: 1; }.stack-footer { overflow-x: auto; }.how-section { padding-block: 72px; }.section-heading.light p { margin: 0; }.huge-pick { width: 80px; height: 80px; }.huge-pick svg { width: 44px; }.final-cta h2 { font-size: 51px; }.final-cta .primary-button { margin-left: 0; }.site-footer { padding-block: 42px; flex-wrap: wrap; gap: 18px; }.site-footer > div { margin-left: 0; width: 100%; }.launch-modal { padding: 28px 20px; box-shadow: 5px 5px 0 var(--acid); }.launch-modal h2 { font-size: 42px; }.form-grid { grid-template-columns: 1fr; }.crew-modal, .report-modal { padding: 24px 18px; box-shadow: 5px 5px 0 var(--acid); }.crew-stats, .report-grid { grid-template-columns: 1fr; }.report-actions { flex-direction: column; }.mining-dashboard { padding-bottom: 56px; }.mining-dashboard-heading { align-items: flex-start; flex-direction: column; }.mining-kpis, .mining-dashboard-grid, .mining-charts { grid-template-columns: 1fr; }.mining-kpis article, .ore-storage-panel, .crew-overview-panel, .reward-projection-chart { border-right: 0; }.mining-session-panel { grid-column: auto; }.crew-levels { grid-template-columns: 1fr; }.mining-connect-panel { align-items: flex-start; flex-direction: column; }
+  .page-shell { width: min(100% - 28px, 1240px); }.site-header { padding-inline: 14px; position: relative; }.site-header .launch-button { display: none; }.site-header nav { justify-content: flex-start; }.site-header nav a, .site-header nav button { padding-inline: 7px; }.wallet-button { max-width: 150px; overflow: hidden; }.wallet-menu { width: min(280px, calc(100vw - 28px)); }.hero { padding-block: 50px; }.hero h1 { font-size: clamp(47px, 15vw, 70px); }.hero-copy > p { font-size: 15px; }.hero-actions { flex-direction: column; gap: 12px; }.trust-row { gap: 10px; }.mine-console { transform: none; }.mine-scene { height: 210px; }.block-stats div { padding: 13px 9px; }.block-stats strong { font-size: 12px; }.ticker { animation-duration: 20s; }.dashboard-title { align-items: flex-start; flex-direction: column; gap: 14px; }.dashboard-kpis { grid-template-columns: 1fr; }.dashboard-kpis article { border-right: 0; }.discover { padding-block: 72px; }.section-heading { align-items: flex-start; flex-direction: column; }.filter-tabs { width: 100%; flex-wrap: nowrap; overflow-x: auto; }.filter-tabs button { white-space: nowrap; }.token-grid { grid-template-columns: 1fr; }.leaderboard-row { grid-template-columns: 34px minmax(110px,1.5fr) 1fr; padding-inline: 9px; }.leaderboard-row > :last-child { display: none; }.selected-heading { align-items: flex-start; flex-direction: column; gap: 18px; }.selected-grid { grid-template-columns: 1fr; }.selected-grid > div { border-right: 0; }.steps { grid-template-columns: 1fr; }.steps article { min-height: 260px; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.16); }.protocol { padding-block: 75px; }.stack-map { grid-template-columns: 1fr; padding: 48px 16px 16px; }.stack-node, .main-node, .stack-footer { grid-column: 1; }.stack-footer { overflow-x: auto; }.how-section { padding-block: 72px; }.section-heading.light p { margin: 0; }.huge-pick { width: 80px; height: 80px; }.huge-pick .icon { width: 40px; height: 40px; }.final-cta h2 { font-size: 51px; }.final-cta .primary-button { margin-left: 0; }.site-footer { padding-block: 42px; }.site-footer-content { gap: 18px 22px; }.site-footer-product { margin-left: 0; width: auto; }.launch-modal { padding: 28px 20px; box-shadow: 5px 5px 0 var(--acid); }.launch-modal h2 { font-size: 42px; }.form-grid { grid-template-columns: 1fr; }.crew-modal, .report-modal { padding: 24px 18px; box-shadow: 5px 5px 0 var(--acid); }.crew-stats, .report-grid { grid-template-columns: 1fr; }.report-actions { flex-direction: column; }.mining-dashboard { padding-bottom: 56px; }.mining-dashboard-heading { align-items: flex-start; flex-direction: column; }.mining-kpis, .mining-dashboard-grid, .mining-charts { grid-template-columns: 1fr; }.mining-kpis article, .ore-storage-panel, .crew-overview-panel, .reward-projection-chart { border-right: 0; }.mining-session-panel { grid-column: auto; }.crew-levels { grid-template-columns: 1fr; }.mining-connect-panel { align-items: flex-start; flex-direction: column; }
+  .hero h1 span { white-space: normal; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -592,24 +595,68 @@ a { color: inherit; text-decoration: none; }
 .rarity-mythic { border-left: 3px solid var(--orange); }
 
 /* Notifications bell (spec 75) */
-.notifications { position: relative; }
-.notifications-bell { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid var(--ink); border-radius: 3px; background: transparent; position: relative; }
+/*
+ * The bell and its dropdown (spec 75).
+ *
+ * The panel hangs off a control in the sticky header and is narrow, so nothing inside it may be
+ * wider than the panel. The payload strings the Worker sends are mint addresses and timestamps with
+ * no spaces to break at, and because the panel scrolls vertically its horizontal axis computes to
+ * `auto` - which is what turned one long value into a scrollbar across the whole popover. Every row
+ * below therefore wraps, every flex child may shrink, and unbreakable text is allowed to break.
+ */
+.notifications { position: relative; min-width: 0; }
+.notifications-bell { min-height: 42px; padding: 0 10px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--ink); border-radius: var(--radius-sm); background: transparent; color: var(--ink); position: relative; white-space: nowrap; }
 .notifications-bell.has-unread { background: var(--acid); }
-.notifications-bell.is-disabled { display: grid; place-items: center; border: 1px solid var(--line); border-radius: 3px; color: var(--muted); opacity: .6; }
-.notifications-count { position: absolute; top: -7px; right: -7px; min-width: 18px; height: 18px; padding: 0 4px; display: grid; place-items: center; border-radius: 9px; background: var(--orange); color: white; font: 900 9px monospace; font-style: normal; }
-.notifications-menu { position: absolute; right: 0; top: 50px; width: min(340px, calc(100vw - 28px)); max-height: 70vh; overflow-y: auto; background: var(--paper); border: 1px solid var(--ink); box-shadow: 5px 5px 0 var(--acid); z-index: 60; }
-.notifications-menu header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-bottom: 1px solid var(--ink); }
-.notifications-menu header strong { font: 900 10px monospace; text-transform: uppercase; letter-spacing: .08em; }
-.notifications-menu header div { display: flex; gap: 6px; }
-.notifications-menu header button { width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid var(--line); background: transparent; }
-.notifications-menu ul { margin: 0; padding: 0; list-style: none; }
-.notifications-menu li { padding: 12px; border-bottom: 1px solid var(--line); display: grid; gap: 5px; }
-.notifications-menu li.is-read { opacity: .6; }
-.notifications-item-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.notifications-item-head strong { font: 900 12px Arial Black; text-transform: uppercase; }
-.notifications-item-head small { color: var(--muted); font: 700 8px monospace; }
-.notifications-menu li span { color: var(--muted); font: 700 9px monospace; }
-.notifications-empty { margin: 0; padding: 22px 14px; text-align: center; color: var(--muted); font: 700 10px monospace; }
+.notifications-bell.is-disabled { border-color: var(--line); color: var(--muted); opacity: .6; }
+.notifications-bell-label { font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 900; line-height: 1; letter-spacing: .06em; text-transform: uppercase; }
+.notifications-count { position: absolute; top: -7px; right: -7px; min-width: 18px; height: 18px; padding: 0 4px; display: grid; place-items: center; border-radius: var(--radius-pill); background: var(--orange); color: white; font-family: var(--font-mono); font-size: 9px; font-weight: 900; line-height: 1; font-style: normal; }
+.notifications-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 60; width: min(360px, calc(100vw - 28px)); max-width: calc(100vw - 28px); max-height: min(70vh, calc(100vh - var(--header-h) - 24px)); display: flex; flex-direction: column; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; background: var(--paper); border: 1px solid var(--ink); box-shadow: var(--shadow-hard); }
+.notifications-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-3); border-bottom: 1px solid var(--ink); }
+.notifications-title { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.notifications-title strong { font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 900; line-height: 1.3; letter-spacing: .08em; text-transform: uppercase; overflow-wrap: anywhere; }
+/* The alerts glyph is the shipped raster asset, masked so it paints in the panel's own ink. */
+.notifications-title-glyph { flex: none; width: 18px; height: 18px; background-color: currentColor; -webkit-mask: url(/assets/icons/alerts.png) center / contain no-repeat; mask: url(/assets/icons/alerts.png) center / contain no-repeat; }
+.notifications-head-actions { display: flex; flex: none; gap: 6px; }
+.notifications-action { width: 32px; height: 32px; padding: 0; display: grid; place-items: center; border: 1px solid var(--line); border-radius: var(--radius-sm); background: transparent; color: var(--ink); }
+.notifications-action:hover:not(:disabled) { background: white; border-color: var(--ink); }
+.notifications-action:disabled { color: var(--muted); opacity: .55; }
+/*
+ * A failed read, stated in full: what could not be done, and what the service answered. It is a row
+ * of the same list the alerts would have filled, so it is never mistaken for an empty bell.
+ */
+.notifications-list .notifications-notice { display: grid; gap: 6px; border-bottom: 1px solid var(--line); border-left: 4px solid var(--danger); background: #fbe9e4; color: #6d1d10; }
+.notifications-notice-body { display: grid; gap: 4px; min-width: 0; font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 700; line-height: 1.5; overflow-wrap: anywhere; }
+.notifications-notice-body strong { font-weight: 900; }
+.notifications-retry { justify-self: start; margin-top: 2px; min-height: 30px; padding: 0 10px; border: 1px solid var(--danger); border-radius: var(--radius-sm); background: transparent; color: inherit; font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.notifications-retry:disabled { opacity: .55; }
+.notifications-list { margin: 0; padding: 0; list-style: none; }
+.notifications-list li { padding: var(--space-3); display: grid; gap: 5px; min-width: 0; border-bottom: 1px solid var(--line); }
+.notifications-list li:last-child { border-bottom: 0; }
+.notifications-list li.is-read { opacity: .6; }
+.notifications-item-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 10px; min-width: 0; }
+.notifications-item-head strong { min-width: 0; font-family: var(--font-display); font-size: var(--text-sm); font-weight: 900; line-height: 1.3; text-transform: uppercase; overflow-wrap: anywhere; }
+.notifications-item-actions { display: flex; flex: none; align-items: center; gap: 6px; }
+.notifications-item-head small { color: var(--muted); font-family: var(--font-mono); font-size: 9px; font-weight: 700; line-height: 1.3; white-space: nowrap; }
+.notifications-item-read { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border: 1px solid var(--line); border-radius: var(--radius-sm); background: transparent; color: var(--ink); }
+.notifications-item-read:hover:not(:disabled) { background: white; border-color: var(--ink); }
+.notifications-item-read:disabled { opacity: .55; }
+.notifications-payload { display: grid; gap: 2px; min-width: 0; }
+.notifications-payload span { color: var(--muted); font-family: var(--font-mono); font-size: 9px; font-weight: 700; line-height: 1.5; overflow-wrap: anywhere; }
+.notifications-empty { margin: 0; padding: 22px 14px; text-align: center; color: var(--muted); font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 700; line-height: 1.6; }
+
+@media (max-width: 640px) {
+  /*
+   * On a phone the panel takes the width of the header instead of hanging off the bell. The bell is
+   * not the last control in the header row, so anchoring the panel to its right edge would push the
+   * left edge of a 360px panel past the viewport on a 360px screen. The header is full width and
+   * pinned to the top, so its box and the viewport agree on where the panel belongs.
+   */
+  .notifications-menu { position: fixed; left: var(--space-2); right: var(--space-2); top: calc(var(--header-h) + 4px); width: auto; max-width: none; max-height: calc(100vh - var(--header-h) - 16px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notifications-action .spin { animation: none; }
+}
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -698,6 +745,10 @@ a { color: inherit; text-decoration: none; }
 
 .page-home .hero { grid-template-columns: 1.04fr .96fr; min-height: 620px; }
 
+@media (min-width: 1321px) {
+  .page-home .hero h1 { font-size: clamp(64px, 5vw, 72px); }
+}
+
 .token-balances { display: grid; gap: 9px; margin-top: 4px; }
 .token-balances ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 7px; }
 .token-balances li { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 10px; font: 700 11px monospace; }
@@ -734,6 +785,19 @@ a { color: inherit; text-decoration: none; }
 /* The card floats over the page, so the page keeps room for it while it is up: no call to action
    ends up underneath it. */
 body.has-consent { padding-bottom: 190px; }
+
+/*
+ * The card steps aside while the header has a popover open - the alerts panel or the wallet menu -
+ * or while the navigation drawer is out. Both are overlays a player opened on purpose, and both
+ * cover the corner this card anchors to: leaving the card up would either hide the popover or leave
+ * the card's own buttons underneath it, which is a notice that cannot be answered. Stepping aside
+ * decides nothing - the card is React state, not a stored choice - so it returns with both options
+ * intact the moment the overlay closes. The drawer is named by its open class only below 1180px;
+ * above that it is a persistent column on the other side of the page and the card never meets it.
+ */
+body:has(.site-header .notifications-menu) .consent-banner,
+body:has(.site-header .wallet-menu) .consent-banner,
+body:has(.app-sidebar.is-open) .consent-banner { display: none; }
 
 @media (max-width: 760px) {
   .consent-banner { left: max(12px, env(safe-area-inset-left)); right: max(12px, env(safe-area-inset-right)); bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 10px); width: auto; }
@@ -820,6 +884,79 @@ body.has-modal { overflow: hidden; }
    the Mining Reserve after it (see emissionSource in shared/types.ts). */
 .badge-curve { color: var(--ink); background: var(--acid); }
 .badge-reserve { color: var(--muted); background: var(--paper-3); }
+
+/* --- v2 player onboarding -------------------------------------------------------------------
+   Two ways to play, stated side by side before anything is signed: starter mode, which costs
+   nothing beyond the player account's rent, and the bond, which is returned in full after a
+   seven-day cooldown. The copy for both lives in src/constants.ts so the numbers cannot drift
+   from the frozen account table. */
+.onboarding-panel { display: grid; gap: var(--space-5); }
+.onboarding-state { display: flex; align-items: center; gap: var(--space-3); }
+.onboarding-grid { display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.onboarding-card {
+  display: grid; gap: var(--space-3); align-content: start;
+  padding: var(--space-5); border: 1px solid var(--line); border-radius: var(--radius-md);
+  background: var(--paper-2); box-shadow: var(--shadow-hard-sm);
+}
+.onboarding-card h3 { display: flex; align-items: center; gap: var(--space-2); margin: 0; font: 800 var(--text-md)/1.2 var(--font-display); text-transform: uppercase; letter-spacing: .02em; }
+.onboarding-card p { margin: 0; color: var(--ink-2); }
+.onboarding-card-bond { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.onboarding-card-bond p { color: var(--paper-3); }
+.onboarding-card-bond .onboarding-list li { color: var(--paper-3); }
+.onboarding-fine { color: var(--muted); font: var(--text-sm)/1.5 var(--font-mono); }
+.onboarding-list { margin: 0; padding-left: var(--space-5); display: grid; gap: var(--space-2); font: var(--text-sm)/1.5 var(--font-mono); }
+.onboarding-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
+.onboarding-ok { color: var(--success); }
+.onboarding-error { color: var(--danger); }
+
+/* --- the launch cost note -------------------------------------------------------------------
+   The exact figure the creator pays, broken into the three accounts' rent and the network fee,
+   plus the one thing that can move it: an active LaunchRentSubsidy event. */
+.launch-cost {
+  display: grid; gap: var(--space-3); padding: var(--space-4);
+  border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper-2);
+}
+.launch-cost-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+.launch-cost-label { font: 800 var(--text-xs)/1 var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.launch-cost-total { font: 800 var(--text-lg)/1 var(--font-display); }
+.launch-cost-breakdown { margin: 0; display: grid; gap: var(--space-1); }
+.launch-cost-breakdown > div { display: flex; justify-content: space-between; gap: var(--space-3); }
+.launch-cost-breakdown dt { color: var(--muted); font: var(--text-sm)/1.4 var(--font-mono); }
+.launch-cost-breakdown dd { margin: 0; font: var(--text-sm)/1.4 var(--font-mono); }
+.launch-sponsored {
+  display: flex; align-items: flex-start; gap: var(--space-2); margin: 0;
+  padding: var(--space-3); border-radius: var(--radius-sm);
+  background: rgba(215, 255, 63, .28); color: var(--ink); font: var(--text-sm)/1.5 var(--font-mono);
+}
+.launch-cost-note { margin: 0; color: var(--muted); font: var(--text-sm)/1.5 var(--font-mono); }
+
+/* --- the sponsor console --------------------------------------------------------------------
+   The only admin surface that is not governance: the vault is the operator's own, holds
+   lamports, and can never be a program or config authority. */
+.sponsor-panel { display: grid; gap: var(--space-4); }
+.sponsor-intro { margin: 0; max-width: 68ch; color: var(--muted); font: var(--text-sm)/1.6 var(--font-mono); }
+.sponsor-empty { display: grid; gap: var(--space-3); justify-items: start; }
+.sponsor-vault-stats { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin: 0; }
+.sponsor-vault-stats > div { display: grid; gap: 2px; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper-2); }
+.sponsor-vault-stats dt { color: var(--muted); font: 800 var(--text-xs)/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; }
+.sponsor-vault-stats dd { margin: 0; font: 800 var(--text-md)/1.2 var(--font-mono); }
+.sponsor-forms { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.sponsor-forms form { display: flex; align-items: flex-end; gap: var(--space-3); }
+.sponsor-forms label { flex: 1; display: grid; gap: var(--space-1); font: 800 var(--text-xs)/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.sponsor-event-form { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper-2); }
+.sponsor-event-form h3 { margin: 0; font: 800 var(--text-md)/1 var(--font-display); text-transform: uppercase; }
+.sponsor-kind-detail { margin: 0; color: var(--muted); font: var(--text-sm)/1.5 var(--font-mono); }
+.sponsor-event-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.sponsor-proposal { display: grid; gap: var(--space-2); justify-items: start; }
+.sponsor-proposal textarea { width: 100%; font: var(--text-xs)/1.4 var(--font-mono); }
+.sponsor-events { display: grid; gap: var(--space-3); }
+.sponsor-events h3 { margin: 0; font: 800 var(--text-md)/1 var(--font-display); text-transform: uppercase; }
+.sponsor-event-row { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper-2); }
+.sponsor-event-row header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.sponsor-budget { display: grid; gap: var(--space-2); }
+.sponsor-budget-bar { height: 6px; border: 1px solid var(--line); border-radius: var(--radius-pill); overflow: hidden; background: var(--paper-3); }
+.sponsor-budget-bar i { display: block; height: 100%; background: var(--purple); }
+.sponsor-budget span { color: var(--muted); font: var(--text-xs)/1.4 var(--font-mono); }
 /* The .badge primitive in its square, clickable form: a mine's token symbol, or a jump to its page.
    Everything except the shape comes from .badge, so a change to the badge scale carries over. */
 .ledger-token { padding: 6px var(--space-2); border-color: var(--line); border-radius: var(--radius-sm); background: white; color: var(--ink); letter-spacing: normal; }
@@ -869,6 +1006,19 @@ body.has-modal { overflow: hidden; }
 .wallet-button.is-signed .wallet-dot { background: var(--acid); box-shadow: 0 0 0 3px rgba(215,255,63,.25); }
 .wallet-disconnect { width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--radius-sm); }
 .signed-wallet { display: flex; align-items: center; gap: 6px; }
+.header-alerts-control { display: inline-flex; align-items: center; }
+.header-alerts-control .notifications-bell { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 42px; }
+.header-alerts-control .notifications-bell::before { content: ""; width: 22px; height: 22px; flex: none; background-color: currentColor; -webkit-mask: var(--header-alerts-icon) center / contain no-repeat; mask: var(--header-alerts-icon) center / contain no-repeat; }
+/*
+ * The alerts panel and the wallet menu hang off controls in the sticky header, which is a stacking
+ * context of its own at z-index 80, while the consent notice is fixed at 95. So the notice painted
+ * over an open popover - the panel was readable everywhere except the corner the card occupies, and
+ * on a short viewport that corner is exactly where a long list of alerts ends up. The header lifts
+ * above the notice for as long as one of its popovers is open and drops back the moment it closes,
+ * so nothing else that shares the band is reordered by it. The notice stands down for the same
+ * moment; see the consent block for why that is a step aside rather than a dismissal.
+ */
+.site-header:has(.notifications-menu), .site-header:has(.wallet-menu) { z-index: 96; }
 .wallet-menu-error { margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--danger); border-left-width: 4px; border-radius: var(--radius-sm); background: #fbe9e4; color: #6d1d10; font: 700 var(--text-xs)/1.5 var(--font-mono); }
 .wallet-menu-legal { margin: 0; padding-top: var(--space-2); border-top: 1px solid var(--line); color: var(--muted); font-size: var(--text-xs); line-height: 1.5; }
 .menu-button { display: none; width: 42px; height: 42px; place-items: center; border: 1px solid var(--ink); border-radius: var(--radius-sm); background: var(--paper-2); color: var(--ink); }
@@ -897,7 +1047,7 @@ body.has-modal { overflow: hidden; }
   .brand-slot-icon { display: inline-flex; }
   .brand-art, .brand-art-icon { width: 30px; height: 30px; object-fit: contain; }
   .wallet-button { height: 40px; padding: 0 12px; font-size: 11px; }
-  .wallet-control:not(.signed-wallet) .wallet-button span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .wallet-control:not(.signed-wallet) .wallet-button-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .site-menu { left: 14px; right: 14px; width: auto; }
   body { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); }
   .tab-bar { position: fixed; z-index: 90; left: 0; right: 0; bottom: 0; height: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); padding: 6px 6px env(safe-area-inset-bottom); display: grid; grid-template-columns: repeat(5, 1fr); background: var(--ink); border-top: 2px solid var(--acid); }
@@ -1118,6 +1268,114 @@ body.has-modal { overflow: hidden; }
   .discovery-event::after { display: none; }
 }
 
+/* Responsive application shell: persistent navigation on desktop, drawer navigation on mobile. */
+/* The brand sits above the sidebar, on the sidebar's own icon column - the drawer's padding plus the
+   padding of a nav row inside it - so it no longer tracks the content column that the 252px sidebar
+   pushes right. Only the right actions stay on the content band. The inset is derived from the same
+   token the sidebar uses, so the two cannot drift apart. */
+.app { --sidebar-inset: calc(var(--space-3) * 2); }
+.site-header { padding-left: var(--sidebar-inset); }
+.header-brand-group { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.sidebar-toggle, .sidebar-close { display: none; }
+.header-actions { margin-left: auto; min-width: 0; }
+.account-summary { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper-2); }
+.account-summary > span { min-width: 78px; min-height: 42px; padding: 5px 9px; display: grid; grid-template-columns: 23px auto; grid-template-rows: auto auto; align-content: center; column-gap: 6px; color: var(--muted); }
+.account-summary > span + span { border-left: 1px solid var(--line); }
+.account-summary .icon { grid-row: 1 / 3; align-self: center; color: var(--ink); }
+.account-summary b { color: var(--ink); font: 900 12px/1 var(--font-mono); white-space: nowrap; }
+.account-summary small { font: 800 8px/1.2 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+
+.app-sidebar { position: fixed; z-index: 75; inset: var(--header-h) auto 0 0; width: 252px; height: calc(100dvh - var(--header-h)); padding: var(--space-4) var(--space-3); display: flex; flex-direction: column; gap: var(--space-5); background: var(--paper-2); border-right: 1px solid var(--line); overflow: hidden; }
+.sidebar-head { min-height: 32px; padding: 0 var(--space-2); display: flex; align-items: center; justify-content: flex-end; color: var(--muted); font: 800 var(--text-xs)/1 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; }
+.sidebar-nav { min-height: 0; overflow-y: auto; align-content: start; overscroll-behavior: contain; display: grid; gap: var(--space-5); }
+.sidebar-section { display: grid; gap: 3px; }
+.sidebar-section h2 { margin: 0 0 var(--space-1); padding: 0 var(--space-3); color: var(--muted); font: 800 var(--text-xs)/1 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; }
+.sidebar-link { min-height: 44px; padding: 0 var(--space-3); display: flex; align-items: center; gap: 12px; border: 1px solid transparent; border-radius: var(--radius-sm); color: #4c4e46; font-weight: 800; font-size: var(--text-md); }
+.sidebar-link:hover { border-color: var(--line); background: white; color: var(--ink); }
+.sidebar-link.active { border-color: var(--ink); background: var(--acid); color: var(--ink); }
+.sidebar-home { border-color: var(--line); background: white; }
+.sidebar-shortcuts { flex: 0 0 auto; margin-top: auto; padding-top: var(--space-3); display: grid; gap: 4px; border-top: 1px solid var(--line); }
+.sidebar-profile { min-height: 58px; }
+.sidebar-profile > span { min-width: 0; display: grid; gap: 3px; }
+.sidebar-profile small { color: var(--muted); font: 800 8px/1 var(--font-mono); letter-spacing: .1em; text-transform: uppercase; }
+.sidebar-profile b { overflow: hidden; color: var(--ink); font: 900 var(--text-sm)/1.2 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-backdrop { display: none; }
+.app > main, .app > .site-footer { margin-left: 252px; }
+.app > .site-footer { width: min(1240px, calc(100% - 300px)); }
+.watchlist-panel { scroll-margin-top: calc(var(--header-h) + var(--space-4)); }
+
+@media (max-width: 1320px) {
+  .account-summary > span { min-width: 62px; padding-inline: 7px; }
+  .account-summary small { display: none; }
+  .site-header .launch-button > span:not(.icon) { display: none; }
+  .site-header .launch-button { width: 42px; padding: 0; justify-content: center; }
+  .page-home .hero { grid-template-columns: 1fr; gap: 48px; }
+  .page-home .hero-copy { text-align: center; }
+  .page-home .hero-copy > p { margin-inline: auto; }
+  .page-home .hero-actions, .page-home .trust-row { justify-content: center; }
+  .page-home .mine-console { max-width: 620px; width: 100%; margin: auto; }
+}
+
+@media (max-width: 1180px) {
+  .sidebar-toggle { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid var(--ink); border-radius: var(--radius-sm); background: var(--paper-2); color: var(--ink); }
+  .app-sidebar { width: min(320px, calc(100vw - 48px)); transform: translateX(-101%); transition: transform var(--dur-med) var(--ease-out); box-shadow: none; }
+  .app-sidebar.is-open { transform: translateX(0); box-shadow: 8px 0 24px rgba(23, 24, 19, .18); }
+  .sidebar-close { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: var(--radius-sm); background: white; color: var(--ink); }
+  .sidebar-backdrop { position: fixed; z-index: 74; inset: var(--header-h) 0 0; display: block; width: 100%; border: 0; background: rgba(23, 24, 19, .36); }
+  .app > main, .app > .site-footer { margin-left: 0; }
+  .app > .site-footer { width: min(1240px, calc(100% - 48px)); }
+}
+
+@media (max-width: 820px) {
+  .account-summary > span:nth-child(-n + 2) { display: none; }
+  .site-header .wallet-button-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .site-header .wallet-button { width: 42px; padding: 0; justify-content: center; }
+  .site-header .wallet-button .wallet-dot { display: none; }
+  .site-footer-content { width: 100%; }
+}
+
+@media (max-width: 680px) {
+  .site-header { padding-inline: 14px; gap: 8px; }
+  .header-actions { gap: 6px; }
+  .account-summary > span { min-width: 58px; padding-inline: 7px; }
+  .site-header .launch-button { display: none; }
+  .sidebar-toggle { width: 40px; height: 40px; }
+  /*
+   * One 64px row has to hold the drawer button, the brand, the wallet readout and three controls
+   * here, and the word "Alerts" was the widest thing in it that a player does not click. The button
+   * names itself "N unread notifications" through its own aria-label, so on a phone the glyph is
+   * the whole control - a 42px square, level with the wallet button beside it, with the unread
+   * badge still hanging off its corner. Without this the action cluster overflowed the row and
+   * pushed the wallet control 29px past a 390px viewport.
+   */
+  .header-alerts-control .notifications-bell { width: 42px; padding: 0; }
+  .header-alerts-control .notifications-bell-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .app-sidebar { top: var(--header-h); }
+  .app > .site-footer { width: calc(100% - 28px); }
+  .site-footer-content { justify-content: center; }
+}
+
+/*
+ * Below 480px the brand's wordmark yields to its glyph: the link still announces "Diggo.fun home"
+ * and still carries the raster mark, while the row itself belongs to the controls. Both clusters
+ * used to be squeezed into less room than their contents needed, which clipped the wordmark to
+ * "Digg" and pushed the wallet control off the right edge.
+ */
+@media (max-width: 480px) {
+  .site-header .brand strong { display: none; }
+}
+
+/*
+ * The drawer ends where the tab bar begins. It used to run the full height of the page, so its
+ * shortcut rows - the watchlist link and the profile row - sat under the bar: the profile row was
+ * half behind it and could not be scrolled clear of it, because the drawer's own scroll range ended
+ * past the viewport. The bar is opaque and covers the same pixels either way, so the drawer looks
+ * unchanged and simply stops short of it.
+ */
+@media (max-width: 760px) {
+  .app-sidebar { bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); }
+}
+
 
 /* Dev-only UI gallery (/__ui) */
 .ui-gallery-intro { padding-top: var(--space-5); display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
@@ -1152,3 +1410,54 @@ body.has-modal { overflow: hidden; }
 .curve-mining-meta { display: flex; flex-wrap: wrap; gap: 6px var(--space-4); font: 700 var(--text-xs)/1.5 var(--font-mono); color: var(--muted); }
 .curve-mining-meta b { color: var(--ink); }
 .curve-mining-source { color: var(--muted); font-size: var(--text-xs); }
+
+/* Referrals: the link editor, counters, and attributed-player ledger. */
+.referrals-page { padding-block: 44px 90px; display: grid; gap: 22px; }
+.referrals-page .section-heading { margin-bottom: 0; align-items: end; }
+.referrals-page .section-heading h1 { margin: 14px 0 18px; font: 950 clamp(45px, 5vw, 67px)/.84 var(--font-display); letter-spacing: -.075em; }
+.section-intro { max-width: 580px; margin: 0; color: var(--muted); line-height: 1.6; font-size: 14px; }
+.referral-link-card, .referral-table-card { display: grid; gap: 16px; padding: 24px; }
+.referral-link-card label { font: 900 10px var(--font-mono); letter-spacing: .1em; text-transform: uppercase; }
+.referral-link-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.referral-link-row code { white-space: nowrap; font: 800 13px var(--font-mono); color: var(--muted); }
+.referral-link-row input { flex: 1; min-width: 0; border: 1px solid var(--ink); background: #faf8f1; padding: 12px; font: 800 14px var(--font-mono); }
+.referral-link-row .btn { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 7px; }
+.referral-link-preview { display: block; min-width: 0; overflow: hidden; color: var(--muted); font: 700 12px/1.5 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.referral-code-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.referral-code-actions small { color: var(--muted); font: 700 10px/1.4 var(--font-mono); }
+.referral-totals { display: grid; grid-template-columns: repeat(5, 1fr); border: 1px solid var(--ink); background: var(--paper-2); }
+.referral-total { display: grid; gap: 8px; padding: 18px; border-right: 1px solid var(--line); }
+.referral-total:last-child { border-right: 0; }
+.referral-total span { color: var(--muted); font: 800 9px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; }
+.referral-total strong { font: 900 25px var(--font-mono); }
+.referral-table-head { display: flex; justify-content: space-between; align-items: start; gap: 18px; }
+.referral-table-head h2 { margin: 0; }
+.referral-table-head p { margin: 7px 0 0; color: var(--muted); font: 700 11px/1.5 var(--font-mono); }
+.referral-table { border: 1px solid var(--ink); overflow-x: auto; }
+.referral-row { display: grid; grid-template-columns: minmax(130px, 1.4fr) 90px minmax(150px, 1.6fr) 130px 120px; align-items: center; gap: 14px; min-width: 760px; padding: 13px 14px; border-bottom: 1px solid var(--line); font: 700 12px var(--font-mono); }
+.referral-row:last-child { border-bottom: 0; }
+.referral-table-labels { color: var(--muted); font: 800 9px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; background: var(--paper-2); }
+.referral-player { display: grid; gap: 3px; }
+.referral-player small { color: var(--muted); font: 700 10px var(--font-mono); }
+.referral-volume { display: grid; gap: 5px; }
+.referral-volume .progress { margin: 0; }
+.referral-status { font-weight: 900; text-transform: uppercase; font-size: 10px; }
+.referral-status.qualified, .referral-status.rewarded { color: #557000; }
+.referral-status.rejected { color: #a00000; }
+.referral-pagination { display: flex; justify-content: center; align-items: center; gap: 16px; color: var(--muted); font: 800 11px var(--font-mono); }
+.referral-empty { min-height: 160px; }
+.referral-error { color: #8d1b1b; }
+.referral-message { color: #355f00; }
+.portfolio-referral-card { display: grid; gap: 10px; color: var(--ink); text-decoration: none; }
+.portfolio-referral-card:hover { background: #fffdf7; }
+.portfolio-referral-card strong { font: 900 24px/1 var(--font-display); text-transform: uppercase; }
+.portfolio-referral-card > span:not(.eyebrow) { color: var(--muted); font: 700 12px/1.5 var(--font-mono); }
+.portfolio-referral-card small { display: flex; gap: 6px; align-items: center; color: var(--ink); font: 900 10px var(--font-mono); text-transform: uppercase; }
+@media (max-width: 760px) {
+  .referrals-page { padding-block: 26px calc(var(--tabbar-h) + 50px); }
+  .referral-totals { grid-template-columns: repeat(2, 1fr); }
+  .referral-total:nth-child(2) { border-right: 0; }
+  .referral-total { border-bottom: 1px solid var(--line); }
+  .referral-total:nth-last-child(-n+2) { border-bottom: 0; }
+  .referral-table-head { flex-direction: column; }
+}

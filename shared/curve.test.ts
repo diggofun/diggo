@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { DIGGO_CONFIG } from "./config";
 import {
   CURVE_MINING_MIN_BLOCKS,
+  DEFAULT_DISCOVERY_RESERVE_BPS,
+  DEFAULT_RESERVE_BPS,
+  DEFAULT_VIRTUAL_SOL_BPS,
+  PRICE_SCALE,
+  QuoteError,
+  SLOTS_PER_SECOND,
   activeMineBudget,
+  accumulatePrice,
+  curveBuyOut,
+  curveSellOut,
+  curveSpotPriceLamportsPerUnit,
   curveMiningBlockReward,
   curveMiningCapFor,
   curveMiningDaysRemaining,
@@ -13,17 +24,43 @@ import {
   curveMiningRunwayIsValid,
   curveMiningStateOf,
   curveSellCapacity,
+  initialBlockReward,
   isCurveMiningCapReached,
   isCurveMiningDisabled,
   isCurveMiningOpen,
+  lamportsForUnits,
+  launchRentLamports,
+  maxCrankTip,
+  mulBps,
+  mulBpsV2,
+  netAfterTradeFees,
+  poolBuyOut,
+  poolSellOut,
+  poolSpotPriceLamportsPerUnit,
+  priceLamportsPerUnit,
+  quoteCurveBuy,
+  quoteCurveSell,
+  quotePoolBuy,
+  quotePoolSell,
+  splitFees,
+  splitPlatformBucket,
+  splitSupply,
+  splitTradeFees,
+  twapAverage,
+  unitsForLamports,
+  virtualSolReserve,
   type CurveMiningState,
+  type CurveMiningLedgerFields,
+  type CurveVenueReserves,
 } from "./curve";
+import { CONTRACT } from "./parity/vectors.contract.generated";
 import {
   DEFAULT_CURVE_MINING_BPS,
   DEFAULT_CURVE_MINING_RUNWAY_DAYS,
   MAX_CURVE_MINING_BPS,
   MAX_CURVE_MINING_RUNWAY_DAYS,
-  type DecodedLaunchMarket,
+  type DecodedCoin,
+  type DecodedLiquidityPool,
 } from "./program";
 
 /** A 950,000,000 base-unit curve inventory, i.e. 950 whole tokens at 6 decimals. */
@@ -35,20 +72,15 @@ const RUNWAY_BLOCKS = 8_640n;
 /** ceil(47,500,000 / 8,640). */
 const RATE = 5_498n;
 
-function market(overrides: Partial<DecodedLaunchMarket> = {}): DecodedLaunchMarket {
+/** The curve ledger and reserve pair these tests read, which a decoded Coin also satisfies. */
+type TestMarket = CurveMiningLedgerFields & CurveVenueReserves;
+
+function market(overrides: Partial<TestMarket> = {}): TestMarket {
   return {
-    mine: "Mine1111111111111111111111111111111111111111" as DecodedLaunchMarket["mine"],
     tokenReserve: INVENTORY,
     solReserve: 30_000_000_000n,
     virtualSolReserve: 5_000_000_000n,
-    graduationTarget: 85_000_000_000n,
     graduated: false,
-    creatorFeeClaimable: 0n,
-    platformFeeClaimable: 0n,
-    creatorFeeBps: 50,
-    platformFeeBps: 50,
-    bump: 255,
-    version: 2,
     curveMiningCap: CAP,
     curveMiningMined: 0n,
     curveMiningUnpaid: 0n,
@@ -260,5 +292,329 @@ describe("the read-only sell capacity of a curve", () => {
       unpaid: 400_000n,
       blockReward: RATE,
     });
+  });
+});
+
+/**
+ * The v2 coin vectors, generated from the Rust side and asserted here. When a value differs the
+ * Rust value wins and this file is the bug: the chain is what pays.
+ */
+describe("v2 coin parity (shared/parity/coin.json)", () => {
+  const vectors = JSON.parse(
+    readFileSync(new URL("./parity/coin.json", import.meta.url), "utf8"),
+  ) as {
+    supplySplit: {
+      totalSupply: string;
+      reserveBps: number;
+      discoveryReserveBps: number;
+      reserve: string;
+      discovery: string;
+      curve: string;
+    }[];
+    curve: {
+      tokenReserve: string;
+      solReserve: string;
+      virtualSolReserve: string;
+      netSol?: string;
+      tokensIn?: string;
+      tokensOut?: string;
+      grossSol?: string;
+    }[];
+    pool: {
+      tokenReserve: string;
+      solReserve: string;
+      netSol?: string;
+      tokensIn?: string;
+      tokensOut?: string;
+      grossSol?: string;
+    }[];
+    tradeFees: {
+      gross: string;
+      creatorFeeBps: number;
+      platformFeeBps: number;
+      creator: string;
+      platform: string;
+      net: string;
+    }[];
+    platformBucket: {
+      platformLamports: string;
+      crankPoolFeeBps: number;
+      crankPool: string;
+      treasury: string;
+    }[];
+    crankTip: { platformLamports: string; maxCrankTip: string }[];
+    twap: {
+      solReserve: string;
+      tokenReserve: string;
+      priceLamportsPerUnit: string;
+      cumAfter10Slots: string;
+      average20SlotsAt1xThen2x: string;
+    };
+    value: {
+      direction: "unitsToLamports" | "lamportsToUnits";
+      priceLamportsPerUnit: string;
+      units?: string;
+      lamports?: string;
+    }[];
+    launchRent: { mintLamports: string; coinLamports: string; vaultLamports: string; totalLamports: string };
+    mining: {
+      reserveRemaining: string;
+      epochLength: number;
+      blockInterval: number;
+      minimumReward: string;
+      initialBlockReward: string;
+      curveTokenInventory: string;
+      curveMiningBps: number;
+      curveMiningCap: string;
+      virtualSolBps: number;
+      virtualSolReserve: string;
+    };
+  };
+
+  it("splits a launch supply so the three parts add up to the whole", () => {
+    for (const vector of vectors.supplySplit) {
+      const split = splitSupply(
+        BigInt(vector.totalSupply),
+        vector.reserveBps,
+        vector.discoveryReserveBps,
+      );
+      expect(split.reserve).toBe(BigInt(vector.reserve));
+      expect(split.discovery).toBe(BigInt(vector.discovery));
+      expect(split.curve).toBe(BigInt(vector.curve));
+      expect(split.reserve + split.discovery + split.curve).toBe(BigInt(vector.totalSupply));
+    }
+  });
+
+  it("quotes the bonding curve the way the program pays it", () => {
+    for (const vector of vectors.curve) {
+      const tokenReserve = BigInt(vector.tokenReserve);
+      const solReserve = BigInt(vector.solReserve);
+      const virtualSolReserve = BigInt(vector.virtualSolReserve);
+      if (vector.tokensOut !== undefined) {
+        expect(curveBuyOut(tokenReserve, solReserve, virtualSolReserve, BigInt(vector.netSol!))).toBe(
+          BigInt(vector.tokensOut),
+        );
+      } else {
+        expect(
+          curveSellOut(tokenReserve, solReserve, virtualSolReserve, BigInt(vector.tokensIn!)),
+        ).toBe(BigInt(vector.grossSol!));
+      }
+    }
+  });
+
+  it("quotes the locked pool and never drains a side", () => {
+    for (const vector of vectors.pool) {
+      const tokenReserve = BigInt(vector.tokenReserve);
+      const solReserve = BigInt(vector.solReserve);
+      if (vector.tokensOut !== undefined) {
+        const out = poolBuyOut(tokenReserve, solReserve, BigInt(vector.netSol!));
+        expect(out).toBe(BigInt(vector.tokensOut));
+        expect(out).toBeLessThan(tokenReserve);
+      } else {
+        const gross = poolSellOut(tokenReserve, solReserve, BigInt(vector.tokensIn!));
+        expect(gross).toBe(BigInt(vector.grossSol!));
+        expect(gross).toBeLessThanOrEqual(solReserve);
+      }
+    }
+  });
+
+  it("splits a trade's fee without creating or losing a lamport", () => {
+    for (const vector of vectors.tradeFees) {
+      const gross = BigInt(vector.gross);
+      const fees = splitTradeFees(gross, vector.creatorFeeBps, vector.platformFeeBps);
+      expect(fees.creator).toBe(BigInt(vector.creator));
+      expect(fees.platform).toBe(BigInt(vector.platform));
+      expect(netAfterTradeFees(gross, fees)).toBe(BigInt(vector.net));
+      expect(netAfterTradeFees(gross, fees) + fees.creator + fees.platform).toBe(gross);
+    }
+    // The two shares together may never exceed the protocol cap, so a trade is never all fee.
+    expect(() => splitTradeFees(1_000n, 60, 60)).not.toThrow();
+    expect(splitTradeFees(1_000n, 60, 60).creator + splitTradeFees(1_000n, 60, 60).platform).toBe(
+      12n,
+    );
+  });
+
+  it("splits the protocol bucket between the treasury and the crank pool exactly", () => {
+    for (const vector of vectors.platformBucket) {
+      const bucket = BigInt(vector.platformLamports);
+      const split = splitPlatformBucket(bucket, vector.crankPoolFeeBps);
+      expect(split.crankPool).toBe(BigInt(vector.crankPool));
+      expect(split.treasury).toBe(BigInt(vector.treasury));
+      expect(split.crankPool + split.treasury).toBe(bucket);
+    }
+    for (const vector of vectors.crankTip) {
+      expect(maxCrankTip(BigInt(vector.platformLamports))).toBe(BigInt(vector.maxCrankTip));
+    }
+  });
+
+  it("prices the pool's own TWAP and never adopts a spot price outright", () => {
+    const { solReserve, tokenReserve, priceLamportsPerUnit: expected } = vectors.twap;
+    const price = priceLamportsPerUnit(BigInt(solReserve), BigInt(tokenReserve));
+    expect(price).toBe(BigInt(expected));
+    const cum = accumulatePrice(0n, price, 10n);
+    expect(cum).toBe(BigInt(vectors.twap.cumAfter10Slots));
+    const doubled = accumulatePrice(cum, price * 2n, 10n);
+    expect(twapAverage(doubled, 20n)).toBe(BigInt(vectors.twap.average20SlotsAt1xThen2x));
+  });
+
+  it("normalises a discovery's value by that price, rounding down", () => {
+    for (const vector of vectors.value) {
+      const price = BigInt(vector.priceLamportsPerUnit);
+      if (vector.direction === "unitsToLamports") {
+        expect(lamportsForUnits(BigInt(vector.units!), price)).toBe(BigInt(vector.lamports!));
+      } else {
+        expect(unitsForLamports(BigInt(vector.lamports!), price)).toBe(BigInt(vector.units!));
+      }
+    }
+  });
+
+  it("costs one launch exactly what the creator pays", () => {
+    const rent = launchRentLamports();
+    const rustCoin = CONTRACT.accounts.find((account) => account.name === "Coin");
+    const rustMint = CONTRACT.accounts.find((account) => account.name === "Mint");
+    expect(rustCoin).toEqual({ name: "Coin", size: 464, rentLamports: 4_120_320 });
+    expect(rustMint).toEqual({ name: "Mint", size: 438, rentLamports: 3_939_360 });
+    expect(rent.coin).toBe(BigInt(rustCoin!.rentLamports));
+    expect(rent.coin).toBe(4_120_320n);
+    expect(rent.mint).toBe(BigInt(rustMint!.rentLamports));
+    expect(rent.mint).toBe(3_939_360n);
+    expect(rent.total).toBe(10_098_960n);
+    expect(rent.mint).toBe(BigInt(vectors.launchRent.mintLamports));
+    expect(rent.coin).toBe(BigInt(vectors.launchRent.coinLamports));
+    expect(rent.vault).toBe(BigInt(vectors.launchRent.vaultLamports));
+    expect(rent.total).toBe(BigInt(vectors.launchRent.totalLamports));
+    // About a cent of SOL, which is the product constraint the whole design bends to.
+    expect(rent.total).toBeLessThan(10_500_000n);
+  });
+
+  it("spreads one epoch of the Mining Reserve over its blocks", () => {
+    const mining = vectors.mining;
+    expect(
+      initialBlockReward(
+        BigInt(mining.reserveRemaining),
+        mining.epochLength,
+        mining.blockInterval,
+        BigInt(mining.minimumReward),
+      ),
+    ).toBe(BigInt(mining.initialBlockReward));
+    expect(mulBpsV2(BigInt(mining.curveTokenInventory), mining.curveMiningBps)).toBe(
+      BigInt(mining.curveMiningCap),
+    );
+    expect(virtualSolReserve(BigInt("85000000000"))).toBe(BigInt(mining.virtualSolReserve));
+    expect(DEFAULT_VIRTUAL_SOL_BPS).toBe(mining.virtualSolBps);
+    expect(PRICE_SCALE).toBe(1_000_000_000_000n);
+    expect(SLOTS_PER_SECOND).toBe(2n);
+  });
+});
+
+/**
+ * The quote mirror (CCR-F4), which used to live in src/onchain/quotes.ts. It is only useful if it
+ * is exact, so these pin the arithmetic against hand-computed values with the same integer widths
+ * and the same truncation the Rust does. A change here is a change to what a form will sign.
+ */
+describe("the trade quotes", () => {
+  const curveCoin = (overrides: Partial<DecodedCoin> = {}) =>
+    ({
+      tokenReserve: 1_000_000n,
+      solReserve: 30_000_000_000n,
+      virtualSolReserve: 1_000_000_000n,
+      ...overrides,
+    }) as DecodedCoin;
+
+  const pool = (overrides: Partial<DecodedLiquidityPool> = {}) =>
+    ({
+      tokenReserve: 1_000_000n,
+      solReserve: 30_000_000_000n,
+      ...overrides,
+    }) as DecodedLiquidityPool;
+
+  it("truncates mul_bps, so a fee can never round up against the trader", () => {
+    // 101 * 50 / 10_000 is 0.505, and the program charges 0.
+    expect(mulBps(101n, 50)).toBe(0n);
+    expect(mulBps(1_000_000_000n, 50)).toBe(5_000_000n);
+    expect(mulBps).toBe(mulBpsV2);
+  });
+
+  it("takes the creator and platform shares off the top of a gross amount", () => {
+    const fees = splitFees(1_000_000_000n, { creatorFeeBps: 50, platformFeeBps: 50 });
+    expect(fees.creatorFee).toBe(5_000_000n);
+    expect(fees.platformFee).toBe(5_000_000n);
+    expect(fees.totalFee).toBe(10_000_000n);
+    expect(fees.net).toBe(990_000_000n);
+    expect(fees.net + fees.totalFee).toBe(1_000_000_000n);
+  });
+
+  it("charges the trader two fees only: the crank pool comes out of the protocol's bucket", () => {
+    // CCR-F2: crank_pool_fee_bps is a ProtocolConfig field carved out of the platform share at
+    // sweep time, not a third fee on the trade. A trader's net is the gross minus two shares
+    // whatever that field says, and the bucket then splits exactly between crank pool and treasury.
+    const fees = splitFees(1_000_000_000n, { creatorFeeBps: 50, platformFeeBps: 50 });
+    const bucket = splitPlatformBucket(fees.platformFee, 2_500);
+    expect(bucket.crankPool + bucket.treasury).toBe(fees.platformFee);
+    expect(fees.net).toBe(1_000_000_000n - fees.totalFee);
+  });
+
+  it("prices a curve buy off the virtual reserve and floors the result", () => {
+    // 1_000_000 * 1e9 / (30e9 + 1e9 + 1e9) = 31_250 exactly.
+    expect(quoteCurveBuy(curveCoin(), 1_000_000_000n)).toBe(31_250n);
+    // A non-exact division floors: 1_000_000 * 3 / 32_000_000_003 is 0.09, so it refuses.
+    expect(() => quoteCurveBuy(curveCoin(), 3n)).toThrow(QuoteError);
+  });
+
+  it("caps a curve sell at the curve's real SOL, never at the virtual reserve", () => {
+    // 31e9 * 10_000 / (1_000_000 + 10_000) floors to 306_930_693.
+    expect(quoteCurveSell(curveCoin(), 10_000n)).toBe(306_930_693n);
+    // A token input large enough to want more than the curve holds is capped at sol_reserve.
+    expect(quoteCurveSell(curveCoin(), 1_000_000_000n)).toBe(30_000_000_000n);
+  });
+
+  it("refuses a buy that would take the curve's last base unit", () => {
+    // token_reserve 1 means every buy either returns 0 or would empty the inventory.
+    expect(() => quoteCurveBuy(curveCoin({ tokenReserve: 1n }), 1_000_000_000n)).toThrow(QuoteError);
+  });
+
+  it("refuses an exhausted curve and an empty sell side", () => {
+    expect(() => quoteCurveBuy(curveCoin({ tokenReserve: 0n }), 1_000_000_000n)).toThrow(QuoteError);
+    expect(() => quoteCurveSell(curveCoin({ solReserve: 0n }), 10_000n)).toThrow(QuoteError);
+  });
+
+  it("prices a pool buy as x*y / (y + in), floored", () => {
+    // 1_000_000 * 1e9 / 31e9 floors to 32_258.
+    expect(quotePoolBuy(pool(), 1_000_000_000n)).toBe(32_258n);
+  });
+
+  it("prices a pool sell as y*x / (x + in), capped at the pool's SOL", () => {
+    // 30e9 * 10_000 / 1_010_000 floors to 297_029_702.
+    expect(quotePoolSell(pool(), 10_000n)).toBe(297_029_702n);
+    // A pool sell can never reach the pool's whole SOL side, because x / (x + in) is strictly
+    // below 1. The program's min() is a belt on top of that, and this is the number it guards.
+    expect(quotePoolSell(pool(), 1_000_000_000n)).toBe(29_970_029_970n);
+    expect(quotePoolSell(pool(), 1_000_000_000n)).toBeLessThan(30_000_000_000n);
+  });
+
+  it("refuses an uninitialised pool rather than quoting a zero", () => {
+    expect(() => quotePoolBuy(pool({ tokenReserve: 0n }), 1_000_000_000n)).toThrow(QuoteError);
+    expect(() => quotePoolSell(pool({ solReserve: 0n }), 10_000n)).toThrow(QuoteError);
+  });
+
+  it("includes the virtual reserve on the curve and not in the pool", () => {
+    expect(curveSpotPriceLamportsPerUnit(curveCoin())).toBeCloseTo(31_000, 6);
+    expect(poolSpotPriceLamportsPerUnit(pool())).toBeCloseTo(30_000, 6);
+  });
+
+  it("returns null rather than a zero when the reserves are not readable", () => {
+    expect(curveSpotPriceLamportsPerUnit(curveCoin({ tokenReserve: 0n }))).toBeNull();
+    expect(poolSpotPriceLamportsPerUnit(pool({ solReserve: 0n }))).toBeNull();
+  });
+
+  it("keeps the launch split defaults in one place", () => {
+    // CCR-F5: the form reads these rather than restating them, and the split they produce is the
+    // one splitSupply hands to a launch.
+    expect(DEFAULT_RESERVE_BPS).toBe(500);
+    expect(DEFAULT_DISCOVERY_RESERVE_BPS).toBe(50);
+    const split = splitSupply(1_000_000_000n, DEFAULT_RESERVE_BPS, DEFAULT_DISCOVERY_RESERVE_BPS);
+    expect(split.reserve).toBe(50_000_000n);
+    expect(split.discovery).toBe(5_000_000n);
+    expect(split.reserve + split.discovery + split.curve).toBe(1_000_000_000n);
   });
 });

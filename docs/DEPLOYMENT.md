@@ -13,11 +13,13 @@ prefixed output: `wrangler dev` serves the Worker on `:8787`, and `vite` serves 
 `:5173` with `/api`, `/media` and `/webhooks` proxied to it (see `vite.config.ts`). Ctrl-C stops
 both. `npm run dev:worker` and `npm run dev` still run either side on its own.
 
-Only `DISCOVERY_SECRET` is needed for the game loop to work: without it the discovery subsystem
-fails closed and rolls nothing. `DIGGO_DEVICE_SALT` and `ADMIN_WALLETS` are the other two values
-worth setting locally; the rest of `.dev.vars.example` is optional and documented in place. For
-local play, uncommenting `DISCOVERY_WINDOW_SECONDS=60` and `DISCOVERY_ROLL_CHANCE_BPS=10000` makes
-every activation roll a discovery.
+No secret is needed for the game loop to work. The v2 Worker holds no key the program trusts: it
+indexes, serves reads and sends notifications, and everything that moves value is a transaction the
+player signs. `DIGGO_DEVICE_SALT` and `ADMIN_WALLETS` are the two values worth setting locally;
+`HELIUS_WEBHOOK_AUTH` is needed only if a webhook is configured, and `DIGGO_RPC_URL` only if the
+public devnet RPC is too slow for local work. `DIGGO_CRANK_SECRET_KEY` is optional and can wait:
+without it the crank is off and the protocol still converges, because every user-signed instruction
+opportunistically advances the coin it touches.
 
 There is no devnet dependency for the mining loop. `npm run seed:local` inserts three demo mines
 (FROG, DOGGO, MOLE) with `synced_at = 0`, so the Worker treats them as `OFFCHAIN` mines and D1 is
@@ -39,17 +41,24 @@ Wrangler declares the following bindings and validates them in dry-run mode:
 | `MARKETS` | Durable Objects | one strongly consistent live stream per mint |
 | `INDEXING_QUEUE` | Queues | Helius ingestion and retry isolation |
 | `EPOCH_WORKFLOW` | Workflows | five-minute index synchronization |
-| `PLAYER_LOCK` | Durable Objects | one mutex per wallet, serializing activation, mine switching, Crew upgrades, reward claims and the discovery roll/claim pair |
 | `RATE_LIMITER` | Rate Limiting | strongly consistent per-key limiter consulted before the KV counters in `worker/http.ts` |
 | `DIGGO_METRICS` | Analytics Engine | **not declared.** Counter mirror of `metrics_counters`, for dashboard and alerting queries. The account has Analytics Engine disabled, so declaring the binding fails the deploy with error 10089. See "Re-enabling the Analytics Engine mirror" below. |
 
 Create a queue named `diggo-indexing-dlq` before production deployment if automatic provisioning does not create the configured dead-letter queue.
 
-## Required secrets
+## Required secrets and chain configuration
 
-- `DISCOVERY_SECRET`: server-only HMAC secret every discovery roll is derived from. Without it the
-  discovery subsystem fails closed and grants nothing (spec 55).
+`DIGGO_RPC_URL` is required for every deployed environment, even though `diggo.fun` is intentionally
+on devnet. It must be set with `wrangler secret put DIGGO_RPC_URL`; the public devnet endpoint is
+only a local Wrangler fallback. `SOLANA_CLUSTER`, `DIGGO_PROGRAM_ID`, `DIGGO_TREASURY` and the RPC
+endpoint must be reviewed together when changing networks. The current devnet program is
+`H3Y8GgTnvwv5U1bajfzj386YSPC48vvwjFroXYyHZFj5` and must not be paired with `mainnet-beta`.
+
+The other entries below are optional. The deployment is otherwise fully functional with the
+defaults in `wrangler.jsonc`.
+
 - `DIGGO_DEVICE_SALT`: server-side salt for the IP/device/network hashes in `worker/signals.ts`.
+  Set it in production so a stolen hash cannot be matched against a rainbow table of known IPs.
 - `ADMIN_WALLETS`: comma-separated wallet addresses allowed to use `/api/admin/*`. An admin session
   still has to be a real signed wallet session; the list only decides which wallets may try.
 - `TURNSTILE_SECRET`: private key for the production Turnstile widget. Two optional companion vars
@@ -64,9 +73,13 @@ Create a queue named `diggo-indexing-dlq` before production deployment if automa
     (`wrangler.jsonc` or the dashboard), not secrets.
 - `HELIUS_WEBHOOK_AUTH`: exact authorization header configured in Helius, including `Bearer `.
 - `SUPABASE_SERVICE_ROLE_KEY`: Supabase secret key used only by the Worker to upload and retrieve private artwork.
-- `DIGGO_RPC_URL` (optional): devnet RPC endpoint; falls back to the public devnet RPC.
-- `DIGGO_KEEPER_SECRET_KEY` (optional): the keeper signer, needed only for `sync_crew_power` and
-  `claim_discovery`. See `docs/CUSTODY.md` for how it must be held.
+- `DIGGO_RPC_URL` (required when deployed): the cluster-matched RPC endpoint. Use an HTTP(S) URL
+  without embedded credentials. Local `wrangler dev` may omit it and use public devnet.
+- `DIGGO_CRANK_SECRET_KEY` (optional): the crank bot's fee payer. It has **no authority of any
+  kind** - every instruction it sends (`advance_mine`, `commit_epoch_seed`, `graduate_market`,
+  `sweep_fees`) is permissionless, so a stranger could send the same transaction with their own
+  wallet. The key exists to pay the fee, and a leaked one costs its holder the fees it was already
+  paying. Set `CRANK_ENABLED=0` to turn the bot off without removing the secret.
 - `ALERT_WEBHOOK_URL` (optional): Discord/Slack-compatible incoming webhook that fired risk alerts
   are pushed to. Without it alerts are only logged and counted. `ALERT_DEDUPE_SECONDS` is an
   ordinary var (default 1800, `0` disables dedupe).
@@ -87,10 +100,12 @@ Create a queue named `diggo-indexing-dlq` before production deployment if automa
   `PYTH_SOL_USD_FEED_ID`, `ORACLE_MIN_EXTERNAL_SOURCES` and `ORACLE_SOL_USD_OVERRIDE` are ordinary
   vars for pinning those. `ORACLE_SOL_USD_OVERRIDE` is for local work only.
 
-Set every production value with `wrangler secret put <NAME>`. `DISCOVERY_WINDOW_SECONDS`,
-`DISCOVERY_ROLL_CHANCE_BPS` and `DISCOVERY_EPOCH_SECONDS` are ordinary vars: they are clamped by
-`DISCOVERY_TUNABLE_BOUNDS` and `RNG_EPOCH_BOUNDS`, so a bad value cannot open the floodgates, stop
-the subsystem, or stretch a commit-reveal epoch beyond its bounds.
+Set every production value with `wrangler secret put <NAME>`. The indexer's own knobs
+(`INDEXER_SIGNATURE_LIMIT`, `INDEXER_MAX_PAGES`, `INDEXER_COIN_LIMIT`, `CRANK_ENABLED`) are
+ordinary vars and are clamped in `worker/env.ts`, so a bad value costs a slow pass rather than a
+runaway one. Every v2 parameter - the discovery caps, the rarity table, the epoch-seed delays and
+the sponsor defaults - is a `ProtocolConfig` field changed through the timelock, not a Worker
+secret, which is the point: the Worker cannot move any of them.
 
 The repository contains only Cloudflare's public always-pass development site key. Replace it before using a production hostname.
 
@@ -211,12 +226,15 @@ moment the binding is restored.
 1. **Freeze.** Announce the window and stop merges to the branch being deployed.
 2. **CI green.** `npm run check` locally and the `CI` workflow green on the exact commit being
    deployed. A red Rust job blocks the program, a red Worker job blocks the deploy.
-3. **Secrets.** `wrangler secret put` for `DISCOVERY_SECRET`, `DIGGO_DEVICE_SALT`,
+3. **Secrets.** `wrangler secret put` for `DIGGO_DEVICE_SALT`,
    `ADMIN_WALLETS`, `TURNSTILE_SECRET`, `HELIUS_WEBHOOK_AUTH`, `SUPABASE_SERVICE_ROLE_KEY`,
    `ALERT_WEBHOOK_URL` and `SENTRY_DSN`, plus whichever optional channels are wanted:
    `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT` for Web Push and
-   `TELEGRAM_BOT_TOKEN`/`TELEGRAM_BOT_USERNAME`/`TELEGRAM_WEBHOOK_SECRET` for Telegram — and
-   `DIGGO_KEEPER_SECRET_KEY` only if a keeper signer is deliberately hosted in the Worker.
+   `TELEGRAM_BOT_TOKEN`/`TELEGRAM_BOT_USERNAME`/`TELEGRAM_WEBHOOK_SECRET` for Telegram, plus the
+   required deployed `DIGGO_RPC_URL` — and
+   `DIGGO_CRANK_SECRET_KEY` only if the optional crank is wanted. Confirm that no
+   `DIGGO_KEEPER_SECRET_KEY` and no `DISCOVERY_SECRET` survive from a v4 deployment: neither is
+   read any more, and leaving a key in place that nothing uses is a liability with no upside.
    Confirm with `wrangler secret list` and replace the development Turnstile site key in
    `wrangler.jsonc` with the production one.
 4. **Back up before migrating.** Take a D1 Time Travel bookmark first and record its id:
@@ -227,17 +245,110 @@ moment the binding is restored.
 6. **Stage the rollout.** Deploy staging, run the smoke list below against it, then production. For
    a risky change, use `npx wrangler versions upload` followed by `npx wrangler versions deploy
    <version-id>@10%` and ramp 10% → 50% → 100% while watching error rates and the cron log lines.
-7. **Verify after deploy.** `/api/config`; one activation, mine switch, reward claim and discovery
-   roll on devnet; the `epoch.cron`, `social.cron` and `risk.cron` log lines every five minutes;
-   one deliberate test alert through the webhook (in staging, with `ALERT_DEDUPE_SECONDS=0`).
-8. **Multisig.** Treasury, keeper and program upgrade authority must be a Squads-style multisig on
-   mainnet, never a single hot key: upgrade authority on a multisig, the keeper signer isolated in a
-   dedicated signer service (see `docs/CUSTODY.md`), and at least two signers held separately.
+7. **Verify after deploy.** `/api/config` and `/api/status`; the `indexer.cron` log line every
+   two minutes showing accounts and events; `/api/discovery/seeds` returning a seed for the running
+   epoch; then one full devnet pass driven from the client - launch, buy, activate, assign,
+   advance, seed commit, roll, settle, sweep and graduate - with the index following along. If the
+   crank is enabled, `/api/status` should show its recent runs.
+8. **Multisig.** Treasury and program upgrade authority must be a Squads-style 2-of-3 multisig on
+   mainnet, never a single hot key, with at least two signers held separately.
+   There is no keeper to isolate any more: the only Worker-held key is the crank's fee payer, and
+   it holds no authority, so it needs no custody ceremony beyond not being the treasury.
    Confirm with `solana program show <PROGRAM_ID>` that the upgrade authority is the multisig and
    that no single-key admin survives.
 9. **Know the rollback.** Keep the previous Worker version id and the Time Travel bookmark to hand:
    `npx wrangler versions deploy <previous-version-id>` for code, and
    `npx wrangler d1 time-travel restore diggo-db --bookmark <id>` for data — a restore discards
    every write after the bookmark, so it is a last resort for a bad migration only.
-10. **Mainnet switch.** Move `SOLANA_CLUSTER` and the program/treasury/keeper ids together in one
+10. **Mainnet switch.** Move `SOLANA_CLUSTER` and the program/treasury ids together in one
     reviewed change, re-run the dry-run deploy diff, and repeat steps 6–7.
+
+## v2 cutover notes
+
+- **Migrations to apply:** `0021_indexer_only.sql` (the v2 read model) and `0023_trade_fill.sql`
+  (the received side of a trade: `trades.amount_out` and `trades.fill_source`). Both are additive
+  and idempotent.
+- **Fresh devnet, no migration.** v2 is a new program id with a wiped devnet, so no v2 account needs
+  a migration path. Migration `0021_indexer_only.sql` drops the v4 decision tables (breakers,
+  commit-reveal commitments, discovery opportunities, reward claims, mining reports, off-chain
+  positions) and carries `usernames` and the profile rows of `players` across unchanged.
+- **The Durable Object mutex is retired** by its own migration tag (`v3`,
+  `deleted_classes: ["PlayerLock"]`), so a deployment that already applied `v2` still converges.
+  There is no server-side mutation left to serialise.
+- **The cron cadence is two minutes**, down from five, because the index is what the read API
+  serves. Every step in the tick is idempotent and independently guarded, so one failing step never
+  costs the pass its chain reads.
+
+### Fresh devnet deploy, step by step
+
+The program id is `H3Y8GgTnvwv5U1bajfzj386YSPC48vvwjFroXYyHZFj5`; its keypair lives at
+`/home/jurek/.solana-diggo/program-v3.json` and is never in the repository. `Anchor.toml`,
+`wrangler.jsonc` and the Worker's `DIGGO_PROGRAM_ID` must all name that id, and the client reads it
+from `/api/bootstrap`, so a deploy that updates only one of them shows up as a UI with no program
+at all rather than as a wrong address.
+
+1. **Build, in WSL.** The Rust tree builds only under Linux; the release profile in
+   `programs/diggo-protocol/Cargo.toml` (`lto = "fat"`, `codegen-units = 1`, `opt-level = "z"`,
+   `strip = true`, with `overflow-checks` and `panic = "abort"` kept on) is what keeps the binary
+   inside the deployed ProgramData account. `cargo test --workspace` first: the unit suite is the
+   only gate that runs without a validator.
+2. **Deploy to devnet** with that keypair (`solana program deploy --program-id <keypair> ...`), then
+   verify the deployed hash against the local `.so` before anything is initialized. A partial
+   deploy is indistinguishable from a good one from the client's side.
+3. **Retire the v4 program** and close its buffers. Devnet holds no coins, so nothing of value is
+   discarded; `migrate-accounts.ts` and `transfer-authorities.ts` were deleted with v4 because there
+   is no migration and no single-key authority transfer in v2.
+4. **`initialize_protocol`** with the rarity table, the fee split, the caps in lamports, the curve
+   tables, the sponsor defaults and the epoch-seed delays — the same numbers `src/constants.ts` shows
+   the player, which `src/constants.test.ts` pins against the contract.
+5. **Hand over to the multisig** (below), then confirm with `solana program show <PROGRAM_ID>` that
+   the upgrade authority is the multisig and that no other key can upgrade or change config.
+
+Phase 3 owns the scripted form of these steps (`scripts/onchain/deploy-v2.ts`, `wipe-devnet.ts`,
+`init-v2.ts`, `squads-setup.ts`, `freeze-program.ts`); today only `scripts/onchain/lib.ts` is in the
+tree, and the steps above are the manual path it will automate.
+
+### Squads: 2-of-3 with a 48-hour timelock
+
+A Squads v4 multisig holds the program **upgrade authority** and every remaining admin config
+(`update_fee_config`, `update_discovery_limits`, `set_rarity_table`, `set_curve_table`,
+`schedule_pause`) from day one of v2, with a 48-hour transaction timelock. Three members, two
+signatures; the sponsor vault is deliberately **not** part of it — it belongs to the owner's own
+wallet, holds lamports, and has no program authority of any kind.
+
+After an external audit and before any mainnet value, the end state is a frozen program:
+`set_upgrade_authority` to none. That removes the upgrade path and with it the last operator-shaped
+lever over the game, so it is a one-way door: rehearse it on devnet first.
+
+### The crank bot
+
+The crank is optional and permissionless. `DIGGO_CRANK_SECRET_KEY` is a fee payer with **no
+authority**: the instructions it sends (`advance_mine`, `commit_epoch_seed`, `settle_discovery`,
+`expire_opportunity`, `graduate_market`, `sweep_fees`, `crank_tip`) are the same ones any wallet
+can send, and `/api/status` reports its recent runs. Without the key the crank is off and the
+protocol still converges, because every user-signed instruction advances the coin it touches.
+
+Fund the payer with a little SOL and let `crank_tip` reimburse it out of accrued protocol fees; a
+tip is capped at `CRANK_TIP_BPS` of the protocol bucket and is never paid out of a reserve, the
+curve's SOL or the locked pool.
+
+### Running the chain-dependent end-to-end specs
+
+The Playwright suite drives the local dev pair (vite + `wrangler dev`) and needs no validator for
+the flows it asserts: rendering, the launch cost, onboarding copy, the sponsor default, the legal
+documents. Two flows cannot pass without a chain and are skipped with their reason —
+`upgrade_crew` (the ORE it spends lives in the player's on-chain PlayerAccount) and any assertion
+about a roll's *outcome*. To exercise those, deploy the built `.so` to a local validator and point
+the pair at it:
+
+```bash
+# In WSL, where the program builds:
+solana-test-validator --reset --quiet &
+solana program deploy --program-id /home/jurek/.solana-diggo/program-v3.json \
+  target/deploy/diggo_protocol.so
+```
+
+then start the pair with the validator as the RPC (`DIGGO_RPC_URL=http://127.0.0.1:8899`) and
+remove the two skips. The suite's ports are overridable (`DIGGO_CLIENT_PORT`, `DIGGO_WORKER_URL`,
+`DIGGO_E2E_BASE_URL`, `DIGGO_E2E_WORKER_URL`) so a run can target a pair on other ports — which
+matters on a shared machine, because Playwright reuses whatever already answers on its base URL.

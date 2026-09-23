@@ -6,6 +6,7 @@ import {
   type RarityTierConfig,
   type RobustPriceConfig,
 } from "./config";
+import { V2_BPS } from "./rewardIndex";
 
 /**
  * Rarity, token eligibility and value normalization (spec 25, 26, 27).
@@ -543,4 +544,182 @@ export function normalizedDiscoveryAmount(
     amount,
     decimals: config.rarity.amountDecimals,
   };
+}
+
+// ---- v2: the derived discovery outcome (design 4.1, 4.3, 8.2) ----------------------------
+//
+// Mirrors programs/diggo-protocol/src/math/rarity.rs. Every input is a fact the program owns:
+// the coin's own market, its own reserves and its own epoch budget. No external oracle and no
+// off-chain volume feed appears anywhere in this path.
+
+/**
+ * Scale the coin's TWAP accumulator is denominated in, in lamports per base unit. Must match
+ * DISCOVERY_PRICE_SCALE in math/rarity.rs, which must match the scale the pool writes its
+ * accumulator in.
+ */
+export const DISCOVERY_PRICE_SCALE = 1_000_000_000_000_000_000n;
+
+export interface V2RarityTier {
+  readonly cumulativeChanceBps: number;
+  readonly valueLamports: bigint;
+  readonly minEligibilityScore: number;
+  readonly minLiquidityLamports: bigint;
+  readonly minVolumeLamports: bigint;
+}
+
+/** The tier a roll lands in, or null when the table has no outcome above its last tier. */
+export function rolledRarityTier(
+  tiers: readonly V2RarityTier[],
+  rollBps: number
+): number | null {
+  for (let index = 0; index < tiers.length; index += 1) {
+    if (rollBps < tiers[index].cumulativeChanceBps) return index;
+  }
+  return null;
+}
+
+export interface DiscoveryFacts {
+  readonly liquidityLamports: bigint;
+  readonly volumeLamports: bigint;
+  readonly eligibilityScore: number;
+}
+
+export interface V2CoinFacts {
+  readonly solReserve: bigint;
+  readonly virtualSolReserve: bigint;
+  readonly tokenReserve: bigint;
+  readonly graduationTarget: bigint;
+  readonly discoveryReserveTotal: bigint;
+  readonly discoveryRemaining: bigint;
+  readonly discoveryEpochBudget: bigint;
+  readonly discoveryEpochSpent: bigint;
+  readonly twapCumPriceLamportsPerUnit?: bigint;
+  readonly twapLastUpdateSlot?: bigint;
+}
+
+function scoreComponent(value: bigint, reference: bigint): number {
+  if (reference <= 0n) return 0;
+  const scaled = (value * 25n) / reference;
+  return Number(scaled > 25n ? 25n : scaled);
+}
+
+export function discoveryFacts(coin: V2CoinFacts): DiscoveryFacts {
+  const liquidity = coin.solReserve + coin.virtualSolReserve;
+  const volume = coin.solReserve;
+  const reference = coin.graduationTarget;
+  const epochRemaining =
+    coin.discoveryEpochBudget > coin.discoveryEpochSpent
+      ? coin.discoveryEpochBudget - coin.discoveryEpochSpent
+      : 0n;
+  const score =
+    scoreComponent(liquidity, reference) +
+    scoreComponent(volume, reference) +
+    scoreComponent(coin.discoveryRemaining, coin.discoveryReserveTotal) +
+    scoreComponent(epochRemaining, coin.discoveryEpochBudget);
+  return {
+    liquidityLamports: liquidity,
+    volumeLamports: volume,
+    eligibilityScore: Math.min(score, 100)
+  };
+}
+
+/**
+ * The highest tier at or below the rolled one whose floors the coin clears. Downgrading
+ * rather than refusing is what the floors are for: an illiquid coin can still pay a common
+ * discovery, it simply cannot pay a mythic one.
+ */
+export function resolveRarityTier(
+  tiers: readonly V2RarityTier[],
+  rolled: number,
+  facts: DiscoveryFacts
+): number | null {
+  if (tiers.length === 0) return null;
+  const start = Math.min(rolled, tiers.length - 1);
+  for (let index = start; index >= 0; index -= 1) {
+    const tier = tiers[index];
+    if (facts.eligibilityScore < tier.minEligibilityScore) continue;
+    if (facts.liquidityLamports < tier.minLiquidityLamports) continue;
+    if (facts.volumeLamports < tier.minVolumeLamports) continue;
+    return index;
+  }
+  return null;
+}
+
+/**
+ * The price the discovery path prices a payout with, scaled by DISCOVERY_PRICE_SCALE, or null
+ * when the coin has no price yet.
+ *
+ * The higher of the pool's time-weighted average and the curve's marginal price wins: a price
+ * pushed down would otherwise buy more units for the same lamport value, which is how a
+ * discovery payout could be used to drain the reserve. Pricing high can only ever pay fewer
+ * units than the value class names.
+ */
+export function coinPriceScaled(coin: V2CoinFacts): bigint | null {
+  const cumulative = coin.twapCumPriceLamportsPerUnit ?? 0n;
+  const lastSlot = coin.twapLastUpdateSlot ?? 0n;
+  const average = cumulative > 0n && lastSlot > 0n ? cumulative / lastSlot : null;
+  const sol = coin.solReserve + coin.virtualSolReserve;
+  const marginal =
+    sol > 0n && coin.tokenReserve > 0n
+      ? (sol * DISCOVERY_PRICE_SCALE) / coin.tokenReserve
+      : null;
+  const candidates = [average, marginal].filter((value): value is bigint => value !== null);
+  if (candidates.length === 0) return null;
+  let best = candidates[0];
+  for (const candidate of candidates) {
+    if (candidate > best) best = candidate;
+  }
+  return best > 0n ? best : null;
+}
+
+/** Token units a lamport value class buys at the coin's own price. Rounds down. */
+export function discoveryUnitsForValue(coin: V2CoinFacts, valueLamports: bigint): bigint {
+  if (valueLamports <= 0n) return 0n;
+  const price = coinPriceScaled(coin);
+  if (price === null) return 0n;
+  return (valueLamports * DISCOVERY_PRICE_SCALE) / price;
+}
+
+export interface V2DiscoveryPayout {
+  readonly tier: number;
+  readonly valueLamports: bigint;
+  readonly units: bigint;
+}
+
+export interface V2DiscoveryPayoutInput {
+  readonly tiers: readonly V2RarityTier[];
+  readonly discoveryMaxBps: number;
+  readonly coin: V2CoinFacts;
+  /** The digest of sha256(seed || owner || window), from ./epochSeed. */
+  readonly digest: Uint8Array;
+}
+
+/**
+ * The whole token-side rule set for one settled opportunity. The lamport caps - per account
+ * per day, per account per week and protocol-wide per day - are charged at roll creation
+ * against a reservation, so what is left here is the reserve, the per-call ceiling and this
+ * epoch's remaining budget. Each clamp only ever reduces the payout.
+ */
+export function planDiscoveryPayout(input: V2DiscoveryPayoutInput): V2DiscoveryPayout {
+  const rollBps = Math.min((input.digest[0] | (input.digest[1] << 8)) % 10_000, 9_999);
+  const rolled = rolledRarityTier(input.tiers, rollBps);
+  if (rolled === null) return { tier: 0, valueLamports: 0n, units: 0n };
+  const facts = discoveryFacts(input.coin);
+  const tier = resolveRarityTier(input.tiers, rolled, facts);
+  if (tier === null) return { tier: 0, valueLamports: 0n, units: 0n };
+  const value = input.tiers[tier].valueLamports;
+  if (value <= 0n) return { tier, valueLamports: 0n, units: 0n };
+  const price = coinPriceScaled(input.coin);
+  if (price === null) return { tier, valueLamports: 0n, units: 0n };
+  const perCall =
+    (input.coin.discoveryReserveTotal * BigInt(input.discoveryMaxBps)) / V2_BPS;
+  const epochRemaining =
+    input.coin.discoveryEpochBudget > input.coin.discoveryEpochSpent
+      ? input.coin.discoveryEpochBudget - input.coin.discoveryEpochSpent
+      : 0n;
+  let units = discoveryUnitsForValue(input.coin, value);
+  if (units > input.coin.discoveryRemaining) units = input.coin.discoveryRemaining;
+  if (units > perCall) units = perCall;
+  if (units > epochRemaining) units = epochRemaining;
+  return { tier, valueLamports: (units * price) / DISCOVERY_PRICE_SCALE, units };
 }

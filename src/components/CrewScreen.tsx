@@ -9,7 +9,6 @@
  * currency in the game's progression loop is ORE, and ORE can never be bought (spec 9, 34).
  */
 import type { ReactNode } from "react";
-import { ArrowUpRight, Gem, Hammer, Hourglass, Lock, X } from "lucide-react";
 import type { PlayerProfile } from "../../shared/types";
 import {
   DIGGO_CONFIG,
@@ -23,6 +22,7 @@ import {
   type CrewLevels,
 } from "../../shared/economics";
 import { CREW_COMPONENTS, CREW_COMPONENT_GLYPHS, CREW_COMPONENT_LABELS, CREW_ROLES } from "../crewLabels";
+import { IconArrowUpRight, IconClose, IconHammer, IconOre } from "../icons";
 import { GameArt, MineScene } from "./MineScene";
 import { useDialog } from "./useDialog";
 
@@ -107,7 +107,7 @@ export function CrewScreen({ player, pending, error, notice, onUpgrade, variant 
       <div className="crew-head">
         <div>
           <span className="eyebrow">
-            <Hammer size={14} /> Crew tier {tier.tier} of {DIGGO_CONFIG.crew.tiers.length}
+            <IconHammer size={14} /> Crew tier {tier.tier} of {DIGGO_CONFIG.crew.tiers.length}
           </span>
           <h2>{tier.name}</h2>
           <p>
@@ -121,7 +121,7 @@ export function CrewScreen({ player, pending, error, notice, onUpgrade, variant 
             <small>
               {nextTier ? (
                 <>
-                  Level {totalLevel} / {nextTier.minTotalLevel} <ArrowUpRight size={11} /> {nextTier.name}
+                  Level {totalLevel} / {nextTier.minTotalLevel} <IconArrowUpRight size={11} /> {nextTier.name}
                 </>
               ) : (
                 "Legendary operation — every branch can still level up"
@@ -176,15 +176,15 @@ export function CrewScreen({ player, pending, error, notice, onUpgrade, variant 
               >
                 {pending === component ? (
                   <>
-                    <Hourglass size={14} /> Upgrading…
+                    Upgrading…
                   </>
                 ) : preview_.cost === null ? (
                   <>
-                    <Lock size={13} /> Max level
+                    Max level
                   </>
                 ) : (
                   <>
-                    Upgrade <Gem size={13} /> {preview_.cost.toLocaleString()} ORE
+                    Upgrade <IconOre size={13} /> {preview_.cost.toLocaleString()} ORE
                   </>
                 )}
               </button>
@@ -226,7 +226,7 @@ function CrewModalFrame({ onClose, children }: { onClose?(): void; children: Rea
         onMouseDown={(event) => event.stopPropagation()}
       >
         <button className="modal-close" onClick={onClose} aria-label="Close">
-          <X size={20} />
+          <IconClose size={20} />
         </button>
         {children}
       </section>

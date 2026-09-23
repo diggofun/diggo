@@ -52,7 +52,6 @@ import {
   verifyTurnstile,
   verifyWalletSignature,
 } from "./auth";
-import { autoCloseBreaker, autoOpenBreaker, isBreakerOpen, type BreakerScope } from "./breakers";
 import type { RuntimeEnv } from "./env";
 import {
   type RateLimitCheck,
@@ -71,7 +70,7 @@ import {
   fingerprintRequest,
   recordActivityRow,
 } from "./signals";
-import { METRIC, collectMetrics, logAlerts, metric } from "./telemetry";
+import { METRIC, REALIZED_DISCOVERY_PREDICATE, collectMetrics, logAlerts, metric } from "./telemetry";
 
 /** The actions the gate understands. Exactly these, and nothing else. */
 export type GatedAction =
@@ -305,7 +304,9 @@ async function readSignalCounts(
       "SELECT COUNT(DISTINCT s.wallet) AS n FROM account_signals s JOIN account_risk r ON r.wallet = s.wallet " +
         "WHERE s.device_hash = ?1 AND s.ts >= ?2 AND (r.level = 'HIGH' OR r.reward_state IN ('HELD', 'BLOCKED'))",
     ).bind(device, clusterFrom),
-    env.DB.prepare("SELECT COUNT(*) AS n FROM discoveries WHERE wallet = ?1 AND status = 'CLAIMED'").bind(wallet),
+    env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM discovery_events WHERE wallet = ?1 AND" + REALIZED_DISCOVERY_PREDICATE,
+    ).bind(wallet),
   ]);
   const count = (index: number): number => asNumber(results[index]?.results?.[0]?.n);
   const timestamps = (results[6]?.results ?? [])
@@ -564,16 +565,12 @@ function restrictionVerdict(
   return null;
 }
 
-// --- breakers ----------------------------------------------------------------------------
-
-function breakerScopesFor(action: GatedAction, mint: string | null): { scope: BreakerScope; mint?: string }[] {
-  if (action === "discovery_roll") return [{ scope: "discoveries" }];
-  if (action === "claim_discovery") return [{ scope: "discovery_reserve", mint: mint ?? undefined }];
-  if (action === "claim_reward") return [{ scope: "claims" }];
-  return [];
-}
-
-const BREAKER_MESSAGE = "Rewards are temporarily paused. Please try again later.";
+// --- what the v4 breakers became ---------------------------------------------------------
+//
+// v4 could halt discoveries, claims or one mine's Discovery Reserve from here. v2 cannot, and
+// that is the point: there is no operator key with a hold over a player's money, so there is
+// nothing left to halt. What replaces it is an advisory alert on the same conditions, which
+// informs support and can rate limit an HTTP surface, and which no instruction reads.
 
 /**
  * The account's last computed reward state, from a single cached read. Used for the cheap
@@ -699,7 +696,10 @@ export async function gateAction(
   const config = options.config ?? RISK_OPS;
   const now = options.now ?? Math.floor(Date.now() / 1_000);
   const fingerprint = await fingerprintRequest(env, ctx.request);
+  // The mint is still read because the activity log records which coin an action named; it is no
+  // longer a breaker key, since v2 has no breaker to key.
   const mint = new URL(ctx.request.url).searchParams.get("mint");
+  void mint;
   const sensitive = config.challenge.gatedActions.includes(ctx.action);
 
   // Explicit, cheap checks first, so a flood is refused without paying for the full signal
@@ -731,25 +731,6 @@ export async function gateAction(
     });
     await recordOutcome(env, restricted.outcome);
     return result;
-  }
-
-  for (const candidate of breakerScopesFor(ctx.action, mint)) {
-    if (await isBreakerOpen(env, candidate.scope, candidate.mint)) {
-      await recordActivityRow(env, {
-        wallet: ctx.wallet,
-        action: ctx.action,
-        outcome: "rejected",
-        fingerprint,
-        ts: now,
-      });
-      return {
-        allowed: false,
-        challengeRequired: false,
-        rewardState: await cachedRewardState(env, ctx.wallet),
-        publicMessage: BREAKER_MESSAGE,
-        retryAfterSec: 60,
-      };
-    }
   }
 
   const verdict = await checkKeyedRateLimits(env, rateChecksFor(ctx.action, ctx.wallet, fingerprint, config));
@@ -983,40 +964,19 @@ export async function publicRiskStatus(env: RuntimeEnv, wallet: string): Promise
 export interface RiskCronReport {
   refreshed: number;
   alerts: number;
-  breakerOpened: boolean;
-  breakerClosed: boolean;
+  /** True when an anomalous drain was recorded as an advisory alert. Nothing was halted. */
+  advisoryRaised: boolean;
   snapshot: AlertMetricSnapshot;
 }
 
 /**
- * True when an admin closed this scope's breaker by hand inside the hold window. The cron must
- * not immediately re-open a decision a human just made (spec 65: emergency controls are
- * bounded and auditable, which includes not fighting the operator).
- */
-async function breakerClosedByAdminRecently(
-  env: RuntimeEnv,
-  scope: BreakerScope,
-  now: number,
-  minutes: number,
-): Promise<boolean> {
-  if (minutes <= 0) return false;
-  const row = await env.DB.prepare(
-    "SELECT COUNT(*) AS n FROM admin_audit WHERE action = 'breaker.close' AND target = ?1 AND created_at >= ?2",
-  )
-    .bind(scope, now - minutes * 60)
-    .first<{ n: number }>();
-  return (row?.n ?? 0) > 0;
-}
-
-/**
- * Scheduled hook (see worker/index.ts): collects the spec-66 metrics, logs alerts, refreshes
- * the risk of recently active accounts that have no fresh score, and auto-opens the discovery
- * breaker when Discovery Reserve drain looks anomalous.
+ * Scheduled hook (see worker/index.ts): collects the metrics, logs alerts, refreshes the risk of
+ * recently active accounts that have no fresh score, and records an advisory alert when a
+ * coin's Discovery Reserve drain looks anomalous.
  *
- * Auto-open is the only automatic emergency action, and it is deliberately conservative: it
- * needs a real sample of discoveries, a drain velocity above the configured threshold and real
- * value already gone. Auto-close only ever touches a breaker the cron itself opened, so an
- * admin hold is never lifted by a cron.
+ * In v4 the last part opened a circuit breaker that halted payouts. v2 has no such switch, so
+ * the same detection now writes an alert row and stops there. A player's claim is decided by
+ * their own signed instruction and a public crank, not by this cron.
  */
 export async function riskCron(env: RuntimeEnv, now = Math.floor(Date.now() / 1_000)): Promise<RiskCronReport> {
   const config = RISK_OPS;
@@ -1045,17 +1005,20 @@ export async function riskCron(env: RuntimeEnv, now = Math.floor(Date.now() / 1_
     report.snapshot.reserveDrainVelocityUsdPerHour >= thresholds.reserveDrainVelocityUsdPerHour &&
     report.reserveDrainedInWindowUsd >= thresholds.reserveDrainMinUsd &&
     report.discoveriesInWindow >= thresholds.minimumSampleDiscoveries;
-  let breakerOpened = false;
-  let breakerClosed = false;
-  if (anomaly && !(await breakerClosedByAdminRecently(env, "discoveries", now, thresholds.manualHoldMinutes))) {
-    breakerOpened = await autoOpenBreaker(env, "discoveries", "reserve_drain_anomaly");
-  } else if (
-    !anomaly &&
-    report.snapshot.reserveDrainVelocityUsdPerHour <=
-      thresholds.reserveDrainVelocityUsdPerHour * thresholds.autoCloseShare
-  ) {
-    breakerClosed = await autoCloseBreaker(env, "discoveries", "reserve_drain_normalized");
+  let advisoryRaised = false;
+  if (anomaly) {
+    const { recordAdvisory } = await import("./indexStore");
+    await recordAdvisory(env, {
+      kind: "reserve_drain_anomaly",
+      severity: "WARN",
+      detail:
+        `discovery reserve drained ${report.reserveDrainedInWindowLamports} lamports over ` +
+        `${report.discoveriesInWindow} settled discoveries` +
+        (report.usdPriceAvailable ? ` (~${report.reserveDrainedInWindowUsd} usd)` : " (no sol/usd rate)") +
+        "; nothing was halted",
+    });
+    advisoryRaised = true;
   }
 
-  return { refreshed, alerts: report.alerts.length, breakerOpened, breakerClosed, snapshot: report.snapshot };
+  return { refreshed, alerts: report.alerts.length, advisoryRaised, snapshot: report.snapshot };
 }

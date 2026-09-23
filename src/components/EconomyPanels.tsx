@@ -7,12 +7,12 @@
  *
  * Nothing in this file converts one side into the other, and no screen calls ORE a balance.
  */
-import { Award, Coins, ExternalLink, Gem, Layers, Sparkles, TrendingUp } from "lucide-react";
 import type { PlayerProfile, TokenSummary } from "../../shared/types";
 import type { RewardClaimView } from "../api";
 import { DIGGO_CONFIG, crewTier } from "../../shared/economics";
 import { CREW_COMPONENTS } from "../crewLabels";
 import { money, oreAmount, tokenAmount } from "../format";
+import { IconBadge, IconLayers, IconOre } from "../icons";
 import { needsOnChainCollection, useRewardCollection, type CollectionState } from "../rewardsClaim";
 
 export interface EconomyPanelsProps {
@@ -95,7 +95,7 @@ export function EconomyPanels({
       <article className="economy-panel real-rewards">
         <header>
           <span className="economy-badge">
-            <Coins size={13} /> REAL REWARDS
+            REAL REWARDS
           </span>
           <h3>Token rewards</h3>
           <p>
@@ -122,7 +122,7 @@ export function EconomyPanels({
               {[...balances.entries()].map(([mint, total]) => (
                 <li key={mint}>
                   <button className="badge ledger-token" onClick={() => onOpenToken(mint)}>
-                    {symbolOf(tokens, mint)} <ExternalLink size={11} />
+                    {symbolOf(tokens, mint)}
                   </button>
                   <span>{tokenAmount(total.claimable)} ready</span>
                   <span>{tokenAmount(total.settled)} settled</span>
@@ -205,7 +205,7 @@ export function EconomyPanels({
                 .map((claim) => (
                   <li key={claim.id}>
                     <button className="badge ledger-token" onClick={() => onOpenToken(claim.mint)}>
-                      {symbolOf(tokens, claim.mint)} <ExternalLink size={11} />
+                      {symbolOf(tokens, claim.mint)}
                     </button>
                     <strong>{tokenAmount(claim.amount)}</strong>
                     <em className={"reward-status status-" + claim.status.toLowerCase()}>
@@ -222,7 +222,7 @@ export function EconomyPanels({
       <article className="economy-panel game-progression">
         <header>
           <span className="economy-badge">
-            <Gem size={13} /> GAME PROGRESSION
+            <IconBadge size={13} /> GAME PROGRESSION
           </span>
           <h3>Your dug-in progress</h3>
           <p>
@@ -235,7 +235,7 @@ export function EconomyPanels({
           <div className="progression-grid">
             <div className="progression-cell">
               <span>
-                <Gem size={13} /> ORE
+                <IconOre size={13} /> ORE
               </span>
               <strong>{oreAmount(player.oreBalance)}</strong>
               <small>
@@ -245,14 +245,14 @@ export function EconomyPanels({
             </div>
             <div className="progression-cell">
               <span>
-                <Layers size={13} /> MINING LEVEL
+                <IconLayers size={13} /> MINING LEVEL
               </span>
               <strong>{totalLevel}</strong>
               <small>levels earned across your five crew branches</small>
             </div>
             <div className="progression-cell">
               <span>
-                <Award size={13} /> CREW TIER
+                <IconBadge size={13} /> CREW TIER
               </span>
               <strong>{tier?.name ?? "—"}</strong>
               <small>
@@ -262,7 +262,7 @@ export function EconomyPanels({
             </div>
             <div className="progression-cell">
               <span>
-                <Sparkles size={13} /> EXPERIENCE
+                EXPERIENCE
               </span>
               <strong>{oreAmount(player.xp ?? 0)}</strong>
               <small>
@@ -276,7 +276,7 @@ export function EconomyPanels({
         )}
 
         <p className="economy-footnote">
-          <TrendingUp size={12} /> ORE is not a token and has no market price. Your crew's Mining Power
+          ORE is not a token and has no market price. Your crew's Mining Power
           is earned only by playing.
         </p>
       </article>

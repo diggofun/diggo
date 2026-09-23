@@ -7,25 +7,17 @@
  */
 import { useMemo, useState } from "react";
 import {
-  ArrowDownRight,
-  ArrowUpRight,
-  Check,
-  ChevronRight,
-  Clock3,
-  Coins,
-  Copy,
-  Flame,
-  Gauge,
-  Gem,
-  Hammer,
-  LockKeyhole,
-  Minus,
-  Pickaxe,
-  Plus,
-  Radio,
-  ShieldCheck,
-  TrendingUp,
-} from "lucide-react";
+  IconArrowDownRight,
+  IconArrowUpRight,
+  IconChevronRight,
+  IconHammer,
+  IconMine,
+  IconOre,
+  IconPlus,
+  IconStreak,
+  IconTimer,
+  IconWallet,
+} from "../icons";
 import type { MineInfo, PlayerProfile, TokenSummary } from "../../shared/types";
 import { GAMEPLAY_DEFAULTS } from "../../shared/economics";
 import { compact, countdown, money, percent, shortAddress, solAmount } from "../format";
@@ -79,16 +71,16 @@ export function HomeHero({
         </p>
         <div className="hero-actions">
           <a className="btn btn-primary btn-lg" href="/mine">
-            Start mining <Pickaxe size={18} />
+            Start mining <IconMine size={20} />
           </a>
           <a className="btn btn-link" href="/explore">
-            Explore mines <ArrowUpRight size={17} />
+            Explore mines <IconArrowUpRight size={19} />
           </a>
         </div>
         <div className="trust-row">
-          <span><ShieldCheck size={15} /> Mint revoked</span>
-          <span><LockKeyhole size={15} /> Reserve locked</span>
-          <span><Coins size={15} /> Funds stay in your wallet</span>
+          <span>Mint revoked</span>
+          <span>Reserve locked</span>
+          <span><IconWallet size={17} /> Funds stay in your wallet</span>
         </div>
       </div>
 
@@ -96,7 +88,7 @@ export function HomeHero({
         <div className="mine-console console-empty">
           <div className="console-top">
             <div className="featured-token">
-              <span className="token-orb token-orb-large orb-empty"><Pickaxe size={20} /></span>
+              <span className="token-orb token-orb-large orb-empty"><IconMine size={20} /></span>
               <div><span>NO ACTIVE MINE</span><h2>Nothing launched yet</h2></div>
             </div>
             <span className="active-pill idle"><i /> EMPTY</span>
@@ -107,7 +99,7 @@ export function HomeHero({
               rewards, network power and prices will appear here once a real coin is launched on devnet.
             </p>
             <button className="btn btn-primary" onClick={onLaunch}>
-              Launch the first coin <Plus size={17} />
+              Launch the first coin <IconPlus size={19} />
             </button>
           </div>
         </div>
@@ -125,7 +117,7 @@ export function HomeHero({
           <div className="mine-scene" aria-hidden="true">
             <div className="grid-lines" />
             <div className="ore ore-one" /><div className="ore ore-two" /><div className="ore ore-three" />
-            <div className="pickaxe-wrap"><Pickaxe size={82} strokeWidth={1.25} /></div>
+            <div className="pickaxe-wrap"><IconMine size={82} /></div>
             <div className="impact"><span /><span /><span /></div>
             <div className="depth-label">LAYER 0{Math.max(1, Math.round((100 - reservePercent) / 15))}</div>
           </div>
@@ -136,15 +128,15 @@ export function HomeHero({
           </div>
           {player && (
             <div className="crew-strip">
-              <span><Flame size={13} /> {player.streak} day streak</span>
-              <span><Gem size={13} /> {Math.floor(player.oreBalance).toLocaleString()} ORE</span>
-              <span><Gauge size={13} /> {player.power.toLocaleString()} power</span>
+              <span><IconStreak size={13} /> {player.streak} day streak</span>
+              <span><IconOre size={13} /> {Math.floor(player.oreBalance).toLocaleString()} ORE</span>
+              <span>{player.power.toLocaleString()} power</span>
               {isMiningActive && (
-                <span><Clock3 size={13} /> resets in {countdown(Math.floor(player.activationExpiresAt ?? 0), now)}</span>
+                <span><IconTimer size={13} /> resets in {countdown(Math.floor(player.activationExpiresAt ?? 0), now)}</span>
               )}
               {connected && (
                 <button type="button" className="claim-rewards-button" onClick={onClaimRewards}>
-                  <Coins size={12} /> Claim on-chain rewards
+                  <IconOre size={12} /> Claim on-chain rewards
                 </button>
               )}
             </div>
@@ -152,15 +144,15 @@ export function HomeHero({
           {error && <p className="form-message console-error" role="alert">{error}</p>}
           {!connected ? (
             <button className="mine-button" type="button" onClick={requestWalletMenu}>
-              <Pickaxe size={18} /> Connect wallet to mine
+              <IconMine size={20} /> Connect wallet to mine
             </button>
           ) : isMiningActive ? (
             <button className="mine-button" onClick={onManageCrew}>
-              <Hammer size={18} /> Manage crew
+              <IconHammer size={20} /> Manage crew
             </button>
           ) : (
             <button className="mine-button" disabled={activating} onClick={onActivate}>
-              {activating ? <><Radio size={18} /> Activating…</> : <><Pickaxe size={18} /> Activate mine ({GAMEPLAY_DEFAULTS.activationSeconds / 3_600}h)</>}
+              {activating ? <>Activating…</> : <><IconMine size={20} /> Activate mine ({GAMEPLAY_DEFAULTS.activationSeconds / 3_600}h)</>}
             </button>
           )}
         </div>
@@ -244,14 +236,14 @@ export function ExploreBoard({ tokens, limit, onLaunch }: { tokens: TokenSummary
           </div>
           {limit && tokens.length > limit && (
             <a className="btn btn-ghost board-more" href="/explore">
-              View all {tokens.length} mines <ChevronRight size={16} />
+              View all {tokens.length} mines <IconChevronRight size={16} />
             </a>
           )}
         </>
       ) : (
         <EmptyState
           title="No mines to explore yet"
-          action={<button className="btn btn-primary" onClick={onLaunch}>Launch a coin <Plus size={17} /></button>}
+            action={<button className="btn btn-primary" onClick={onLaunch}>Launch a coin <IconPlus size={19} /></button>}
         >
           Launched coins appear here with their live price and network power.
         </EmptyState>
@@ -282,12 +274,11 @@ function TokenCard({ token }: { token: TokenSummary }) {
         <span className={"change " + (change === null ? "unknown" : up ? "positive" : "negative")}>
           {change === null ? (
             <>
-              <Minus size={13} />
               <span className="sr-only">no measured change</span>—
             </>
           ) : (
             <>
-              {up ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
+              {up ? <IconArrowUpRight size={13} /> : <IconArrowDownRight size={13} />}
               <span className="sr-only">{up ? "up" : "down"}</span>
               {Math.abs(change)}%
             </>
@@ -301,7 +292,7 @@ function TokenCard({ token }: { token: TokenSummary }) {
       {onCurve ? (
         <>
           <div className="reserve-row">
-            <span><TrendingUp size={13} /> curve mining</span>
+            <span>curve mining</span>
             <strong>{percent(curve.progress)}</strong>
           </div>
           <div className="progress is-curve" aria-hidden="true"><i style={{ width: percent(curve.progress) }} /></div>
@@ -314,15 +305,15 @@ function TokenCard({ token }: { token: TokenSummary }) {
       ) : (
         <>
           <div className="reserve-row">
-            <span><Pickaxe size={13} /> unmined reserve</span>
+            <span><IconMine size={13} /> unmined reserve</span>
             <strong>{reservePercent}%</strong>
           </div>
           <div className="progress" aria-hidden="true"><i style={{ width: reservePercent + "%" }} /></div>
         </>
       )}
       <div className="card-foot">
-        <span><Gauge size={13} /> {compact(token.networkPower)} power</span>
-        <span className="card-cta" aria-hidden="true">Mine <ChevronRight size={14} /></span>
+        <span>{compact(token.networkPower)} power</span>
+        <span className="card-cta" aria-hidden="true">Mine <IconChevronRight size={14} /></span>
       </div>
     </a>
   );
@@ -377,15 +368,14 @@ export function SelectedMine({
         <div className="selected-heading-actions">
           {canSwitch && (
             <button className="btn btn-ghost btn-sm switch-mine-button" onClick={onSwitch}>
-              Switch crew here <Pickaxe size={14} />
+              Switch crew here <IconMine size={14} />
             </button>
           )}
           <a className="btn btn-ghost btn-sm" href={"/trade?mint=" + encodeURIComponent(token.mint)}>
-            Trade ${token.symbol} <TrendingUp size={14} />
+            Trade ${token.symbol}
           </a>
           <button className="mint-address" onClick={copyMint} aria-label={"Copy mint address " + token.mint}>
-            {shortAddress(token.mint)} {copied ? <Check size={14} /> : <Copy size={14} />}
-            <span className="sr-only" aria-live="polite">{copied ? "Copied" : ""}</span>
+            {shortAddress(token.mint)} <span className="sr-only" aria-live="polite">{copied ? "Copied" : "Copy mint address"}</span>
           </button>
         </div>
       </div>
@@ -398,22 +388,21 @@ export function SelectedMine({
               {compact(token.reserveRemaining)} ${token.symbol} {hasCurveBudget ? "of the launch cap left" : "remain"}
             </small>
           </div>
-          <div className="shaft" aria-hidden="true"><i style={{ height: reservePercent + "%" }}><Pickaxe size={28} /></i></div>
+          <div className="shaft" aria-hidden="true"><i style={{ height: reservePercent + "%" }}><IconMine size={28} /></i></div>
         </div>
         <div className="metric-panel">
-          <Gauge />
           <span>Network power</span>
           <strong>{networkPower === null ? "—" : compact(networkPower)}</strong>
           {networkPower !== null && <small>total on this mine</small>}
         </div>
         <div className="metric-panel">
-          <Clock3 />
+          <IconTimer />
           <span>{emission.label}</span>
           <strong className={emission.onCurve ? "is-phrase" : undefined}>{emission.value}</strong>
           <small>{emission.detail}</small>
         </div>
         <div className="metric-panel">
-          <LockKeyhole />
+          <IconWallet />
           <span>Wallet custody</span>
           <strong>YOU KEEP CONTROL</strong>
           <small>Your wallet signs; Diggo never holds funds. Trading liquidity is program-controlled.</small>
@@ -462,9 +451,9 @@ export function HowItWorks() {
           <p>No guaranteed yield. Each mine has a finite, transparent reserve shared by crew Mining Power.</p>
         </div>
         <div className="steps">
-          <article><b>01</b><span className="step-icon"><Pickaxe /></span><h3>Activate your crew</h3><p>One signature opens a 24h shift. Your crew keeps digging while you are offline.</p></article>
-          <article><b>02</b><span className="step-icon"><Gem /></span><h3>Collect the report</h3><p>Come back to ORE for upgrades, settled block rewards and the occasional discovery.</p></article>
-          <article><b>03</b><span className="step-icon"><Hammer /></span><h3>Grow the operation</h3><p>Spend ORE on Miners, Drills, Carts, Foreman and Storage. The mine grows with your tier.</p></article>
+          <article><b>01</b><span className="step-icon"><IconMine /></span><h3>Activate your crew</h3><p>One signature opens a 24h shift. Your crew keeps digging while you are offline.</p></article>
+          <article><b>02</b><span className="step-icon"><IconOre /></span><h3>Collect the report</h3><p>Come back to ORE for upgrades, settled block rewards and the occasional discovery.</p></article>
+          <article><b>03</b><span className="step-icon"><IconHammer /></span><h3>Grow the operation</h3><p>Spend ORE on Miners, Drills, Carts, Foreman and Storage. The mine grows with your tier.</p></article>
         </div>
       </div>
     </section>
@@ -475,9 +464,9 @@ export function FinalCta({ onLaunch }: { onLaunch(): void }) {
   return (
     <section className="final-cta">
       <div className="page-shell">
-        <span className="huge-pick" aria-hidden="true"><Pickaxe /></span>
+        <span className="huge-pick" aria-hidden="true"><IconMine /></span>
         <div><h2>START DIGGING.</h2></div>
-        <button className="btn btn-dark btn-lg" onClick={onLaunch}>Launch your coin <ArrowUpRight size={18} /></button>
+        <button className="btn btn-dark btn-lg" onClick={onLaunch}>Launch your coin <IconArrowUpRight size={20} /></button>
       </div>
     </section>
   );
@@ -486,17 +475,20 @@ export function FinalCta({ onLaunch }: { onLaunch(): void }) {
 export function SiteFooter() {
   return (
     <footer className="site-footer page-shell">
-      <BrandMark />
-      <p>Finite supply. Infinite memes.</p>
-      <div><a href="/mines">Mines</a><a href="/leaderboards">Leaderboards</a><a href="/create">Launch</a></div>
-      <nav className="site-footer-legal" aria-label="Legal">
-        {LEGAL_ROUTES.map((route) => (
-          <a key={route.id} href={route.path}>
-            {route.short}
-          </a>
-        ))}
-      </nav>
-      <small>© 2026 Diggo.fun</small>
+      <div className="site-footer-content">
+        <BrandMark />
+        <nav className="site-footer-product" aria-label="Product">
+          <a href="/mines">Mines</a><a href="/leaderboards">Leaderboards</a><a href="/create">Launch</a>
+        </nav>
+        <nav className="site-footer-legal" aria-label="Legal">
+          {LEGAL_ROUTES.map((route) => (
+            <a key={route.id} href={route.path}>
+              {route.short}
+            </a>
+          ))}
+        </nav>
+        <small>© 2026 Diggo.fun</small>
+      </div>
     </footer>
   );
 }

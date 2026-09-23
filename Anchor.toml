@@ -6,10 +6,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-diggo_protocol = "BLF7g1SbT72xb5M8rVrD7V3mdDXxb1AqwChcoeF4ppmE"
+diggo_protocol = "H3Y8GgTnvwv5U1bajfzj386YSPC48vvwjFroXYyHZFj5"
 
 [programs.devnet]
-diggo_protocol = "BLF7g1SbT72xb5M8rVrD7V3mdDXxb1AqwChcoeF4ppmE"
+diggo_protocol = "H3Y8GgTnvwv5U1bajfzj386YSPC48vvwjFroXYyHZFj5"
 
 [provider]
 cluster = "Localnet"

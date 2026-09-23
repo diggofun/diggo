@@ -6,6 +6,9 @@ resolver = "2"
 overflow-checks = true
 lto = "fat"
 codegen-units = 1
+# Size first: the program is a .so the cluster loads and pays for, and the CU cost of -Oz is
+# measured in the integration suite rather than assumed. See CONTRACTS.md's release-profile note.
+opt-level = "z"
 
 [profile.release.build-override]
 opt-level = 3

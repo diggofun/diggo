@@ -1,12 +1,17 @@
 /**
- * The core loop: activate, collect, switch.
+ * The core loop: activate, collect, switch - and why it is skipped in v2.
  *
- * Every assertion is about state the Worker authored — the activation window, the stored mining
- * report, the crew's active mine. The page is only allowed to display them, so these tests also fail
- * if a reward or a countdown ever starts being computed in the browser.
+ * In v4 every assertion here was about state the Worker authored: the activation window, the stored
+ * mining report, the crew's active mine. v2 moved all three to the program. `activate`,
+ * `claim_rewards` and `switch_mine` are instructions the player's own wallet signs against the
+ * on-chain PlayerAccount and MiningPosition, and the dashboard's own numbers come from a chain read
+ * (design section 2, rows 1, 6, 16, 17). With no validator behind the dev pair there is nothing for
+ * the page to display and no instruction that can succeed, so the three tests below are kept but
+ * skipped with that reason; docs/DEPLOYMENT.md's "Running the chain-dependent end-to-end specs"
+ * is the setup that makes them runnable again.
  *
- * One wallet per worker process (see e2e/fixtures/wallet.ts) means the file starts from a first-run
- * crew, and the later tests reuse the window the first one opened.
+ * What is still covered without a chain: the wallet handshake (auth.e2e.ts), the surfaces that only
+ * read the index (surfaces.e2e.ts), the launch cost and the onboarding copy (launch-v2.e2e.ts).
  */
 import { expect, test } from "@playwright/test";
 import {
@@ -26,7 +31,7 @@ test.beforeEach(async ({ page }) => {
   await startSignedIn(page);
 });
 
-test("activating a mine opens a 24h shift with a live countdown", async ({ page }) => {
+test.skip("activating a mine opens a 24h shift with a live countdown", async ({ page }) => {
   await gotoMinePage(page);
 
   // Playwright reuses a worker process across files, so a sibling file may already have opened this
@@ -57,7 +62,7 @@ test("activating a mine opens a 24h shift with a live countdown", async ({ page 
   ).toBeVisible();
 });
 
-test("collecting a mining report is idempotent and stays inside the game economy", async ({ page }) => {
+test.skip("collecting a mining report is idempotent and stays inside the game economy", async ({ page }) => {
   await activateCrew(page);
   await collectButton(page).click();
 
@@ -77,7 +82,7 @@ test("collecting a mining report is idempotent and stays inside the game economy
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
-test("switching mines moves the crew to the mine the player picked", async ({ page }) => {
+test.skip("switching mines moves the crew to the mine the player picked", async ({ page }) => {
   await activateCrew(page);
   // textContent, not innerText: the switch list renders its mine names in uppercase.
   const currentMine = (await page.locator(".dash-mine-token h3").textContent())?.trim() ?? "";

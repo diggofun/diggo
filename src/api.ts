@@ -4,8 +4,20 @@
  * Every call goes through request(), which attaches the privacy-conscious per-browser
  * X-Diggo-Device hint (src/device.ts) and relies on the HttpOnly session cookie the Worker sets
  * on /api/auth/verify. Nothing here decides an outcome: discovery rolls, rarities, visual events,
- * block rewards and claim eligibility are all computed server-side, and this module only carries
- * the answer back to the UI (spec 55).
+ * block rewards, crew prices and claim eligibility are all decided on chain by instructions the
+ * player's own wallet signs (src/solanaProgram.ts), and the Worker is an indexer: it reads those
+ * instructions and serves the result. This module carries that result back to the UI and nothing
+ * else.
+ *
+ * That is why there is no activation, roll, claim or upgrade call here any more. Those used to be
+ * server decisions, and in v2 there is no backend path that can produce one: the endpoints are
+ * gone rather than merely unused, so no future caller can reach for one by accident. The one
+ * mutation left is reporting a signature the player's wallet already sent, which the Worker
+ * verifies on chain before it records anything.
+ *
+ * The risk layer stays advisory. /api/verify/challenge and the 403 VERIFICATION_REQUIRED answer
+ * still exist, and the UI still shows them, but no on-chain instruction depends on the answer: a
+ * flagged player mines, bonds, rolls and claims exactly as an unflagged one does.
  */
 import type {
   AchievementView,
@@ -124,11 +136,37 @@ export interface Bootstrap {
   config: DiggoConfig;
 }
 
+/**
+ * The Worker's bootstrap payload.
+ *
+ * It is flat - the token list plus the cluster settings as siblings - and the client folds the
+ * settings into the one `config` object the app carries. Reading `data.config` straight off the
+ * response (as this used to) yields undefined, which leaves every chain-dependent surface inert:
+ * `config.programId` stays empty, so no launch, roll, bond or player read is ever attempted.
+ */
+interface BootstrapPayload {
+  tokens?: TokenSummary[];
+  cluster?: string;
+  programId?: string;
+  posthogApiKey?: string;
+  posthogHost?: string;
+  turnstileSiteKey?: string;
+  vanitySuffix?: string;
+}
+
 export async function getBootstrap(): Promise<Bootstrap> {
   try {
-    const data = await getJson<Bootstrap>("/api/bootstrap?limit=1000");
-    void startAnalytics(data.config);
-    return data;
+    const data = await getJson<BootstrapPayload>("/api/bootstrap?limit=1000");
+    const config: DiggoConfig = {
+      cluster: data.cluster ?? "devnet",
+      posthogApiKey: data.posthogApiKey,
+      posthogHost: data.posthogHost,
+      turnstileSiteKey: data.turnstileSiteKey ?? "",
+      programId: data.programId ?? "",
+      vanitySuffix: data.vanitySuffix ?? "diggo",
+    };
+    void startAnalytics(config);
+    return { tokens: data.tokens ?? [], config };
   } catch {
     return {
       tokens: [],
@@ -155,8 +193,46 @@ export async function verifyWallet(
   wallet: string,
   nonce: string,
   signature: string,
+  referralCode?: string | null,
 ): Promise<{ wallet: string; expiresIn: number }> {
-  return postJson("/api/auth/verify", { wallet, nonce, signature });
+  const query = referralCode ? "?ref=" + encodeURIComponent(referralCode) : "";
+  return postJson("/api/auth/verify" + query, { wallet, nonce, signature });
+}
+
+export interface ReferralView {
+  id: string;
+  referredWallet: string;
+  username: string | null;
+  joinedAt: number | null;
+  volumeLamports: string;
+  status: "PENDING" | "QUALIFIED" | "REWARDED" | "REJECTED";
+  oreEntitled: number;
+  oreCredited: number;
+}
+
+export interface ReferralPanel {
+  wallet: string;
+  code: string;
+  link: string;
+  cooldownSeconds: number;
+  thresholdLamports: string;
+  weeklyCap: number;
+  totals: { invited: number; pending: number; qualified: number; oreEarned: number; oreCredited: number; skinUnlocked: boolean };
+  referrals: ReferralView[];
+  page: number;
+  pages: number;
+}
+
+export async function getReferrals(page = 1): Promise<ReferralPanel> {
+  return getJson<ReferralPanel>("/api/referrals?page=" + page);
+}
+
+export async function checkReferralCode(code: string): Promise<{ available: boolean; code?: string; message?: string }> {
+  return getJson("/api/referrals/code/" + encodeURIComponent(code));
+}
+
+export async function saveReferralCode(code: string): Promise<{ code: string; changed: boolean }> {
+  return postJson("/api/referrals/code", { code });
 }
 
 export async function getWalletSession(): Promise<{ wallet: string } | null> {
@@ -197,54 +273,48 @@ export async function registerLaunchedToken(
   throw lastError ?? new Error("Could not register the on-chain launch");
 }
 
-/* Mining: activation, reports, switching and crew (spec 29, 30, 71-75) */
-
-export interface ActivationOutcome {
-  report: MiningReport;
-  player: PlayerProfile;
-  mine: MineInfo | null;
-}
-
-export async function getActivationChallenge(wallet: string): Promise<{ nonce: string; message: string }> {
-  return postJson("/api/mine/activate/challenge", { wallet });
-}
-
-export async function activateMine(
-  wallet: string,
-  nonce: string,
-  signature: string,
-  mint?: string,
-): Promise<ActivationOutcome> {
-  return postJson("/api/mine/activate", { wallet, nonce, signature, mint });
-}
-
-/** Idempotent per activation window; a repeat call returns the stored report (spec 29). */
-export async function collectMiningReport(): Promise<{
-  report: MiningReport;
-  player: PlayerProfile;
-  idempotent: boolean;
-}> {
-  return postJson("/api/mine/report/collect");
-}
+/* Mining and crew: indexer reads only (spec 29, 30, 71-75).
+ *
+ * Activation, the mining report, switching mines and upgrading crew are all on-chain
+ * instructions now, signed by the player's wallet — see src/solanaProgram.ts. The Worker reads
+ * the accounts those instructions write and serves the result, which is what these functions
+ * return. There is deliberately no mutation here: a client that wanted to activate or upgrade
+ * through the Worker has no endpoint to call, because the Worker has no way to decide either. */
 
 export async function getMineInfo(mint: string): Promise<MineInfo> {
   const data = await getJson<{ mine: MineInfo }>("/api/mines/" + encodeURIComponent(mint) + "/info");
   return data.mine;
 }
 
-export async function switchMine(mint: string): Promise<{ player: PlayerProfile; mine: MineInfo | null }> {
-  return postJson("/api/mine/switch", { mint });
-}
-
-export async function upgradeCrew(
-  component: string,
-): Promise<{ player: PlayerProfile; spent: number; power: number }> {
-  return postJson("/api/crew/upgrade", { component });
+/**
+ * The player's indexed mining state, which the Worker derives from the on-chain PlayerAccount
+ * and MiningPosition. It is a cache of chain state and never an input to an instruction.
+ */
+export async function getMiningState(wallet: string): Promise<{
+  player: PlayerProfile;
+  mine: MineInfo | null;
+  report: MiningReport | null;
+}> {
+  return getJson("/api/player/" + encodeURIComponent(wallet) + "/mining");
 }
 
 export async function getPlayerProfile(wallet: string): Promise<PlayerProfile> {
   const data = await getJson<{ player: PlayerProfile }>(playerPath(wallet));
   return data.player;
+}
+
+/** The small, stable part of the v2 portfolio used by the global header. */
+export interface PortfolioSummary {
+  mining: {
+    streak: number;
+    oreWhole: number;
+  };
+}
+
+/** Fetches a portfolio projection from the shared v2 endpoint. */
+export async function getPortfolio<T = PortfolioSummary>(wallet: string): Promise<T> {
+  const data = await getJson<{ portfolio: T }>("/api/portfolio/" + encodeURIComponent(wallet));
+  return data.portfolio;
 }
 
 /* Public usernames (worker/profile.ts). Reading one is public; setting one needs the session. */
@@ -334,43 +404,12 @@ export async function confirmRewardClaimPayout(
   return postJson("/api/rewards/claim/confirm", { rewardId, signature });
 }
 
-/* Discoveries: the server authors the opportunity and rolls the outcome (spec 55, 56) */
-
-export interface DiscoveryOpportunityView {
-  opportunity: DiscoveryOpportunity | null;
-  crewActive?: boolean;
-  eligible?: boolean;
-  challengeRequired?: boolean;
-  publicMessage?: string;
-}
-
-export interface DiscoveryRollView {
-  discovery: DiscoveryRecord | null;
-  window: string;
-  rolled: boolean;
-}
-
-export async function requestDiscoveryOpportunity(): Promise<DiscoveryOpportunityView> {
-  return postJson("/api/discovery/opportunity");
-}
-
-export async function rollDiscovery(mint?: string): Promise<DiscoveryRollView> {
-  return postJson("/api/discovery/roll", mint ? { mint } : {});
-}
-
-export async function getDiscoveryClaimChallenge(
-  discoveryId: string,
-): Promise<{ nonce: string; message: string; expiresIn: number }> {
-  return postJson("/api/discovery/claim/challenge", { discoveryId });
-}
-
-export async function claimDiscovery(
-  discoveryId: string,
-  nonce: string,
-  signature: string,
-): Promise<{ status: string; txSignature?: string | null; queued?: boolean }> {
-  return postJson("/api/discovery/claim", { discoveryId, nonce, signature });
-}
+/* Discoveries: the chain decides, the indexer reports (spec 55, 56).
+ *
+ * A roll is `create_discovery_roll`, an outcome is `settle_discovery` recomputing
+ * sha256(epoch_seed || owner || window) on chain, and both are transactions the player's wallet
+ * signs. The Worker indexes the DiscoverySettled events and serves the history; it has no roll to
+ * author and no outcome to pick, so the endpoints that used to do both are gone. */
 
 export async function getDiscoveries(
   wallet: string,
@@ -379,6 +418,56 @@ export async function getDiscoveries(
     playerPath(wallet, "/discoveries"),
   );
   return { discoveries: data.discoveries ?? [], opportunity: data.opportunity ?? null };
+}
+
+/* Sponsorship: the one surface a creator needs before signing a launch.
+ *
+ * There is no on-chain registry that enumerates sponsor events — they are PDAs keyed on
+ * (vault, event_id) — so a client learns the addresses from the indexer and then reads each
+ * event on chain, where the program is the authority on whether it is spending. The indexer
+ * answer is a hint; src/solanaProgram.ts#findLaunchSubsidy is the decision. */
+
+export interface SponsorEventSummary {
+  /** The vault's own event_count at creation, which is the event PDA's second seed. */
+  eventId: number;
+  /** The SponsorEvent PDA. */
+  event: string;
+  /** The SponsorVault PDA the event spends from. */
+  vault: string;
+  /** 0 launch rent, 1 platform fee waiver, 2 player account, 3 player bond. */
+  kind: number;
+  startAt: number;
+  endAt: number;
+  budgetLamports: string;
+  spentLamports: string;
+  perCoinLimitLamports: string;
+  perWalletLimitLamports: string;
+  paused: boolean;
+}
+
+/**
+ * The sponsor events the indexer knows about. A cluster whose indexer does not serve them yet
+ * answers with an empty list, which the launch form reads as "the creator pays" — the honest
+ * default rather than a promise the chain would not keep.
+ */
+export async function getSponsorEvents(): Promise<SponsorEventSummary[]> {
+  try {
+    const data = await getJson<{ events?: SponsorEventSummary[] }>("/api/sponsors/events");
+    return data.events ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The same list for one sponsor vault, which is what the admin screen manages. It is scoped by
+ * owner so a sponsor only ever sees their own events, and the Worker enforces that by session.
+ */
+export async function getSponsorEventsForOwner(owner: string): Promise<SponsorEventSummary[]> {
+  const data = await getJson<{ events?: SponsorEventSummary[] }>(
+    "/api/sponsors/" + encodeURIComponent(owner) + "/events",
+  );
+  return data.events ?? [];
 }
 
 /* Progressive friction: the only client-visible part of the risk system (spec 52, 62) */

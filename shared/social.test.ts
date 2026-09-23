@@ -129,7 +129,7 @@ describe("cosmetics never affect gameplay", () => {
     expect(cosmeticUnlocked(cosmeticById("frame_bronze")!, { ...none, achievementIds: ["FIRST_ACTIVATION"] })).toBe(true);
     expect(unlockedCosmeticIds(none).length).toBeLessThan(COSMETIC_CATALOG.length);
     expect(unlockedCosmeticIds({ streak: 365, crewTier: 6, achievementIds: allAchievementIds(), seasonPoints: 0 }).length)
-      .toBe(COSMETIC_CATALOG.length - COSMETIC_CATALOG.filter((item) => item.source === "purchasable").length);
+      .toBe(COSMETIC_CATALOG.length - COSMETIC_CATALOG.filter((item) => item.source === "purchasable" || item.id === "outfit_referral_first").length);
   });
 
   it("references only real badges and titles from the achievements catalog", () => {

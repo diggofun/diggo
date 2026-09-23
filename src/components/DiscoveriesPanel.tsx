@@ -8,9 +8,9 @@
  *
  * Claims need their own wallet-signed, single-use challenge, exactly like reward claims.
  */
-import { Compass, ExternalLink, Gem, Pickaxe, Repeat2, Sparkles, TrendingUp } from "lucide-react";
 import type { DiscoveryOpportunity, DiscoveryRecord, TokenSummary } from "../../shared/types";
 import { tokenAmount } from "../format";
+import { IconDiscoveries, IconMine, IconSwap } from "../icons";
 import { useReducedMotion } from "../motion";
 import { requestWalletMenu } from "../wallet";
 import { DiscoveryArt } from "./MineScene";
@@ -58,7 +58,7 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
       <div className="section-heading">
         <div>
           <div className="eyebrow">
-            <Gem size={14} /> Discoveries
+            <IconDiscoveries size={14} /> Discoveries
           </div>
           <h1>
             WHAT THE CREW
@@ -72,7 +72,7 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
             disabled={!signedIn || rolling || spent}
             onClick={opportunity ? props.onRoll : props.onRequestOpportunity}
           >
-            {rolling ? <Compass size={16} /> : opportunity && !spent ? <Pickaxe size={16} /> : <Sparkles size={16} />}
+            {rolling ? <IconDiscoveries size={16} /> : opportunity && !spent ? <IconMine size={16} /> : <IconDiscoveries size={16} />}
             {rollLabel}
           </button>
           <small>{rollHint}</small>
@@ -84,7 +84,7 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
 
       {!signedIn && (
         <EmptyState
-          icon={<Gem size={26} />}
+          icon={<IconDiscoveries size={26} />}
           title="Hidden finds are waiting underground."
           action={<button className="btn btn-primary" onClick={requestWalletMenu}>Connect wallet</button>}
         >
@@ -100,7 +100,7 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
         </div>
       )}
       {signedIn && !loading && discoveries.length === 0 && (
-        <EmptyState icon={<Compass size={26} />} title="No discoveries yet">
+        <EmptyState icon={<IconDiscoveries size={26} />} title="No discoveries yet">
           An active, eligible crew has a chance each window, and the mine's own
           liquidity, volume and reserve decide how good that chance can be.
         </EmptyState>
@@ -122,7 +122,7 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
                 </div>
                 <div className="discovery-row-actions">
                   <button className="badge ledger-token" onClick={() => props.onOpenToken(discovery.mint)}>
-                    View token <ExternalLink size={11} />
+                    View token
                   </button>
                   <button disabled={claimingId === discovery.id} onClick={() => props.onClaim(discovery)}>
                     {claimingId === discovery.id ? "Claiming…" : "Claim"}
@@ -156,10 +156,10 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
                 Token page
               </button>
               <button className="badge ledger-token" onClick={() => props.onTrade(discovery.mint)}>
-                <TrendingUp size={12} /> Trade
+                Trade
               </button>
               <button className="badge ledger-token" onClick={() => props.onSwitchCrew(discovery.mint)}>
-                <Repeat2 size={12} /> Switch crew to this mine
+                <IconSwap size={12} /> Switch crew to this mine
               </button>
             </div>
           </article>

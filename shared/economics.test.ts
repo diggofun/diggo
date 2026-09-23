@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { DIGGO_CONFIG } from "./config";
+import { ACCOUNT_RENT_LAMPORTS, MINT_V2_SIZE } from "./program";
 import {
   BPS_DENOMINATOR,
   CREW_TIERS,
   DISCOVERY_DEFAULTS,
   DISCOVERY_RARITY_TABLE,
   GAMEPLAY_DEFAULTS,
+  V2_LAUNCH_RENT_LAMPORTS,
+  V2_LAUNCH_RENT_TOTAL_LAMPORTS,
+  V2_MINT_SETTLED_SIZE,
   applyActivation,
   auditReserve,
   capRarityByBudget,
@@ -51,8 +55,13 @@ describe("Diggo economics", () => {
   });
 
   it("ramps progression efficiency with account maturity", () => {
+    // `MATURITY_RAMP` is read as `days < up_to_day` (math/power.rs `maturity_ramp_bps`, mirrored
+    // by `onchainMaturityRampBps`), so the rungs are: under a day 20%, days 1-2 40%, days 3-6
+    // 70%, day 7 and beyond 100%. The day counts are the chain's, not the design's prose.
     expect(maturityBps(0)).toBe(2_000);
-    expect(maturityBps(3 * DAY)).toBe(5_000);
+    expect(maturityBps(DAY - 1)).toBe(2_000);
+    expect(maturityBps(DAY)).toBe(4_000);
+    expect(maturityBps(3 * DAY)).toBe(7_000);
     expect(maturityBps(7 * DAY)).toBe(10_000);
     expect(oreForActiveSeconds(3_600, 0)).toBe(
       Math.floor((DIGGO_CONFIG.ore.baseOrePerActiveHour * DIGGO_CONFIG.ore.maturityRamp[0].bps) / 10_000),
@@ -205,5 +214,20 @@ describe("Diggo economics facade", () => {
   it("documents the reserve conservation invariant used by the index accounting", () => {
     // auditReserve is covered in rewardIndex.test.ts; this guards the exported surface.
     expect(typeof auditReserve).toBe("function");
+  });
+});
+
+/* The v2 launch cost, which is the one figure the design promises a creator. It is a mirror of the
+   frozen account table, so it is pinned against it rather than against itself. */
+
+describe("the v2 launch cost mirror", () => {
+  it("costs the three accounts the frozen table charges for", () => {
+    expect(V2_MINT_SETTLED_SIZE).toBe(MINT_V2_SIZE);
+    expect(V2_LAUNCH_RENT_LAMPORTS.mint).toBe(ACCOUNT_RENT_LAMPORTS.mint);
+    expect(V2_LAUNCH_RENT_LAMPORTS.coin).toBe(ACCOUNT_RENT_LAMPORTS.coin);
+    expect(V2_LAUNCH_RENT_LAMPORTS.vault).toBe(ACCOUNT_RENT_LAMPORTS.coinVault);
+    // 438-byte mint, 464-byte Coin and 165-byte vault, which is the 10,098,960 lamports the
+    // program's own the_launch_rent_is_exactly_the_sum_of_the_three_accounts asserts.
+    expect(V2_LAUNCH_RENT_TOTAL_LAMPORTS).toBe(10_098_960n);
   });
 });

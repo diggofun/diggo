@@ -2,6 +2,45 @@ import type { DiscoveryVisualEvent } from "./discoveryVisual";
 
 export type { DiscoveryVisualEvent } from "./discoveryVisual";
 
+import type { DecodedCoin } from "./program";
+
+/**
+ * The on-chain v2 state types, re-exported so a module that only needs to *describe* on-chain
+ * state does not have to import the instruction surface with it. The layouts, decoders, builders
+ * and seed tables all live in shared/program.ts and shared/pdas.ts; these are the names.
+ */
+export type {
+  AccountName,
+  BondSourceName,
+  CoinStatusName,
+  DiggoAccountName,
+  DiggoErrorName,
+  DiggoEventName,
+  DiggoInstructionName,
+  DecodedCoin,
+  DecodedCurveTable,
+  DecodedDiscoveryOpportunity,
+  DecodedGlobalBudget,
+  DecodedLiquidityPool,
+  DecodedMintMetadata,
+  DecodedMiningPosition,
+  DecodedPlayerAccount,
+  DecodedProtocolConfig,
+  DecodedSponsorEvent,
+  DecodedSponsorGrant,
+  DecodedSponsorVault,
+  DecodedTokenAccount,
+  LaunchTokenArgs,
+  OpportunityStatusName,
+  PlayerCrewLevels,
+  ProtocolConfigArgs,
+  RarityTier,
+  SponsorEventKindName,
+  TokenAccountStateName,
+  TrancheName,
+} from "./program";
+
+
 /**
  * What a mine's token is doing right now.
  *
@@ -470,4 +509,31 @@ export interface AchievementView {
   earnedAt: number | null;
   oreGranted: number;
   progress: number;
+}
+
+/**
+ * How a coin's on-chain lifecycle projects onto the API's TokenStatus.
+ *
+ * The program's own status byte is Launching, MiningActive or FullyMined, and none of those three
+ * can express the state a client has to show: a coin that is still on its bonding curve and whose
+ * curve-phase budget is spent (or was never granted, when the launch asked for a zero share), so
+ * its blocks accrue nothing until it graduates and the Mining Reserve takes over. That state is not
+ * "fully mined" - the reserve is untouched - which is why it is derived here from the coin's own
+ * phase flags rather than read off the status byte.
+ */
+export function tokenStatusFromCoin(
+  coin: Pick<DecodedCoin, "status" | "graduated" | "curveMiningOpen">,
+): TokenStatus {
+  if (coin.status === "FullyMined") return "FULLY_MINED";
+  if (!coin.graduated && !coin.curveMiningOpen) return "CURVE_CAP_REACHED";
+  if (coin.status === "MiningActive") return "MINING_ACTIVE";
+  return "LAUNCHING";
+}
+
+/**
+ * Which side pays a coin's next block. Before graduation only the curve's own token inventory may
+ * pay a block and after it only the Mining Reserve may, so this is a phase and not a preference.
+ */
+export function emissionSourceFromCoin(coin: Pick<DecodedCoin, "graduated">): MineEmissionSource {
+  return coin.graduated ? "RESERVE" : "CURVE";
 }

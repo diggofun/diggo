@@ -5,14 +5,13 @@
  * ADMIN_WALLETS secret - there is no separate admin password or long-lived token to leak.
  *
  * What this module can do: read a compact anti-abuse view of accounts, place or lift an account
- * restriction, open or close a circuit breaker on discoveries, claims or one mine's Discovery
- * Reserve, and read the anti-abuse metrics.
+ * restriction on off-chain surfaces, and read the anti-abuse metrics. That is the whole of it.
  *
  * What it deliberately cannot do, here or anywhere it reaches: move, seize, refund or withdraw
- * funds, sign a transaction, or touch the launch market. Restrictions and breakers only ever
- * stop work - they can never redirect value (spec 65). Every mutation is written to admin_audit
- * and every breaker change additionally to breaker_audit (worker/breakers.ts). The admin view
- * never returns raw IP, device or session identifiers (spec 67).
+ * funds, sign a transaction, halt a payout, or touch a coin's reserves. In v4 this module could
+ * also open a circuit breaker; v2 has no such switch, because a player's claim is decided by
+ * their own signed instruction and a public crank rather than by an operator. Every mutation is
+ * written to admin_audit, and the admin view never returns raw IP, device or session identifiers.
  */
 import { crewTier, type CrewLevels } from "../shared/economics";
 import {
@@ -22,13 +21,6 @@ import {
   isAdminStepUpAction,
 } from "../shared/riskOps";
 import { sessionWallet, verifyWalletSignature } from "./auth";
-import {
-  BREAKER_SCOPES,
-  type BreakerScope,
-  breakerStates,
-  setBreaker,
-  type BreakerState,
-} from "./breakers";
 import type { RuntimeEnv } from "./env";
 import { apiError, checkWalletRateLimit, isBase58Address, json, readJson, textEncoder } from "./http";
 import {
@@ -37,7 +29,13 @@ import {
   clearRestriction,
   setRestriction,
 } from "./signals";
-import { collectMetrics, readCounters } from "./telemetry";
+import {
+  REALIZED_DISCOVERY_PREDICATE,
+  collectMetrics,
+  displayUsdRate,
+  lamportsToUsd,
+  readCounters,
+} from "./telemetry";
 
 const ABUSE_LIMIT_MAX = 100;
 const ABUSE_LIMIT_DEFAULT = 25;
@@ -197,6 +195,32 @@ export async function adminStepUp(request: Request, env: RuntimeEnv): Promise<Re
   );
 }
 
+export interface AdvisoryAlertRow {
+  id: string;
+  kind: string;
+  subject: string | null;
+  severity: string;
+  detail: string;
+  created_at: number;
+}
+
+/**
+ * The advisory alerts the indexer and the risk sweep have raised.
+ *
+ * These are what replaced the v4 circuit breakers: the same detections, recorded instead of
+ * enforced. An operator reads them to decide whether to talk to a sponsor, tighten an HTTP rate
+ * limit or file an appeal outcome - none of which can move a player's funds.
+ */
+export async function advisoryAlerts(env: RuntimeEnv, limit = 25): Promise<AdvisoryAlertRow[]> {
+  const rows = await env.DB.prepare(
+    "SELECT id, kind, subject, severity, detail, created_at FROM advisory_alerts" +
+      " ORDER BY created_at DESC LIMIT ?1",
+  )
+    .bind(Math.min(200, Math.max(1, limit)))
+    .all<AdvisoryAlertRow>();
+  return rows.results ?? [];
+}
+
 export type AdminStepUpVerdict = { ok: true; nonce: string } | { ok: false; response: Response };
 
 /**
@@ -277,7 +301,8 @@ interface AbuseRow {
   trust: number;
   flags: string;
   discoveries_count: number;
-  claimed_value_usd: number;
+  /** The lamports this wallet's realized discoveries took out of a Discovery Reserve, summed. */
+  claimed_value_lamports: number;
   related_accounts: number;
 }
 
@@ -321,21 +346,28 @@ export async function adminAbuse(request: Request, env: RuntimeEnv): Promise<Res
   bindings.push(limit);
   const sql =
     "SELECT p.wallet, p.created_at, p.active_days, p.streak, p.risk_state, p.risk_score, " +
-    "p.miners_level, p.drills_level, p.carts_level, p.foreman_level, p.storage_level, " +
+    "COALESCE(a.miners_level, 0) AS miners_level, COALESCE(a.drills_level, 0) AS drills_level, " +
+    "COALESCE(a.carts_level, 0) AS carts_level, COALESCE(a.foreman_level, 0) AS foreman_level, " +
+    "COALESCE(a.storage_level, 0) AS storage_level, " +
     "COALESCE(r.level, 'LOW') AS risk_level, COALESCE(r.trust, 0) AS trust, COALESCE(r.flags, '{}') AS flags, " +
     "COALESCE(r.computed_state, r.reward_state, p.risk_state, 'NORMAL') AS computed_state, " +
     "COALESCE(r.reward_state, p.risk_state, 'NORMAL') AS risk_reward_state, " +
-    "(SELECT COUNT(*) FROM discoveries d WHERE d.wallet = p.wallet) AS discoveries_count, " +
-    "(SELECT COALESCE(SUM(d.value_usd), 0) FROM discoveries d WHERE d.wallet = p.wallet AND d.status = 'CLAIMED') " +
-    "AS claimed_value_usd, " +
+    "(SELECT COUNT(*) FROM discovery_events d WHERE d.wallet = p.wallet AND" + REALIZED_DISCOVERY_PREDICATE + ") " +
+    "AS discoveries_count, " +
+    "(SELECT COALESCE(SUM(CAST(d.value_lamports AS INTEGER)), 0) FROM discovery_events d " +
+    "WHERE d.wallet = p.wallet AND" + REALIZED_DISCOVERY_PREDICATE + ") AS claimed_value_lamports, " +
     "(SELECT COUNT(DISTINCT s2.wallet) FROM account_signals s1 JOIN account_signals s2 " +
     "ON s2.device_hash = s1.device_hash WHERE s1.wallet = p.wallet AND s1.device_hash IS NOT NULL " +
     "AND s2.ts >= ?1) AS related_accounts " +
-    "FROM players p LEFT JOIN account_risk r ON r.wallet = p.wallet" +
+    "FROM players p LEFT JOIN player_accounts a ON a.wallet = p.wallet " +
+    "LEFT JOIN account_risk r ON r.wallet = p.wallet" +
     where +
     " ORDER BY p.risk_score DESC, p.created_at DESC LIMIT ?" +
     bindings.length;
   const rows = (await env.DB.prepare(sql).bind(...bindings).all<AbuseRow>()).results;
+  // The lamport sum is the exact figure. The USD figure is that sum at the display rate, and the
+  // rate's availability is reported beside it rather than a zero that reads like a measurement.
+  const rate = await displayUsdRate(env);
   const wallets = rows.map((row) => row.wallet);
   const restrictions = wallets.length
     ? (
@@ -376,7 +408,9 @@ export async function adminAbuse(request: Request, env: RuntimeEnv): Promise<Res
     crewLevel: row.miners_level + row.drills_level + row.carts_level + row.foreman_level + row.storage_level,
     crewTier: crewTier(crewLevelsOf(row)).tier,
     discoveries: row.discoveries_count,
-    claimedValueUsd: row.claimed_value_usd,
+    claimedValueLamports: String(row.claimed_value_lamports ?? 0),
+    claimedValueUsd: lamportsToUsd(Number(row.claimed_value_lamports ?? 0), rate.solUsd),
+    usdPriceAvailable: rate.available,
     trust: row.trust,
     flags: parseFlags(row.flags),
     relatedAccounts: row.related_accounts,
@@ -477,72 +511,19 @@ export async function adminRestrictions(request: Request, env: RuntimeEnv): Prom
   return json({ restriction }, { headers: { "cache-control": "no-store" } });
 }
 
-interface BreakerBody {
-  scope?: string;
-  mint?: string;
-  open?: boolean;
-  reason?: string;
-  stepUp?: AdminStepUpProof;
-}
-
 /**
- * POST /api/admin/breakers { scope, mint?, open, reason }
- *
- * The full extent of emergency control: halt or resume new discoveries, claims, or one mine's
- * Discovery Reserve payouts. Trading, the launch market and every fund movement are untouched by
- * design - there is no code path from here to any of them.
- */
-export async function adminBreakers(request: Request, env: RuntimeEnv): Promise<Response> {
-  const actor = await adminActor(env, request);
-  if (!actor) return apiError("Admin session required", 401);
-  const body = await readJson<BreakerBody>(request, 4_096);
-  const scope = body.scope as BreakerScope;
-  if (!BREAKER_SCOPES.includes(scope)) return apiError("Unknown breaker scope");
-  if (scope === "discovery_reserve" && body.mint !== undefined && !isBase58Address(body.mint)) {
-    return apiError("Invalid mint for discovery_reserve");
-  }
-  if (typeof body.reason !== "string" || body.reason.trim().length === 0) {
-    return apiError("A reason is required for every breaker change");
-  }
-  const open = body.open !== false;
-  const proof = await requireAdminStepUp(env, {
-    actor,
-    action: open ? "breaker.open" : "breaker.close",
-    payload: stepUpPayload(body),
-    proof: body.stepUp,
-  });
-  if (!proof.ok) return proof.response;
-  const breaker: BreakerState = await setBreaker(env, {
-    scope,
-    mint: scope === "discovery_reserve" ? (body.mint ?? null) : null,
-    open,
-    reason: body.reason.trim().slice(0, 200),
-    actor,
-  });
-  await writeAudit(env, actor, open ? "breaker.open" : "breaker.close", breaker.mint ?? breaker.scope, {
-    scope,
-    mint: breaker.mint,
-    reason: breaker.reason,
-    stepUp: proof.nonce,
-  });
-  return json(
-    { breaker, breakers: await breakerStates(env) },
-    { headers: { "cache-control": "no-store" } },
-  );
-}
-
-/**
- * GET /api/admin/metrics - the spec 66 metric set, the alert evaluation and the current breaker
- * state, so an operator sees the same numbers the alerting would.
+ * GET /api/admin/metrics - the metric set, the alert evaluation, the advisory alerts the
+ * indexer has raised, and the recent audit trail, so an operator sees the same numbers the
+ * alerting would.
  */
 export async function adminMetrics(request: Request, env: RuntimeEnv): Promise<Response> {
   const actor = await adminActor(env, request);
   if (!actor) return apiError("Admin session required", 401);
   const now = Math.floor(Date.now() / 1_000);
-  const [report, counters, breakers, audit] = await Promise.all([
+  const [report, counters, advisory, audit] = await Promise.all([
     collectMetrics(env, now),
     readCounters(env, 24),
-    breakerStates(env),
+    advisoryAlerts(env, 25),
     recentAudit(env, 25),
   ]);
   return json(
@@ -551,7 +532,7 @@ export async function adminMetrics(request: Request, env: RuntimeEnv): Promise<R
       window: report.window,
       metrics: report.snapshot,
       alerts: report.alerts,
-      breakers,
+      advisory,
       counters,
       audit,
     },

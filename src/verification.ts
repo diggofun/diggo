@@ -9,6 +9,17 @@
  *
  * The UI must never explain more than "Additional verification required" (spec 62), so this
  * module is the only place that knows the difference between the two strategies.
+ *
+ * **This is advisory in v2, and the boundary matters.** Nothing here can gate an on-chain
+ * instruction. Power, ORE, the bond, crew prices, rolls, settlements and payouts are decided by
+ * instructions the player's own wallet signs (src/solanaProgram.ts), and the program has no
+ * notion of a risk score. What friction still governs is the Worker's own surfaces — the reads
+ * this module's callers make, the rate limits, and the off-chain rewards a flagged account may be
+ * held back from. A player who never clears a check still mines, bonds, rolls and claims exactly
+ * as an unflagged one does; the worst the gate can do is make the indexer answer more slowly.
+ *
+ * `runGated` therefore wraps indexer calls and never a chain write. Wrapping a transaction in it
+ * would suggest the Worker had a say in whether it lands, which is the thing v2 removed.
  */
 import bs58 from "bs58";
 import { ApiError, verifyChallenge } from "./api";

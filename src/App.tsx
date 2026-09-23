@@ -1,33 +1,29 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { address } from "@solana/kit";
 import bs58 from "bs58";
 import "./walletConnect";
-import { ArrowUpRight, Hammer } from "lucide-react";
+import { IconArrowUpRight, IconBadge, IconHammer } from "./icons";
 
 import type { DiscoveryOpportunity, DiscoveryRecord, MineInfo, MiningReport, PlayerProfile, TokenSummary } from "../shared/types";
 import {
-  activateMine as activateMineRequest,
-  claimDiscovery as claimDiscoveryRequest,
   claimReward as claimRewardRequest,
-  collectMiningReport,
+  confirmRewardClaimPayout,
   getDiscoveries,
-  getActivationChallenge,
   getBootstrap,
   getChallenge,
-  getDiscoveryClaimChallenge,
   getMineInfo,
+  getMiningState,
   getPlayerProfile,
+  getPortfolio,
   getPlayerRewards,
   getRewardClaimChallenge,
-  rollDiscovery as rollDiscoveryRequest,
-  requestDiscoveryOpportunity,
   getWalletSession,
   getToken,
-  switchMine as switchMineRequest,
-  upgradeCrew,
   verifyWallet,
   ApiError,
   type RewardClaimView,
   type DiggoConfig,
+  type PortfolioSummary,
 } from "./api";
 import { track } from "./analytics";
 import { TURNSTILE_SITE_KEY } from "./constants";
@@ -41,7 +37,9 @@ import { EmptyState, ErrorState, LoadingScreen, RouteFallback } from "./componen
 import { useVerificationGate } from "./components/VerificationGate";
 import { ConsentBanner } from "./components/ConsentBanner";
 import { PushToggle } from "./components/PushToggle";
+import { WatchlistPanel } from "./components/WatchlistPanel";
 import { isLegalPath } from "./components/legal/routes";
+import { usePendingTransaction } from "./onchain";
 
 /*
  * Every screen below the landing page is its own chunk: the swap terminal (lightweight-charts and
@@ -52,6 +50,15 @@ const AdminScreen = lazy(() => import("./components/AdminScreen").then((module) 
 const CosmeticsScreen = lazy(() => import("./components/CosmeticsScreen").then((module) => ({ default: module.CosmeticsScreen })));
 const CrewScreen = lazy(() => import("./components/CrewScreen").then((module) => ({ default: module.CrewScreen })));
 const DashboardPanel = lazy(() => import("./components/DashboardPanel").then((module) => ({ default: module.DashboardPanel })));
+/**
+ * The player's own onboarding, loaded lazily for the same reason the trade panel is: it pulls in
+ * the on-chain client, and a visitor who never connects a wallet should not pay for it.
+ */
+const PlayerOnboarding = lazy(() =>
+  import("./components/PlayerOnboarding").then((module) => ({ default: module.PlayerOnboarding })),
+);
+const PortfolioScreen = lazy(() => import("./components/PortfolioScreen").then((module) => ({ default: module.PortfolioScreen })));
+const ReferralsScreen = lazy(() => import("./components/ReferralsScreen").then((module) => ({ default: module.ReferralsScreen })));
 const DiscoveriesPanel = lazy(() => import("./components/DiscoveriesPanel").then((module) => ({ default: module.DiscoveriesPanel })));
 const EconomyPanels = lazy(() => import("./components/EconomyPanels").then((module) => ({ default: module.EconomyPanels })));
 const LaunchModal = lazy(() => import("./components/LaunchModal").then((module) => ({ default: module.LaunchModal })));
@@ -78,6 +85,8 @@ const ROUTES: Record<string, PageId> = {
   "/crew": "crew",
   "/discoveries": "discoveries",
   "/cosmetics": "cosmetics",
+  "/profile": "profile",
+  "/referrals": "referrals",
   "/admin": "admin",
   ...(import.meta.env.DEV ? { "/__ui": "ui" as const } : {}),
 };
@@ -92,6 +101,8 @@ const PAGE_TITLES: Partial<Record<PageId, string>> = {
   mines: "Mine details",
   cosmetics: "Cosmetics",
   create: "Create a coin",
+  profile: "Your profile",
+  referrals: "Referrals",
   admin: "Admin",
 };
 
@@ -118,6 +129,8 @@ export default function App() {
   const [activateError, setActivateError] = useState("");
   const [launchOpen, setLaunchOpen] = useState(false);
   const [session, setSession] = useState<string | null>(null);
+  const [solBalance, setSolBalance] = useState<number | null>(null);
+  const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [loadingTokens, setLoadingTokens] = useState(true);
   const [bootstrapFailed, setBootstrapFailed] = useState(false);
   const [config, setConfig] = useState<DiggoConfig>({
@@ -155,6 +168,7 @@ export default function App() {
   const [discoveryError, setDiscoveryError] = useState("");
   const [discoveryNotice, setDiscoveryNotice] = useState("");
   const verification = useVerificationGate(config.turnstileSiteKey || TURNSTILE_SITE_KEY);
+  const pendingTransaction = usePendingTransaction();
 
   /**
    * Every gated call goes through here. The Worker answers 403 VERIFICATION_REQUIRED for an
@@ -233,6 +247,36 @@ export default function App() {
     }
     getPlayerProfile(walletAddress).then(setPlayer).catch(() => setPlayer(null));
   }, [session, walletAddress]);
+
+  useEffect(() => {
+    if (!session || !walletAddress || session !== walletAddress) {
+      setSummary(null);
+      return;
+    }
+    let current = true;
+    void getPortfolio<PortfolioSummary>(walletAddress)
+      .then((value) => { if (current) setSummary(value); })
+      .catch(() => { if (current) setSummary(null); });
+    return () => { current = false; };
+  }, [session, walletAddress]);
+
+  useEffect(() => {
+    const connectedAddress = connected?.address ?? null;
+    if (!session || !connectedAddress || session !== connectedAddress) {
+      setSolBalance(null);
+      return;
+    }
+    let current = true;
+    void import("./onchain")
+      .then(({ fetchSolBalance }) => fetchSolBalance(address(connectedAddress)))
+      .then((lamports) => {
+        if (current) setSolBalance(Number(lamports) / 1_000_000_000);
+      })
+      .catch(() => {
+        if (current) setSolBalance(null);
+      });
+    return () => { current = false; };
+  }, [connected?.address, session]);
 
   const featured = selected ?? tokens[0] ?? null;
   const isMiningActive = player?.activationState === "ACTIVE";
@@ -318,11 +362,17 @@ export default function App() {
     setCollecting(true);
     setReportError("");
     try {
-      const result = await collectMiningReport();
+      // v2: the mining report is a read of chain state, not a server-authored event. The
+      // Worker indexes the coin's ledger and the player's position; the panel shows what those
+      // accounts say. There is no report to "collect", so this only refreshes the view.
+      const result = await gated("mining_report", walletAddress ?? undefined, () =>
+        getMiningState(walletAddress ?? ""),
+      );
       setPlayer(result.player);
-      setMiningReport(result.report);
+      if (result.report) setMiningReport(result.report);
+      if (result.mine) setMineInfo(result.mine);
       setReportCollected(true);
-      track("mining_report_collected", { idempotent: result.idempotent, network: "solana-devnet" });
+      track("mining_report_viewed", { network: "solana-devnet" });
       await refreshClaims();
     } catch (error) {
       setReportError(messageOf(error));
@@ -332,63 +382,111 @@ export default function App() {
   }
 
   async function handleUpgradeCrew(component: CrewComponentKey): Promise<void> {
-    if (!connected) return;
+    if (!pendingTransaction.canSubmit()) return;
+    if (!connected || !config.programId) {
+      setCrewError("Connect a wallet that can sign transactions to upgrade your crew.");
+      return;
+    }
     setCrewPending(component);
     setCrewError("");
     setCrewNotice("");
     try {
+      // The price and the effect both come from the program's own curve table, so this is one
+      // wallet-signed transaction and the Worker only re-reads the result afterwards.
+      const { address, upgradeCrew } = await import("./solanaProgram");
+      const signature = await upgradeCrew({
+        programAddress: address(config.programId),
+        wallet: connected.wallet,
+        component: CREW_COMPONENTS.indexOf(component),
+      });
       await ensureSession();
-      const result = await gated("crew_upgrade", component, () => upgradeCrew(component));
-      setPlayer(result.player);
-      const mint = result.player.activeMint ?? featured?.mint;
+      const profile = await getPlayerProfile(connected.address);
+      setPlayer(profile);
+      const mint = profile.activeMint ?? featured?.mint;
       if (mint) void loadMineInfo(mint);
       setCrewNotice(
         CREW_COMPONENT_LABELS[component] +
-          " upgraded for " +
-          result.spent.toLocaleString() +
-          " ORE. Mining Power is now " +
-          result.power.toLocaleString() +
-          ".",
+          " upgraded on-chain. Signature " +
+          signature.slice(0, 8) +
+          "…",
       );
       track("crew_upgraded", { component });
     } catch (error) {
-      setCrewError(messageOf(error));
+      if (!pendingTransaction.record(error, "Crew upgrade")) setCrewError(messageOf(error));
+      else setCrewError("");
     } finally {
       setCrewPending(null);
     }
   }
 
   async function handleClaimReward(claim: RewardClaimView): Promise<void> {
-    if (!connected) return;
+    if (!pendingTransaction.canSubmit()) return;
+    if (!connected || !config.programId) {
+      setClaimError("Connect the wallet that owns this reward to collect it.");
+      return;
+    }
     setClaimingId(claim.id);
     setClaimError("");
     try {
+      // v2: the tokens leave the coin's vault only through `claim_rewards`, signed by the
+      // player's own wallet. The Worker has no key on this path, so the claim is the transaction
+      // and the API call afterwards only records the signature it verified on chain.
+      const { address, claimRewards } = await import("./solanaProgram");
+      const result = await claimRewards({
+        programAddress: address(config.programId),
+        wallet: connected.wallet,
+        mint: address(claim.mint),
+      });
+      if (!result.confirmed) {
+        pendingTransaction.recordSubmission(result.signature, "Reward claim");
+        return;
+      }
       await ensureSession();
-      const challenge = await getRewardClaimChallenge(claim.id);
-      const signature = bs58.encode(await connected.signMessage(new TextEncoder().encode(challenge.message)));
-      await gated("claim_reward", claim.id, () => claimRewardRequest(claim.id, challenge.nonce, signature));
+      await confirmRewardClaimPayout(claim.id, result.signature);
       track("reward_claimed", { mint: claim.mint, network: "solana-devnet" });
       await refreshClaims();
     } catch (error) {
-      setClaimError(messageOf(error));
+      if (!pendingTransaction.record(error, "Reward claim")) setClaimError(messageOf(error));
+      else setClaimError("");
     } finally {
       setClaimingId(null);
     }
   }
 
   async function handleRequestOpportunity(): Promise<void> {
-    if (!connected) return;
+    if (!connected || !config.programId) {
+      setDiscoveryError("Connect a wallet to roll for discoveries.");
+      return;
+    }
     setRolling(true);
     setDiscoveryError("");
     setDiscoveryNotice("");
     try {
-      const result = await gated("discovery_roll", undefined, () => requestDiscoveryOpportunity());
-      setOpportunity(result.opportunity);
-      setDiscoveryNotice(
-        result.opportunity
-          ? "Your crew has an opportunity for this window."
-          : (result.publicMessage ?? "No discovery opportunity is available for this account yet."),
-      );
+      // Eligibility is a fact about the on-chain PlayerAccount, so this reads it rather than
+      // asking the Worker whether the player may roll. The answer is the program's own, and it
+      // turns on the player's own history rather than on anything they have to post: there is no
+      // bond and no paid tier, so a wallet holding only rent and network-fee SOL is as eligible
+      // as any other.
+      const { address, fetchCoin, fetchPlayer } = await import("./solanaProgram");
+      const programAddress = address(config.programId);
+      const mint = player?.activeMint ?? featured?.mint;
+      if (!mint) {
+        setDiscoveryNotice("Join a mine first — a roll is locked against one coin.");
+        return;
+      }
+      const [onChain, coin] = await Promise.all([
+        fetchPlayer(programAddress, address(connected.address)),
+        fetchCoin(programAddress, address(mint)),
+      ]);
+      if (!onChain) {
+        setDiscoveryNotice("Create your player account first: one transaction and 0.0024 SOL of rent.");
+        return;
+      }
+      if (coin?.discoveryPaused) {
+        setDiscoveryNotice("This coin's discovery payouts are paused right now.");
+        return;
+      }
+      setDiscoveryNotice("You are eligible. Roll to lock this window's opportunity on chain.");
     } catch (error) {
       setDiscoveryError(messageOf(error));
     } finally {
@@ -397,53 +495,79 @@ export default function App() {
   }
 
   async function handleRollDiscovery(): Promise<void> {
-    if (!connected) return;
+    if (!pendingTransaction.canSubmit()) return;
+    if (!connected || !config.programId) {
+      setDiscoveryError("Connect a wallet to roll for discoveries.");
+      return;
+    }
+    const mint = player?.activeMint ?? featured?.mint;
+    if (!mint) {
+      setDiscoveryError("Join a mine before rolling for discoveries.");
+      return;
+    }
     setRolling(true);
     setDiscoveryError("");
     setDiscoveryNotice("");
     try {
-      const result = await gated("discovery_roll", undefined, () =>
-        rollDiscoveryRequest(player?.activeMint ?? undefined),
-      );
-      setDiscoveryNotice(
-        result.discovery
-          ? "Your crew turned up " +
-              result.discovery.visualEvent +
-              " (" +
-              result.discovery.rarity +
-              "). Claim it before it expires."
-          : "Nothing this window. This opportunity is spent until the next one opens.",
-      );
+      // Two instructions, and neither of them carries an outcome. The roll charges this
+      // window's budget and writes the opportunity PDA while the epoch's seed is still unknown;
+      // settlement recomputes sha256(seed || owner || window) in the program and pays. Anyone
+      // can settle, which is why the second step failing is not a loss.
+      const { address, createDiscoveryRoll, settleDiscovery } = await import("./solanaProgram");
+      const programAddress = address(config.programId);
+      await createDiscoveryRoll({ programAddress, wallet: connected.wallet, mint: address(mint) });
+      setDiscoveryNotice("Opportunity locked on chain. Settling against the epoch seed…");
+      try {
+        await settleDiscovery({ programAddress, wallet: connected.wallet, mint: address(mint) });
+        setDiscoveryNotice("Settled. The program derived your outcome from the recorded epoch seed.");
+      } catch (error) {
+        if (pendingTransaction.record(error, "Discovery settlement")) {
+          setDiscoveryError("");
+          return;
+        }
+        setDiscoveryNotice(
+          "Locked. This epoch's seed is not revealed yet, so settlement waits — the roll is already yours and anyone can settle it once the seed lands.",
+        );
+      }
       await refreshDiscoveries();
       await refreshClaims();
     } catch (error) {
-      setDiscoveryError(messageOf(error));
+      if (!pendingTransaction.record(error, "Discovery roll")) setDiscoveryError(messageOf(error));
+      else setDiscoveryError("");
     } finally {
       setRolling(false);
     }
   }
 
-  async function handleClaimDiscovery(discovery: DiscoveryRecord): Promise<void> {
-    if (!connected) return;
-    setClaimingDiscoveryId(discovery.id);
+  async function handleClaimDiscovery(_discovery: DiscoveryRecord): Promise<void> {
+    if (!pendingTransaction.canSubmit()) return;
+    if (!connected || !config.programId) {
+      setDiscoveryError("Connect a wallet to settle this discovery.");
+      return;
+    }
+    const mint = player?.activeMint ?? featured?.mint;
+    if (!mint) {
+      setDiscoveryError("Join the mine this discovery came from before settling it.");
+      return;
+    }
+    setClaimingDiscoveryId(_discovery.id);
     setDiscoveryError("");
     setDiscoveryNotice("");
     try {
-      await ensureSession();
-      const challenge = await getDiscoveryClaimChallenge(discovery.id);
-      const signature = bs58.encode(await connected.signMessage(new TextEncoder().encode(challenge.message)));
-      const result = await gated("claim_discovery", discovery.id, () =>
-        claimDiscoveryRequest(discovery.id, challenge.nonce, signature),
-      );
-      setDiscoveryNotice(
-        result.status === "CLAIMED"
-          ? "This discovery was already paid out."
-          : "Claim accepted. The payout is queued and settles from the mine's reserve.",
-      );
+      // v2 has no claim step to wait for: `settle_discovery` is the payout, it is
+      // permissionless, and it closes the opportunity PDA so a second settle is impossible.
+      const { address, settleDiscovery } = await import("./solanaProgram");
+      await settleDiscovery({
+        programAddress: address(config.programId),
+        wallet: connected.wallet,
+        mint: address(mint),
+      });
+      setDiscoveryNotice("Settled on chain. The payout left the coin's Discovery Reserve.");
       await refreshDiscoveries();
       await refreshClaims();
     } catch (error) {
-      setDiscoveryError(messageOf(error));
+      if (!pendingTransaction.record(error, "Discovery settlement")) setDiscoveryError(messageOf(error));
+      else setDiscoveryError("");
     } finally {
       setClaimingDiscoveryId(null);
     }
@@ -453,64 +577,73 @@ export default function App() {
     if (!connected || session === connected.address) return;
     const challenge = await getChallenge(connected.address);
     const signature = await connected.signMessage(new TextEncoder().encode(challenge.message));
-    const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature));
+    const referralCode = new URLSearchParams(window.location.search).get("ref");
+    const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature), referralCode);
     setSession(verified.wallet);
     track("wallet_signed_in", { network: "solana-devnet" });
   }
 
   async function handleActivate() {
-    if (!connected) return;
+    if (!pendingTransaction.canSubmit()) return;
+    if (!connected || !config.programId) {
+      setActivateError("Connect a wallet that can sign transactions to activate.");
+      return;
+    }
     setActivating(true);
     setActivateError("");
     try {
+      // v2: `activate` is a wallet-signed instruction. It settles accrual, rolls the window and
+      // applies the streak rule on chain, and it is free — no ORE, no tokens, only the network
+      // fee every Solana transaction costs. The Worker only re-reads the result.
+      const { address, activatePlayer } = await import("./solanaProgram");
+      const programAddress = address(config.programId);
+      await activatePlayer({ programAddress, wallet: connected.wallet });
       await ensureSession();
-      const challenge = await getActivationChallenge(connected.address);
-      const signature = bs58.encode(await connected.signMessage(new TextEncoder().encode(challenge.message)));
-      const mint = featured?.mint;
-      const result = await gated("activate", mint, () =>
-        activateMineRequest(connected.address, challenge.nonce, signature, mint),
-      );
-      setPlayer(result.player);
-      if (result.mine) setMineInfo(result.mine);
+      const profile = await getPlayerProfile(connected.address);
+      setPlayer(profile);
+      const mint = profile.activeMint ?? featured?.mint;
+      if (mint) await loadMineInfo(mint);
       setReportCollected(false);
       setReportError("");
-      setMiningReport(result.report);
+      const state = await getMiningState(connected.address);
+      if (state.report) setMiningReport(state.report);
       await refreshClaims();
-      track("mine_activated", { streak: result.report.streak, network: "solana-devnet" });
+      track("mine_activated", { streak: profile.streak, network: "solana-devnet" });
     } catch (error) {
-      setActivateError(messageOf(error));
+      if (!pendingTransaction.record(error, "Player activation")) setActivateError(messageOf(error));
+      else setActivateError("");
     } finally {
       setActivating(false);
     }
   }
 
   async function handleSwitchMine(mint: string) {
-    if (!connected) {
+    if (!pendingTransaction.canSubmit()) return;
+    if (!connected || !config.programId) {
       setActivateError("Sign in with your wallet to switch mines.");
       return;
     }
     setSwitching(true);
     setActivateError("");
     try {
+      // The move itself is on chain. `joinMine` picks assign_power or switch_mine from the
+      // position that exists, so a player joining their first mine and a player moving between
+      // mines both get the one instruction the program will accept.
+      const { address, joinMine } = await import("./solanaProgram");
+      await joinMine({
+        programAddress: address(config.programId),
+        wallet: connected.wallet,
+        mint: address(mint),
+      });
       await ensureSession();
-      const result = await gated("switch_mine", mint, () => switchMineRequest(mint));
-      setPlayer(result.player);
-      if (result.mine) setMineInfo(result.mine);
+      const profile = await getPlayerProfile(connected.address);
+      setPlayer(profile);
       setSwitchOpen(false);
       track("mine_switched", { network: "solana-devnet" });
-      // Best-effort on-chain sync: assigns the player's current on-chain Mining Power to this
-      // mine so real block-reward accounting matches the game's "active mine" state. A failure
-      // here (e.g. the player's on-chain Player account doesn't exist yet) doesn't block the
-      // off-chain switch above, which is what the ORE/streak/discovery loop actually runs on.
-      if (config.programId) {
-        const programId = config.programId;
-        const wallet = connected.wallet;
-        void import("./solanaProgram")
-          .then(({ address, assignPowerOnChain }) => assignPowerOnChain(address(programId), wallet, address(mint)))
-          .catch(() => {});
-      }
+      await loadMineInfo(mint);
     } catch (error) {
-      setActivateError(messageOf(error));
+      if (!pendingTransaction.record(error, "Mine switch")) setActivateError(messageOf(error));
+      else setActivateError("");
     } finally {
       setSwitching(false);
     }
@@ -518,14 +651,25 @@ export default function App() {
 
   async function handleClaimRewards() {
     if (!connected || !config.programId || !featured) return;
+    if (!pendingTransaction.canSubmit()) return;
     setActivateError("");
     try {
-      const { address, claimRewardsOnChain } = await import("./solanaProgram");
-      await claimRewardsOnChain(address(config.programId), connected.wallet, address(featured.mint));
+      const { address, claimRewards } = await import("./solanaProgram");
+      const submission = await claimRewards({
+        programAddress: address(config.programId),
+        wallet: connected.wallet,
+        mint: address(featured.mint),
+      });
+      if (!submission.confirmed) {
+        pendingTransaction.recordSubmission(submission.signature, "Reward claim");
+        return;
+      }
       track("rewards_claimed", { network: "solana-devnet" });
       await refreshFeaturedToken();
     } catch (error) {
-      setActivateError(error instanceof Error ? error.message : "Nothing to claim yet");
+      if (!pendingTransaction.record(error, "Reward claim")) {
+        setActivateError(error instanceof Error ? error.message : "Nothing to claim yet");
+      } else setActivateError("");
     }
   }
 
@@ -599,7 +743,14 @@ export default function App() {
   return (
     <div className={"app page-" + page}>
       <a className="skip-link" href="#content">Skip to content</a>
-      <AppHeader page={page} session={session} signedIn={signedIn} onAuthenticated={setSession} />
+      <AppHeader
+        page={page}
+        session={session}
+        signedIn={signedIn}
+        summary={summary}
+        solBalance={solBalance}
+        onAuthenticated={setSession}
+      />
 
       <main id="content" tabIndex={-1}>
         {bootstrapFailed && (
@@ -629,6 +780,11 @@ export default function App() {
               />
               <Ticker tokens={tokens} />
               <ExploreBoard tokens={tokens} limit={3} onLaunch={openLaunch} />
+              <WatchlistPanel
+                tokens={tokens}
+                onSelectCoin={openTokenPage}
+                onConnect={() => window.dispatchEvent(new Event("diggo:open-wallet"))}
+              />
               {economy}
               <HowItWorks />
               <FinalCta onLaunch={openLaunch} />
@@ -651,6 +807,23 @@ export default function App() {
                 onSwitchMine={() => setSwitchOpen(true)}
                 onCollect={() => void handleCollectReport()}
               />
+              {config.programId && (
+                <Suspense fallback={<RouteFallback />}>
+                  <PlayerOnboarding
+                    programAddress={config.programId}
+                    wallet={connected?.wallet ?? null}
+                    onChanged={() => {
+                      // The on-chain write is the truth; this only re-reads the indexer's copy so
+                      // the dashboard's numbers catch up with the account the player just wrote.
+                      if (walletAddress) {
+                        void getPlayerProfile(walletAddress)
+                          .then(setPlayer)
+                          .catch(() => {});
+                      }
+                    }}
+                  />
+                </Suspense>
+              )}
               {mineInfoPanel(activeMineToken, false)}
             </>
           )}
@@ -668,7 +841,7 @@ export default function App() {
               ) : (
                 <section className="crew-screen page-shell">
                   <EmptyState
-                    icon={<Hammer size={26} />}
+                    icon={<IconHammer size={26} />}
                     title={connected ? "Loading your crew…" : "Your crew is waiting for a boss."}
                   >
                     {connected
@@ -745,13 +918,24 @@ export default function App() {
                 <span>DEVNET LAUNCH</span>
                 <h2>Everything settles on-chain.</h2>
                 <p>Your creator wallet signs the launch and, if selected, the initial liquidity buy in one transaction.</p>
-                <button className="btn btn-primary" onClick={openLaunch}>Open launch builder <ArrowUpRight size={17} /></button>
+                <button className="btn btn-primary" onClick={openLaunch}>Open launch builder <IconArrowUpRight size={17} /></button>
               </div>
             </section>
           )}
 
           {page === "cosmetics" && <CosmeticsScreen signedIn={signedIn} />}
-          {page === "admin" && <AdminScreen signedIn={signedIn} />}
+          {page === "profile" && connected && (
+            <PortfolioScreen wallet={connected.address} programAddress={config.programId} signer={connected.wallet} />
+          )}
+          {page === "profile" && !connected && (
+            <section className="page-shell">
+              <EmptyState icon={<IconBadge size={26} />} title="Your profile is waiting">
+                Connect a wallet to see your portfolio.
+              </EmptyState>
+            </section>
+          )}
+          {page === "referrals" && <ReferralsScreen signedIn={signedIn} />}
+          {page === "admin" && <AdminScreen signedIn={signedIn} programId={config.programId || undefined} />}
           {page === "ui" && UiGallery && <UiGallery />}
         </Suspense>
 

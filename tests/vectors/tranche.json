@@ -1,0 +1,17 @@
+{
+  "rule": "starter tranche cap, CONTRACTS.md amendment",
+  "cases": [
+    {"blockReward": 10000, "bondedPower": 0, "starterPower": 0, "starterTake": 0, "bondedTake": 0, "remainder": 10000},
+    {"blockReward": 10000, "bondedPower": 0, "starterPower": 1000, "starterTake": 1000, "bondedTake": 0, "remainder": 9000},
+    {"blockReward": 10000, "bondedPower": 1000, "starterPower": 0, "starterTake": 0, "bondedTake": 10000, "remainder": 0},
+    {"blockReward": 10000, "bondedPower": 1000, "starterPower": 1000, "starterTake": 1000, "bondedTake": 9000, "remainder": 0},
+    {"blockReward": 10000, "bondedPower": 1000, "starterPower": 100000, "starterTake": 1000, "bondedTake": 9000, "remainder": 0},
+    {"blockReward": 10000, "bondedPower": 9000, "starterPower": 1000, "starterTake": 1000, "bondedTake": 9000, "remainder": 0},
+    {"blockReward": 7500, "bondedPower": 1400, "starterPower": 900, "starterTake": 750, "bondedTake": 6750, "remainder": 0},
+    {"blockReward": 1, "bondedPower": 0, "starterPower": 1, "starterTake": 0, "bondedTake": 0, "remainder": 1},
+    {"blockReward": 3, "bondedPower": 1, "starterPower": 1, "starterTake": 0, "bondedTake": 3, "remainder": 0},
+    {"blockReward": 999, "bondedPower": 1, "starterPower": 1, "starterTake": 99, "bondedTake": 900, "remainder": 0},
+    {"blockReward": 1000000, "bondedPower": 1, "starterPower": 999999, "starterTake": 100000, "bondedTake": 900000, "remainder": 0},
+    {"blockReward": 7, "bondedPower": 0, "starterPower": 5, "starterTake": 0, "bondedTake": 0, "remainder": 7}
+  ]
+}

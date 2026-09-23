@@ -15,7 +15,6 @@
  * about the wallet, the rewards and the ORE balance.
  */
 import { useCallback, useEffect, useState, type CSSProperties, type ReactElement } from "react";
-import { Bell, BellOff } from "lucide-react";
 import { alertsAvailable, disablePush, enablePush, pushState, watchSubscriptionRotations, type PushState } from "../push";
 
 type Status = PushState | "checking";
@@ -53,14 +52,22 @@ const ERROR_STYLE: CSSProperties = {
   fontWeight: 700,
 };
 
-/** Pinned to the bottom of the bell dropdown so the opt-in stays reachable under a long list. */
+/**
+ * Pinned to the bottom of the bell dropdown so the opt-in stays reachable under a long list.
+ *
+ * The row wraps instead of pushing the panel wider: the switch drops onto its own line when the
+ * copy and the button no longer fit side by side, which is what a narrow panel and a long note
+ * ("Your browser is blocking notifications for this site.") ask for.
+ */
 const INLINE_ROW_STYLE: CSSProperties = {
   position: "sticky",
   bottom: 0,
   display: "flex",
+  flexWrap: "wrap",
   alignItems: "center",
   justifyContent: "space-between",
   gap: "var(--space-3)",
+  minWidth: 0,
   padding: "var(--space-4)",
   background: "var(--paper)",
   borderTop: "1px solid var(--ink)",
@@ -69,6 +76,7 @@ const INLINE_ROW_STYLE: CSSProperties = {
 const INLINE_TEXT_STYLE: CSSProperties = {
   display: "grid",
   gap: "2px",
+  flex: "1 1 180px",
   minWidth: 0,
 };
 
@@ -82,11 +90,13 @@ const INLINE_NOTE_STYLE: CSSProperties = {
   color: "var(--muted)",
   font: "700 9px monospace",
   lineHeight: 1.5,
+  overflowWrap: "anywhere",
 };
 
 const INLINE_ERROR_STYLE: CSSProperties = {
   color: "var(--danger)",
   font: "700 9px monospace",
+  overflowWrap: "anywhere",
 };
 
 export function PushToggle({ variant = "section" }: PushToggleProps): ReactElement | null {
@@ -191,7 +201,6 @@ export function PushToggle({ variant = "section" }: PushToggleProps): ReactEleme
           disabled={pending || blocked}
           onClick={() => void toggle()}
         >
-          {on ? <BellOff size={13} /> : <Bell size={13} />}
           {pending ? "Working..." : on ? "Off" : "On"}
         </button>
       </div>
@@ -221,7 +230,6 @@ export function PushToggle({ variant = "section" }: PushToggleProps): ReactEleme
         disabled={pending || blocked}
         onClick={() => void toggle()}
       >
-        {on ? <BellOff size={16} /> : <Bell size={16} />}
         {pending ? "Working..." : on ? "Turn alerts off" : "Turn alerts on"}
       </button>
     </section>
