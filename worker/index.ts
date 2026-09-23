@@ -37,6 +37,7 @@ import {
 } from "./mining";
 import { getNotifications, markNotificationsRead, runSocialCron } from "./notifications";
 import { AccountCreationDenied, playerProfile } from "./player";
+import { publicProfile, setUsername } from "./profile";
 import { PlayerLockTimeoutError, withPlayerLock } from "./playerLock";
 import {
   deletePushSubscription,
@@ -123,6 +124,14 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
     }
     if (request.method === "GET" && pathname === "/api/auth/session") {
       return walletSession(request, env);
+    }
+    // Public usernames (worker/profile.ts): a public read of one name, and the signed, gated,
+    // cooldown-bound write that sets it. The write takes the per-wallet lock like every other
+    // player mutation, so a double-submit cannot land two changes at once.
+    const profileMatch = pathname.match(/^\/api\/profile\/([^/]+)$/);
+    if (request.method === "GET" && profileMatch) return publicProfile(request, env, profileMatch[1]);
+    if (request.method === "POST" && pathname === "/api/profile/username") {
+      return locked(request, env, () => setUsername(request, env));
     }
     if (request.method === "POST" && pathname === "/api/media") return uploadMedia(request, env);
     if (request.method === "POST" && pathname === "/api/tokens/register") {

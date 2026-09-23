@@ -29,7 +29,8 @@ export type GatedActionKey =
   | "switch_mine"
   | "crew_upgrade"
   | "auth"
-  | "bootstrap";
+  | "bootstrap"
+  | "profile_update";
 
 /**
  * How the gate treats a *score-derived* refusal (spec 63).
@@ -348,6 +349,10 @@ export const RISK_OPS_DEFAULTS: RiskOpsConfig = {
     activate: { windowSeconds: 300, wallet: 6, session: 8, ip: 30, device: 12, network: 45 },
     auth: { windowSeconds: 300, wallet: 12, session: 12, ip: 40, device: 15, network: 60 },
     bootstrap: { windowSeconds: 60, wallet: 20, session: 30, ip: 90, device: 45, network: 180 },
+    // A username is changed rarely, so the budget is the tightest of the set. It is still a
+    // five-dimension budget: a wallet rotating addresses cannot buy extra attempts, and a shared
+    // household IP with a few real players stays far inside it.
+    profile_update: { windowSeconds: 300, wallet: 6, session: 8, ip: 30, device: 12, network: 45 },
     crew_upgrade: { windowSeconds: 60, wallet: 24, session: 36, ip: 90, device: 60, network: 150 },
     switch_mine: { windowSeconds: 60, wallet: 12, session: 15, ip: 45, device: 24, network: 75 },
     claim_reward: { windowSeconds: 300, wallet: 20, session: 30, ip: 90, device: 45, network: 150 },

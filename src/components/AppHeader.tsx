@@ -203,6 +203,10 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
   const [walletConnectError, setWalletConnectError] = useState("");
   const [signingIn, setSigningIn] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const [identityOpen, setIdentityOpen] = useState(false);
+  // The signed-in wallet's public username (src/username.ts), so the header can show it where it
+  // shows the wallet and fall back to the shortened address when the player never set one.
+  const viewer = useUsername(connected && session !== null && session === connected.address ? connected.address : null);
 
   // Any "Connect wallet" call to action on the page opens this menu.
   useEffect(() => {
@@ -262,7 +266,7 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
           title={isAuthenticated ? "Signed in — sign again to refresh your session" : "Sign in with wallet"}
         >
           <i className="wallet-dot" aria-hidden="true" />
-          {signingIn ? "Signing…" : isAuthenticated ? shortAddress(connected.address) : "Sign in"}
+          {signingIn ? "Signing…" : isAuthenticated ? displayName(connected.address, viewer.username) : "Sign in"}
         </button>
         <button
           className="wallet-disconnect"
@@ -272,6 +276,28 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
         >
           <X size={14} />
         </button>
+        {isAuthenticated && (
+          <button
+            className="wallet-disconnect"
+            aria-expanded={identityOpen}
+            aria-haspopup="true"
+            onClick={() => setIdentityOpen((value) => !value)}
+            title={viewer.username === null ? "Set a public username" : "Your public username: " + viewer.username}
+          >
+            <span className="sr-only">{viewer.username === null ? "Set username" : "Public username"}</span>
+            <Sparkles size={14} />
+          </button>
+        )}
+        {isAuthenticated && identityOpen && (
+          <div className="wallet-menu" role="group" aria-label="Public username">
+            <strong>Public username</strong>
+            <UsernameEditor
+              key={connected.address}
+              wallet={connected.address}
+              onChanged={() => setIdentityOpen(false)}
+            />
+          </div>
+        )}
       </div>
     );
   }
