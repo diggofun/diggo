@@ -41,7 +41,7 @@ Wrangler declares the following bindings and validates them in dry-run mode:
 | `EPOCH_WORKFLOW` | Workflows | five-minute index synchronization |
 | `PLAYER_LOCK` | Durable Objects | one mutex per wallet, serializing activation, mine switching, Crew upgrades, reward claims and the discovery roll/claim pair |
 | `RATE_LIMITER` | Rate Limiting | strongly consistent per-key limiter consulted before the KV counters in `worker/http.ts` |
-| `DIGGO_METRICS` | Analytics Engine | counter mirror of `metrics_counters`, for dashboard and alerting queries |
+| `DIGGO_METRICS` | Analytics Engine | **not declared.** Counter mirror of `metrics_counters`, for dashboard and alerting queries. The account has Analytics Engine disabled, so declaring the binding fails the deploy with error 10089. See "Re-enabling the Analytics Engine mirror" below. |
 
 Create a queue named `diggo-indexing-dlq` before production deployment if automatic provisioning does not create the configured dead-letter queue.
 
@@ -163,13 +163,48 @@ Staging declares no custom-domain route, so it stays on `workers.dev` and can ne
 ## Observability and alerts
 
 - Every counter written to `metrics_counters` in D1 is mirrored into Analytics Engine under
-  `DIGGO_METRICS`, so a dashboard can query the same series with SQL without reading D1.
+  `DIGGO_METRICS`, so a dashboard can query the same series with SQL without reading D1. The
+  mirror is best effort: D1 is the source of truth and nothing alerts on the mirror, so the
+  Worker runs unchanged while the binding is absent.
 - When `ALERT_WEBHOOK_URL` is set, each alert that fires in the risk cron is pushed as a
   Discord/Slack compatible body (`content` for Discord, `text` for Slack, plus the structured
   alert). Alert names are deduped for `ALERT_DEDUPE_SECONDS` and at most five messages go out per
   tick; a delivery that fails does **not** start the dedupe window, so the next tick retries.
 - When `SENTRY_DSN` is set, unhandled fetch, scheduled and queue errors are reported as a plain
   Sentry envelope over `fetch` — no SDK, so the bundle and the reporting path stay cheap.
+
+### Re-enabling the Analytics Engine mirror
+
+`wrangler.jsonc` declares no `analytics_engine_datasets` binding. A Worker that declares one is
+rejected at deploy time with error 10089 (`Analytics Engine is not enabled for this account`) on
+any account where the product has never been switched on, and the rejection blocks the whole
+deploy rather than just the binding. The binding was therefore removed so the rest of the Worker
+can ship; `worker/telemetry.ts` already treats it as optional.
+
+To restore the mirror:
+
+1. Enable Analytics Engine for the account in the Cloudflare dashboard: **Workers & Pages** →
+   **Analytics Engine** → enable, or subscribe to a plan that includes it.
+2. Confirm the dataset exists: `npx wrangler analytics-engine list` (create it first if the
+   account requires an explicit dataset, `diggo_metrics` for production and `diggo_metrics_staging`
+   for staging).
+3. Restore the binding in both blocks of `wrangler.jsonc`:
+
+   ```jsonc
+   // top level, production
+   "analytics_engine_datasets": [{ "binding": "DIGGO_METRICS", "dataset": "diggo_metrics" }],
+
+   // env.staging
+   "analytics_engine_datasets": [{ "binding": "DIGGO_METRICS", "dataset": "diggo_metrics_staging" }],
+   ```
+
+   Named environments do not inherit bindings, so the staging block needs its own copy.
+4. `npm run types && npm run check`, then deploy. No application code changes are needed:
+   `metricsDatasetBinding()` picks the binding up as soon as it exists.
+
+Nothing else depends on the mirror. Alerts, the risk cron and the D1 counters are unaffected
+whether or not it is enabled, and the gap is not backfilled, so the AE series restarts from the
+moment the binding is restored.
 
 ## Production checklist
 
