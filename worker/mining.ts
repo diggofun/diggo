@@ -24,6 +24,15 @@ import {
 } from "@solana/kit";
 import { DIGGO_CONFIG, type DiggoConfig } from "../shared/config";
 import { crewTier, crewPower, effectiveMiningPower } from "../shared/crew";
+import {
+  activeMineBudget,
+  curveMiningDaysRemaining,
+  curveMiningProgress,
+  curveMiningRoom,
+  isCurveMiningDisabled,
+  isCurveMiningOpen,
+  type CurveMiningState,
+} from "../shared/curve";
 import { discoveryEligible } from "../shared/discovery";
 import { oreCapacity, oreForActiveSeconds, oreFromActivation, storeOre } from "../shared/ore";
 import {
@@ -51,6 +60,7 @@ import type {
   MiningReportBlockReward,
   MiningReportDiscoveries,
   MiningReportMilestone,
+  MineEmissionSource,
   RewardClaimPayout,
   TokenStatus,
 } from "../shared/types";
@@ -105,6 +115,13 @@ export const MAX_EXPIRY_ROWS = 256;
 export const REWARD_CLAIM_WINDOW_SECONDS = 30 * 86_400;
 export const REDUCTION_SCHEDULE_EPOCHS = 8;
 export const ESTIMATE_LABEL = "Estimate based on current conditions.";
+/**
+ * The label a mine on its bonding curve uses instead. Curve-phase emission is a fixed budget
+ * spread over a runway fixed at launch, so the honest caveat is not "conditions" but "this is
+ * the cap the launch set", and it is never a promise about what a block will be worth.
+ */
+export const CURVE_PHASE_ESTIMATE_LABEL =
+  "Estimate based on the curve's mining cap, which is fixed at launch.";
 export const VERIFICATION_REQUIRED = "VERIFICATION_REQUIRED";
 
 export type MineStatus = "MINING_ACTIVE" | "FULLY_MINED" | "PAUSED";
@@ -142,6 +159,18 @@ export interface MineState {
    * the configured default `economy.emission.targetLifetimeDays`.
    */
   targetLifetimeDays?: number;
+  /**
+   * Which budget pays the next block. "CURVE" while the mine is on its bonding curve: its
+   * block rewards come out of the curve's own token inventory, bounded by the launch-time cap
+   * and paid at a flat rate. "RESERVE" once the market has graduated, which is where the
+   * reserve-runway schedule below applies.
+   */
+  emissionSource: MineEmissionSource;
+  /**
+   * The curve's ledger as chain reports it. Display-only: the index's own running totals are
+   * remainingReserve / committed / released, which are maintained here rather than re-read.
+   */
+  curve: CurveMiningState;
 }
 
 interface MineStateRow {
@@ -162,6 +191,7 @@ interface MineStateRow {
   epoch_length: number;
   epoch_ends_at: number;
   authority: MineAuthority;
+  emission_source: MineEmissionSource | null;
 }
 
 export interface MineTokenRow {
@@ -174,6 +204,13 @@ export interface MineTokenRow {
   next_block_at: number;
   next_epoch_at: number;
   synced_at: number;
+  /** The market the price comes from, and the curve ledger it carries. */
+  venue: string;
+  curve_mining_open: number;
+  curve_mining_cap: number;
+  curve_mining_mined: number;
+  curve_mining_unpaid: number;
+  curve_mining_block_reward: number;
 }
 
 export interface PositionRow {
@@ -283,6 +320,10 @@ export function rowToMineState(row: MineStateRow): MineState {
     epochLength: row.epoch_length > 0 ? row.epoch_length : NOMINAL_EPOCH_LENGTH_SECONDS,
     epochEndsAt: row.epoch_ends_at,
     authority: row.authority,
+    // A row written before curve mining existed reads as a reserve-phase mine, which is what
+    // it was; loadMineState reconciles this against the chain before anything uses it.
+    emissionSource: row.emission_source === "CURVE" ? "CURVE" : "RESERVE",
+    curve: { graduated: true, cap: 0n, mined: 0n, unpaid: 0n, blockReward: 0n },
   };
 }
 
@@ -387,15 +428,22 @@ export function simulateAdvance(input: AdvanceInput): AdvanceOutcome {
         // The epoch boundary is where the schedule steps down (spec 21). Under the reserve-runway
         // schedule the step is derived from the reserve that is actually left, so the mine's whole
         // Mining Reserve stays distributable however it was launched (spec 19, 20).
-        rewardPerBlock = epochReward({
-          reserveRemaining: core.reserveRemaining,
-          previousRewardPerBlock: rewardPerBlock,
-          epoch: epoch + 1,
-          epochLengthSeconds: state.epochLength,
-          blockIntervalSeconds: state.blockInterval,
-          targetLifetimeDays: state.targetLifetimeDays,
-          config,
-        });
+        //
+        // The curve phase is not that schedule and does not step down: its rate is the launch-time
+        // cap spread over its own runway, flat by design, so a mine on its curve pays the same
+        // block reward until the cap is spent or the market graduates. The epoch still rolls,
+        // because the reserve schedule the mine inherits at graduation is counted in epochs.
+        if (state.emissionSource === "RESERVE") {
+          rewardPerBlock = epochReward({
+            reserveRemaining: core.reserveRemaining,
+            previousRewardPerBlock: rewardPerBlock,
+            epoch: epoch + 1,
+            epochLengthSeconds: state.epochLength,
+            blockIntervalSeconds: state.blockInterval,
+            targetLifetimeDays: state.targetLifetimeDays,
+            config,
+          });
+        }
         epoch += 1;
         epochEndsAt += state.epochLength;
         stepped += 1;
@@ -437,10 +485,14 @@ export function simulateAdvance(input: AdvanceInput): AdvanceOutcome {
     distributed += outcome.distributed;
     cursor = blockTime;
     blocksAdvanced += 1;
-    if (outcome.fullyMined) break;
+    // Only the reserve has a terminal state. A curve-phase mine whose cap is spent is idle:
+    // its blocks accrue nothing, and the walk still has to move past them (see the completeness
+    // rule in worker/mining.ts's loadMineState), so it never stops on an empty curve budget the
+    // way it stops on an empty reserve.
+    if (outcome.fullyMined && state.emissionSource === "RESERVE") break;
   }
 
-  const fullyMined = core.reserveRemaining <= 0n;
+  const fullyMined = state.emissionSource === "RESERVE" && core.reserveRemaining <= 0n;
   return {
     state: {
       ...state,
@@ -544,6 +596,11 @@ export function mineInfoPayload(input: MineInfoInput): MineInfo {
     playerPower === null || estimatedShare === null ? null : Math.min(blockReward, blockReward * estimatedShare);
   const initialReserve = Number(state.initialReserve);
   const remainingReserve = Number(state.remainingReserve);
+  // While the mine is on its curve, remainingReserve and initialReserve above are the curve's
+  // own cap, not the Mining Reserve: that is the budget a block is actually paid out of, and
+  // reporting the reserve would describe a number nothing is drawing down yet. emissionSource
+  // says which of the two the caller is looking at.
+  const onCurve = state.emissionSource === "CURVE";
   return {
     mint: state.mint,
     symbol: input.symbol,
@@ -554,21 +611,44 @@ export function mineInfoPayload(input: MineInfoInput): MineInfo {
     reserveTotal: initialReserve,
     estimatedShare,
     estimatedRewardPerBlock,
-    estimateLabel: ESTIMATE_LABEL,
+    estimateLabel: onCurve ? CURVE_PHASE_ESTIMATE_LABEL : ESTIMATE_LABEL,
+    curveMining: {
+      open: isCurveMiningOpen(state.curve),
+      // A market on its curve that never had a budget at all: a legacy market, whose cap a
+      // migration can only default to zero, or a launch that asked for no curve share. Mining
+      // is not paused for it, it starts at graduation, and the card has to say that rather than
+      // show a budget that was never granted as 0% spent.
+      disabled: isCurveMiningDisabled(state.curve),
+      onCurve: !state.curve.graduated,
+      cap: Number(state.curve.cap),
+      mined: Number(state.curve.mined),
+      remaining: Number(curveMiningRoom(state.curve)),
+      progress: curveMiningProgress(state.curve),
+      blockReward: Number(state.curve.blockReward),
+      unpaid: Number(state.curve.unpaid),
+    },
+    emissionSource: state.emissionSource,
+    curveMiningDaysRemaining: curveMiningDaysRemaining(state.curve, state.blockInterval),
     // The schedule the mine is actually on, not a fixed decay curve: under the reserve-runway
     // schedule the next epochs follow from the reserve that is left (spec 21, 33).
-    reductionSchedule: emissionSchedulePreview(
-      {
-        reserveRemaining: state.remainingReserve,
-        previousRewardPerBlock: state.rewardPerBlock,
-        epoch: state.epoch,
-        epochLengthSeconds: state.epochLength,
-        blockIntervalSeconds: state.blockInterval,
-        targetLifetimeDays: state.targetLifetimeDays,
-      },
-      REDUCTION_SCHEDULE_EPOCHS,
-      input.config ?? DIGGO_CONFIG,
-    ).map((reward) => Number(reward)),
+    //
+    // The curve phase has no such schedule to preview: its rate is the launch-time cap spread
+    // over a runway fixed at launch, it does not step down, and what ends it is the cap running
+    // out, not an epoch boundary. So the honest preview is the flat rate it actually pays.
+    reductionSchedule: onCurve
+      ? Array.from({ length: REDUCTION_SCHEDULE_EPOCHS }, () => blockReward)
+      : emissionSchedulePreview(
+          {
+            reserveRemaining: state.remainingReserve,
+            previousRewardPerBlock: state.rewardPerBlock,
+            epoch: state.epoch,
+            epochLengthSeconds: state.epochLength,
+            blockIntervalSeconds: state.blockInterval,
+            targetLifetimeDays: state.targetLifetimeDays,
+          },
+          REDUCTION_SCHEDULE_EPOCHS,
+          input.config ?? DIGGO_CONFIG,
+        ).map((reward) => Number(reward)),
     fullyMinedProgress: initialReserve > 0 ? Math.min(1, Math.max(0, 1 - remainingReserve / initialReserve)) : 1,
     nextBlockAt: state.lastBlock + state.blockInterval,
     epoch: state.epoch,
@@ -580,10 +660,142 @@ export function mineInfoPayload(input: MineInfoInput): MineInfo {
 
 export async function loadMineToken(env: RuntimeEnv, mint: string): Promise<MineTokenRow | null> {
   return env.DB.prepare(
-    "SELECT mint, symbol, status, reserve_remaining, reserve_total, reward_per_block, next_block_at, next_epoch_at, synced_at FROM tokens WHERE mint = ?1",
+    "SELECT mint, symbol, status, reserve_remaining, reserve_total, reward_per_block, next_block_at, next_epoch_at, synced_at, venue, curve_mining_open, curve_mining_cap, curve_mining_mined, curve_mining_unpaid, curve_mining_block_reward FROM tokens WHERE mint = ?1",
   )
     .bind(mint)
     .first<MineTokenRow>();
+}
+/** The curve ledger of one mine, as the last chain sync left it in the tokens cache. */
+export function curveStateFromToken(token: MineTokenRow): CurveMiningState {
+  const whole = (value: number | null | undefined): bigint => {
+    const parsed = Math.round(Number(value ?? 0));
+    return Number.isFinite(parsed) && parsed > 0 ? BigInt(parsed) : 0n;
+  };
+  return {
+    graduated: token.venue === "pool",
+    cap: whole(token.curve_mining_cap),
+    mined: whole(token.curve_mining_mined),
+    unpaid: whole(token.curve_mining_unpaid),
+    blockReward: whole(token.curve_mining_block_reward),
+  };
+}
+
+/** A mine's accounting state as the tokens cache alone describes it, before reconciliation. */
+export function createMineStateFromToken(token: MineTokenRow, mint: string, now: number): MineState {
+  return {
+    mint,
+    rewardIndex: 0n,
+    lastBlock: now,
+    remainingReserve: BigInt(Math.max(0, Math.round(token.reserve_remaining ?? 0))),
+    initialReserve: BigInt(Math.max(0, Math.round(token.reserve_total ?? 0))),
+    epoch: 0,
+    status: "MINING_ACTIVE",
+    totalEligiblePower: 0n,
+    rewardPerBlock: BigInt(Math.max(0, Math.round(token.reward_per_block ?? 0))),
+    committed: 0n,
+    dustScaled: 0n,
+    released: 0n,
+    forfeited: 0n,
+    blockInterval: NOMINAL_BLOCK_INTERVAL_SECONDS,
+    epochLength: NOMINAL_EPOCH_LENGTH_SECONDS,
+    epochEndsAt: token.next_epoch_at > now ? token.next_epoch_at : now + NOMINAL_EPOCH_LENGTH_SECONDS,
+    authority: "OFFCHAIN",
+    emissionSource: "RESERVE",
+    curve: { graduated: true, cap: 0n, mined: 0n, unpaid: 0n, blockReward: 0n },
+  };
+}
+
+/**
+ * Brings a loaded mine's emission source, budget and curve ledger in line with the chain.
+ *
+ * Which side pays is a fact about the market, and it flips exactly once - at graduation - so it
+ * is re-derived rather than trusted to a stored value forever. When it flips, the budget the
+ * mine pays out of is re-based: the curve phase spends the launch-time cap at a flat rate over
+ * its own runway, the reserve phase spends the Mining Reserve as chain reports it. The reward
+ * index and every position's last_reward_index are untouched, so no block is credited twice and
+ * none is skipped, and the function is idempotent: the same chain state always lands on the same
+ * off-chain one. Its progress is the budget the mine is really spending, which is why the card
+ * for a mine on its curve shows the cap rather than a reserve nothing is drawing down yet.
+ */
+export function reconcileEmissionSource(state: MineState, token: MineTokenRow): MineState {
+  const curve = curveStateFromToken(token);
+  const budget = activeMineBudget({
+    curve,
+    reserveRemaining: BigInt(Math.max(0, Math.round(token.reserve_remaining ?? 0))),
+    reserveTotal: BigInt(Math.max(0, Math.round(token.reserve_total ?? 0))),
+    reserveBlockReward: BigInt(Math.max(0, Math.round(token.reward_per_block ?? 0))),
+  });
+  // A spent curve budget is idle, not finished: the mine's Mining Reserve has not been touched
+  // and graduation is what starts paying out of it. Only a reserve-phase mine that has run its
+  // own reserve out is FULLY_MINED - which is also the only thing the program itself says, since
+  // it now reaches that state exactly when a graduated market's reserve is empty.
+  const reserveExhausted = budget.source === "RESERVE" && budget.remainingReserve <= 0n;
+  const status: MineStatus =
+    state.status === "PAUSED"
+      ? "PAUSED"
+      : token.status === "FULLY_MINED" || reserveExhausted
+        ? "FULLY_MINED"
+        : "MINING_ACTIVE";
+  const unchanged =
+    status === state.status &&
+    curve.cap === state.curve.cap &&
+    curve.mined === state.curve.mined &&
+    curve.unpaid === state.curve.unpaid;
+  // The budget is only re-based when the mine actually switches sides. While the source is
+  // unchanged, remainingReserve / initialReserve / rewardPerBlock are the index's own running
+  // totals — what it has spent and what it has left — and re-reading them from chain on every
+  // load would hand the index back budget it has already distributed.
+  if (budget.source === state.emissionSource) {
+    // The curve phase's budget is the one chain can take away, so it is clamped rather than
+    // re-based: the room under the cap is where the tokens physically come from, and the walk
+    // that spends it runs there too (advance_mine). Clamping only downwards keeps both
+    // properties - the index can never credit a block the market vault cannot pay for, which is
+    // what would otherwise let a claim draw the difference out of the Mining Reserve before
+    // graduation, and a chain read can never hand the index back budget it has already
+    // distributed.
+    if (budget.source === "CURVE" && budget.remainingReserve < state.remainingReserve) {
+      return { ...state, curve, status, remainingReserve: budget.remainingReserve };
+    }
+    return unchanged ? state : { ...state, curve, status };
+  }
+  return {
+    ...state,
+    curve,
+    emissionSource: budget.source,
+    initialReserve: budget.initialReserve,
+    remainingReserve: budget.remainingReserve,
+    rewardPerBlock: budget.rewardPerBlock,
+    status,
+  };
+}
+
+/**
+ * Persists a reconciled source and budget. Guarded on the cursor the reconciliation was made
+ * against, so a concurrent advance that moved the ledger forward is never clobbered; the next
+ * load re-derives the same answer anyway, which is what makes that guard safe rather than a
+ * source of drift.
+ */
+export async function persistEmissionSource(
+  env: RuntimeEnv,
+  state: MineState,
+  now: number,
+): Promise<void> {
+  await env.DB.prepare(
+    "UPDATE mine_reward_state SET emission_source = ?1, initial_reserve = ?2," +
+      " remaining_reserve = ?3, reward_per_block = ?4, status = ?5, updated_at = ?6" +
+      " WHERE mint = ?7 AND last_block <= ?8",
+  )
+    .bind(
+      state.emissionSource,
+      state.initialReserve.toString(),
+      state.remainingReserve.toString(),
+      state.rewardPerBlock.toString(),
+      state.status,
+      now,
+      state.mint,
+      state.lastBlock,
+    )
+    .run();
 }
 
 /**
@@ -607,23 +819,32 @@ export async function loadMineState(
   mint: string,
   now: number,
 ): Promise<LoadedMineState | null> {
-  const existing = await env.DB.prepare("SELECT * FROM mine_reward_state WHERE mint = ?1")
-    .bind(mint)
-    .first<MineStateRow>();
+  const [existing, token] = await Promise.all([
+    env.DB.prepare("SELECT * FROM mine_reward_state WHERE mint = ?1").bind(mint).first<MineStateRow>(),
+    loadMineToken(env, mint),
+  ]);
+  if (!existing && !token) return null;
   if (existing) {
+    const state = rowToMineState(existing);
+    // The budget a mine pays out of is a fact about the chain, not a running total, so it is
+    // re-derived on every load: a mine that graduated between two calls switches sides here.
+    const reconciled = token ? reconcileEmissionSource(state, token) : state;
+    if (reconciled !== state) await persistEmissionSource(env, reconciled, now);
     return {
-      state: rowToMineState(existing),
+      state: reconciled,
       scheduleUsable: existing.block_interval > 0 && existing.epoch_length > 0,
     };
   }
 
-  const token = await loadMineToken(env, mint);
+  // No stored row and no token row is the only "unknown mine"; past this point there is a token
+  // row to speak for the chain.
   if (!token) return null;
-  const initialReserve = BigInt(Math.max(0, Math.round(token.reserve_total)));
-  const remainingReserve = BigInt(Math.max(0, Math.round(token.reserve_remaining)));
-  const rewardPerBlock = BigInt(Math.max(0, Math.round(token.reward_per_block)));
-  const status: MineStatus =
-    token.status === "FULLY_MINED" || remainingReserve <= 0n ? "FULLY_MINED" : "MINING_ACTIVE";
+  const base = createMineStateFromToken(token, mint, now);
+  const state = reconcileEmissionSource(base, token);
+  const status = state.status;
+  const initialReserve = state.initialReserve;
+  const remainingReserve = state.remainingReserve;
+  const rewardPerBlock = state.rewardPerBlock;
   // A mine synced from chain already has a program-side accounting authority.
   const authority: MineAuthority = env.DIGGO_PROGRAM_ID && token.synced_at > 0 ? "ONCHAIN_INDEXED" : "OFFCHAIN";
   const epochEndsAt = token.next_epoch_at > now ? token.next_epoch_at : now + NOMINAL_EPOCH_LENGTH_SECONDS;
@@ -632,8 +853,8 @@ export async function loadMineState(
     `INSERT OR IGNORE INTO mine_reward_state
        (mint, reward_index, last_block, remaining_reserve, initial_reserve, epoch, status,
         total_eligible_power, reward_per_block, committed, dust_scaled, block_interval,
-        epoch_length, epoch_ends_at, authority, released, forfeited, updated_at)
-     VALUES (?1, '0', ?2, ?3, ?4, 0, ?5, '0', ?6, '0', '0', ?7, ?8, ?9, ?10, ?11, '0', ?2)`,
+        epoch_length, epoch_ends_at, authority, released, forfeited, updated_at, emission_source)
+     VALUES (?1, '0', ?2, ?3, ?4, 0, ?5, '0', ?6, '0', '0', ?7, ?8, ?9, ?10, ?11, '0', ?2, ?12)`,
   )
     .bind(
       mint,
@@ -649,6 +870,7 @@ export async function loadMineState(
       // Whatever the reserve split already says has left it: a mine first seen with a reserve below
       // its total has already paid that difference out.
       (initialReserve > remainingReserve ? initialReserve - remainingReserve : 0n).toString(),
+      state.emissionSource,
     )
     .run();
 

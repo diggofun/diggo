@@ -13,6 +13,7 @@
  */
 import { DatabaseSync } from "node:sqlite";
 import type { RuntimeEnv } from "../env";
+import type { TokenStatus } from "../../shared/types";
 import { FakeKv, FakeQueue, SqliteD1, applyMigrations } from "./d1-sqlite";
 
 type SqlValue = string | number | bigint | null | Uint8Array;
@@ -125,7 +126,7 @@ export function seedPlayer(
 export interface SeedTokenOptions {
   mint?: string;
   symbol?: string;
-  status?: "LAUNCHING" | "MINING_ACTIVE" | "FULLY_MINED";
+  status?: TokenStatus;
   priceUsd?: number;
   marketCapUsd?: number;
   liquidityUsd?: number;

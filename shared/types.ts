@@ -2,7 +2,16 @@ import type { DiscoveryVisualEvent } from "./discoveryVisual";
 
 export type { DiscoveryVisualEvent } from "./discoveryVisual";
 
-export type TokenStatus = "LAUNCHING" | "MINING_ACTIVE" | "FULLY_MINED";
+/**
+ * What a mine's token is doing right now.
+ *
+ * CURVE_CAP_REACHED is the pre-graduation idle state: the market is still on its bonding curve
+ * and has spent (or never had) its curve-mining budget, so blocks accrue nothing until it
+ * graduates and the Mining Reserve takes over. It is deliberately distinct from FULLY_MINED,
+ * which the program only reaches with a spent Mining Reserve after graduation - a market that
+ * is idle on its curve is not a mine that has run out for good.
+ */
+export type TokenStatus = "LAUNCHING" | "MINING_ACTIVE" | "FULLY_MINED" | "CURVE_CAP_REACHED";
 
 export interface TokenSummary {
   mint: string;
@@ -17,7 +26,19 @@ export interface TokenSummary {
   priceSol: number;
   /** priceSol converted at an illustrative, hardcoded devnet SOL/USD rate — see worker/chain.ts. Not a live price feed. */
   priceUsd: number;
-  change24h: number;
+  /**
+   * Real 24h change in percent, or null when it cannot be measured honestly. See
+   * TokenChange24h below: null is unknown, never zero.
+   */
+  change24h: TokenChange24h;
+  /** Real traded volume over the same 24h window, in USD, from indexed trades. */
+  volume24hUsd: number;
+  /** Indexed trades in that window; the ranking signal when change24h is unknown. */
+  trades24h: number;
+  /** Curve-phase mining progress: how much of the pre-graduation budget is left. */
+  curveMining: CurveMiningSummary;
+  /** What a seller can really get out of the curve right now. */
+  sellCapacity: CurveSellCapacitySummary;
   marketCapUsd: number;
   reserveRemaining: number;
   reserveTotal: number;
@@ -27,6 +48,71 @@ export interface TokenSummary {
   nextEpochAt: number;
   createdAt: number;
   decimals: number;
+}
+
+/**
+ * The real 24h change of a token, measured from its own indexed price observations: the
+ * price right now against the observation closest to a whole day older (see worker/chain.ts).
+ *
+ * It is null whenever that measurement cannot be made honestly: no observation at least
+ * changeBaselineSeconds old, no indexed trade in the window, or a baseline price of zero.
+ * Null is not zero, and a client must render it as unknown rather than as "+0%" — a token
+ * nobody has traded has no 24h change, not a flat one.
+ */
+export type TokenChange24h = number | null;
+
+/** Which side of a mine pays for a block (mirrors shared/curve.ts). */
+export type MineEmissionSource = "CURVE" | "RESERVE";
+
+/**
+ * Curve-phase mining, as the API reports it for one mine.
+ *
+ * Mining is live from the launch block: while a market is still on its bonding curve its
+ * block rewards come out of that curve's own token inventory, capped at a launch-time share
+ * of the inventory it started with (see shared/curve.ts). This is that cap's progress, so a
+ * client can show how much of the pre-graduation budget is left without inventing anything.
+ */
+export interface CurveMiningSummary {
+  /** True while the cap has room left: pre-graduation emission is live right now. */
+  open: boolean;
+  /**
+   * True for a market on its curve that never had a curve-mining budget at all - launched
+   * with a zero share, or written before the ledger existed (a migration can only default the
+   * cap to zero). Mining is not paused for these mines; it starts at graduation. Shown so a
+   * legacy market is not rendered as a budget that is 0% spent.
+   */
+  disabled?: boolean;
+  /** True while the market is still on its curve; false means the locked pool is the venue. */
+  onCurve: boolean;
+  /** The launch-time budget in whole tokens; 0 on a market launched without one. */
+  cap: number;
+  /** Emitted so far, in whole tokens. Never above cap. */
+  mined: number;
+  /** cap - mined, in whole tokens. */
+  remaining: number;
+  /** mined / cap as a 0..1 fraction, for a progress bar. 0 when there is no budget. */
+  progress: number;
+  /** The curve phase's flat per-block output, in whole tokens. */
+  blockReward: number;
+  /**
+   * Emitted but not claimed yet, in whole tokens. These are already credited to positions
+   * and graduation deliberately leaves them in the market vault.
+   */
+  unpaid: number;
+}
+
+/**
+ * What a seller can really get out of a market's curve right now.
+ *
+ * Mined tokens bring no SOL with them, so this does not grow as a mine emits: it is the real
+ * SOL the curve holds, which the quote path caps every payout at. A graduated market has no
+ * curve to sell into and reports zero here; its liquidity is the pool's.
+ */
+export interface CurveSellCapacitySummary {
+  /** Real SOL available to sellers, in SOL. */
+  sol: number;
+  /** Token amount that would take all of it, or null when no finite amount can. */
+  tokens: number | null;
 }
 
 export interface MarketSnapshot {
@@ -126,6 +212,8 @@ export interface LeaderboardEntry {
   activeDays: number;
   oreBalance: number;
   activeMint: string | null;
+  /** Public username when the player set one; the UI falls back to the shortened wallet. */
+  username?: string | null;
 }
 
 export interface Leaderboards {
@@ -222,6 +310,16 @@ export interface MineInfo {
   estimateLabel: string;
   reductionSchedule: number[];
   fullyMinedProgress: number;
+  /**
+   * Curve-phase mining. While the mine is on its curve this is the budget its block rewards
+   * come out of, so remainingReserve / reserveTotal / fullyMinedProgress above describe the
+   * curve cap rather than the Mining Reserve; emissionSource says which.
+   */
+  curveMining: CurveMiningSummary;
+  /** Which side pays the next block: the curve's inventory, or the Mining Reserve. */
+  emissionSource: MineEmissionSource;
+  /** Estimated days of curve budget left at the current rate, or null when there is none. */
+  curveMiningDaysRemaining: number | null;
   nextBlockAt: number;
   epoch: number;
   epochEndsAt: number;

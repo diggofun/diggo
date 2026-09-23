@@ -11,6 +11,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createRiskOpsConfig, type RiskOpsConfig } from "../../shared/riskOps";
+import { DIGGO_CONFIG } from "../../shared/config";
 import {
   DEFAULT_SIM_OPTIONS,
   SCENARIOS,
@@ -19,6 +20,7 @@ import {
   type SimOptions,
 } from "./model";
 import { runScenario, type SimResult } from "./engine";
+import { curvePhaseChecks, curvePhaseTable, runCurvePhase } from "./curve";
 import { legacyRunwayProof, runSelfChecks, runwayProof, type CheckResult } from "./selfcheck";
 import {
   discoveryCapTable,
@@ -47,6 +49,7 @@ interface Cli {
   quick: boolean;
   selfcheck: boolean;
   selfcheckOnly: boolean;
+  curvePhase: boolean;
   debugPower: boolean;
   inspect: boolean;
   list: boolean;
@@ -61,6 +64,7 @@ function parseArgs(argv: readonly string[]): Cli {
     quick: false,
     selfcheck: true,
     selfcheckOnly: false,
+    curvePhase: false,
     debugPower: false,
     inspect: false,
     list: false,
@@ -89,6 +93,7 @@ function parseArgs(argv: readonly string[]): Cli {
     else if (arg === "--no-selfcheck") cli.selfcheck = false;
     else if (arg === "--list") cli.list = true;
     else if (arg === "--selfcheck-only") cli.selfcheckOnly = true;
+    else if (arg === "--curve-phase") cli.curvePhase = true;
     else if (arg === "--debug-power") cli.debugPower = true;
     else if (arg === "--inspect") cli.inspect = true;
     else if (arg === "--quiet") cli.quiet = true;
@@ -158,7 +163,64 @@ function daysReport(result: SimResult): number {
   return result.summary.days;
 }
 
-function buildMarkdown(results: readonly SimResult[], checks: readonly CheckResult[]): string {
+/**
+ * The curve-phase scenario, and the section it contributes to the report.
+ *
+ * It is priced against the reference population plus the largest farm in the matrix, because the
+ * question it answers is a market one: what mining out of the curve does to the price, and what a
+ * farm does to everyone else's share of a finite cap.
+ */
+function curvePhaseSection(
+  seed: number,
+  days: number,
+  humans: number,
+  bots: number,
+): { markdown: string; checks: CheckResult[] } {
+  const result = runCurvePhase({ seed, days, humans, bots });
+  const totals = result.totals;
+  const whole = (value: number) => Math.round(value).toLocaleString("en-US");
+  const markdown =
+    "\n### Curve-phase mining (block rewards paid out of the curve's own inventory)\n\n" +
+    curvePhaseTable(result.rows) +
+    "\n\nMining is live from the launch block, and before graduation it is paid out of the market's own " +
+    "curve token inventory, capped at " +
+    (DIGGO_CONFIG.curve.defaultMiningBps / 100).toFixed(0) +
+    "% of the inventory the curve started with. The price column is the curve that mines, against the " +
+    "same curve over the same trades with no mining at all, so the gap between them is what the " +
+    "emission itself did to the price. Sell capacity is the real SOL a seller can take out of the " +
+    "curve: mined tokens bring no SOL with them, so it moves only when somebody buys.\n\n" +
+    "| Curve-phase total | Value |\n| --- | --- |\n" +
+    "| Inventory the curve started with | " +
+    whole(totals.initialInventoryWhole) +
+    " tokens |\n| Still in the curve at day " +
+    days +
+    " | " +
+    whole(totals.curveInventoryWhole) +
+    " tokens |\n| Mined out of the curve | " +
+    whole(totals.minedWhole) +
+    " of a " +
+    whole(totals.capWhole) +
+    " token cap |\n| Bought out of the curve | " +
+    whole(totals.boughtOutWhole) +
+    " tokens |\n| Sold back into it | " +
+    whole(totals.soldBackWhole) +
+    " tokens |\n| Credited to positions | " +
+    whole(totals.claimableWhole) +
+    " tokens (the rest is index rounding dust) |\n| Conservation residual | " +
+    totals.conservationErrorWhole.toExponential(2) +
+    " whole tokens |\n| Cap spent on day | " +
+    (totals.dayCapSpent === null ? "not in this horizon" : String(totals.dayCapSpent)) +
+    " |\n| Graduated on day | " +
+    (totals.dayGraduated === null ? "not in this horizon" : String(totals.dayGraduated)) +
+    " |";
+  return { markdown, checks: curvePhaseChecks(result) };
+}
+
+function buildMarkdown(
+  results: readonly SimResult[],
+  checks: readonly CheckResult[],
+  extraSection = "",
+): string {
   const sections: string[] = [];
   sections.push("### Scenario overview\n");
   sections.push(scenarioOverview(results));
@@ -203,6 +265,7 @@ function buildMarkdown(results: readonly SimResult[], checks: readonly CheckResu
       .map((check) => `- ${check.ok ? "PASS" : "FAIL"} — ${check.name}: ${check.detail}`)
       .join("\n"),
   );
+  if (extraSection) sections.push(extraSection);
   return sections.join("\n");
 }
 
@@ -233,6 +296,21 @@ export async function run(argv: readonly string[]): Promise<void> {
     const checks = await runSelfChecks(result, riskOpsFor("shadow", options.hardening));
     console.log(checks.map((check) => `${check.ok ? "PASS" : "FAIL"} — ${check.name}: ${check.detail}`).join("\n"));
     if (checks.some((check) => !check.ok)) process.exitCode = 1;
+    return;
+  }
+  if (cli.curvePhase) {
+    // The curve-phase question on its own: fast enough to iterate on without the matrix.
+    const result = runCurvePhase({
+      seed: cli.seed ?? DEFAULT_SIM_OPTIONS.seed,
+      days: cli.days ?? DEFAULT_SIM_OPTIONS.days,
+      humans: cli.humans ?? DEFAULT_SIM_OPTIONS.humans,
+      bots: cli.bots ?? 10_000,
+    });
+    const curveChecks = curvePhaseChecks(result);
+    console.log(curvePhaseTable(result.rows));
+    console.log("\n" + JSON.stringify(result.totals, null, 2));
+    console.log("\n" + curveChecks.map((check) => `${check.ok ? "PASS" : "FAIL"} — ${check.name}: ${check.detail}`).join("\n"));
+    if (curveChecks.some((check) => !check.ok)) process.exitCode = 1;
     return;
   }
   const modes: ("shadow" | "enforce")[] =
@@ -268,7 +346,14 @@ export async function run(argv: readonly string[]): Promise<void> {
   const reference = allResults[0];
   if (!reference) throw new Error("no results produced");
   const checks = cli.selfcheck ? await runSelfChecks(reference, riskOpsFor("shadow")) : [];
-  const markdown = buildMarkdown(allResults, checks);
+  const curvePhase = curvePhaseSection(
+    reference.summary.seed,
+    daysReport(reference),
+    reference.summary.humans,
+    Math.max(10_000, reference.summary.bots),
+  );
+  const allChecks = [...checks, ...curvePhase.checks];
+  const markdown = buildMarkdown(allResults, allChecks, curvePhase.markdown);
   mkdirSync(outRoot, { recursive: true });
   writeFileSync(join(outRoot, "summary.md"), markdown + "\n", "utf8");
   writeFileSync(
@@ -279,13 +364,14 @@ export async function run(argv: readonly string[]): Promise<void> {
         seed: reference.summary.seed,
         elapsedMs: Date.now() - started,
         scenarios: allResults.map((result) => result.summary),
-        checks,
+        checks: allChecks,
       },
       null,
       2,
     ) + "\n",
     "utf8",
   );
+  if (allChecks.some((check) => !check.ok)) process.exitCode = 1;
   console.log("\n" + markdown);
   console.log(`\nwrote CSVs and summary.md/json to ${outRoot} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
 }

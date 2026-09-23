@@ -115,16 +115,27 @@ export interface TokenSeed {
   reserveTotal?: number;
   rewardPerBlock?: number;
   syncedAt?: number;
+  /**
+   * Which venue the market is on. Defaults to the graduated pool, because the accounting these
+   * tests exercise is the reserve phase: a mine on its curve pays out of the curve's own cap
+   * instead (see worker/test/curve-mining.test.ts), and a market on the curve with no cap pays
+   * nothing at all.
+   */
+  venue?: "curve" | "pool";
+  /** The curve-mining ledger, for a test that wants the curve phase instead of the reserve. */
+  curveMining?: { cap?: number; mined?: number; blockReward?: number; unpaid?: number };
 }
 
 export async function seedToken(env: RuntimeEnv, seed: TokenSeed): Promise<void> {
   const db = env.DB as unknown as SqliteD1;
   const now = Math.floor(Date.now() / 1_000);
+  const curve = seed.curveMining ?? {};
   await db
     .prepare(
       "INSERT INTO tokens (mint, slug, name, symbol, description, creator, status, reserve_remaining, " +
-        "reserve_total, reward_per_block, next_block_at, next_epoch_at, synced_at) " +
-        "VALUES (?1, ?2, ?3, ?4, 'test', 'creator', ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "reserve_total, reward_per_block, next_block_at, next_epoch_at, synced_at, venue, " +
+        "curve_mining_open, curve_mining_cap, curve_mining_mined, curve_mining_unpaid, curve_mining_block_reward) " +
+        "VALUES (?1, ?2, ?3, ?4, 'test', 'creator', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
     )
     .bind(
       seed.mint,
@@ -138,6 +149,12 @@ export async function seedToken(env: RuntimeEnv, seed: TokenSeed): Promise<void>
       now + 300,
       now + 604_800,
       seed.syncedAt ?? 0,
+      seed.venue ?? "pool",
+      (curve.cap ?? 0) > (curve.mined ?? 0) ? 1 : 0,
+      curve.cap ?? 0,
+      curve.mined ?? 0,
+      curve.unpaid ?? 0,
+      curve.blockReward ?? 0,
     )
     .run();
 }

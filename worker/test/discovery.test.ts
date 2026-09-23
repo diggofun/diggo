@@ -43,6 +43,8 @@ vi.mock("../keeper", () => ({
   keeperClaimDiscovery: keeperMock.claimDiscovery,
   keeperDiscoveryReceiptExists: keeperMock.receiptExists,
   keeperSyncCrewPower: keeperMock.syncCrewPower,
+  // The graduation path is not exercised here; the export only has to exist for the module import.
+  isSyncBehindError: () => false,
 }));
 
 const { settleDiscoveryClaim, DISCOVERY_CLAIM_RETRY_SECONDS } = await import("../indexing");

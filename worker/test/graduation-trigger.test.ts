@@ -6,6 +6,12 @@
  * that exactly the markets that need it are graduated, that the call is idempotent, that a keeper
  * failure is counted and retried on the next pass instead of failing the pass, and that a fill is
  * indexed at the price of the venue that backed it.
+ *
+ * Graduation is deliberately not gated on the worker's own model of the mine's ledger: a mine the
+ * program never walks (no power to divide a block reward by) looks permanently behind to any
+ * cursor arithmetic, and gating on that deferred every tick and never formed a pool. The program's
+ * SyncBehind answer is the retryable authority instead, so a disagreement can cost a transaction
+ * but never a market that never graduates.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IndexingEvent, MarketTrade, TokenSummary } from "../../shared/types";
@@ -23,13 +29,19 @@ import { createTestHarness, seedToken, type TestHarness } from "./d1-sqlite";
 // Plain factories rather than partial re-exports of the real modules: this job is the unit under
 // test, and everything it reaches out to (RPC reads, the keeper, the oracle, the roll path, the
 // risk gate) is a collaborator whose *calls* are what these tests assert.
-vi.mock("../keeper", () => ({
-  keeperAdvanceMine: vi.fn(),
-  keeperGraduateMarket: vi.fn(),
-  keeperClaimDiscovery: vi.fn(),
-  keeperDiscoveryReceiptExists: vi.fn(),
-  keeperSyncCrewPower: vi.fn(),
-}));
+vi.mock("../keeper", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../keeper")>();
+  return {
+    keeperAdvanceMine: vi.fn(),
+    keeperGraduateMarket: vi.fn(),
+    keeperClaimDiscovery: vi.fn(),
+    keeperDiscoveryReceiptExists: vi.fn(),
+    keeperSyncCrewPower: vi.fn(),
+    // The real matcher, not a stub: how the loop reacts to the program's own SyncBehind answer is
+    // part of what these tests exercise.
+    isSyncBehindError: actual.isSyncBehindError,
+  };
+});
 vi.mock("../chain", () => ({
   syncTokenWithVenue: vi.fn(),
   readTokenFromChain: vi.fn(),
@@ -112,7 +124,20 @@ function tokenSummary(overrides: Partial<TokenSummary> = {}): TokenSummary {
     status: "MINING_ACTIVE",
     priceSol: 5e-5,
     priceUsd: 0.0075,
-    change24h: 0,
+    change24h: null,
+    volume24hUsd: 0,
+    trades24h: 0,
+    curveMining: {
+      open: false,
+      onCurve: false,
+      cap: 0,
+      mined: 0,
+      remaining: 0,
+      progress: 0,
+      blockReward: 0,
+      unpaid: 0,
+    },
+    sellCapacity: { sol: 0, tokens: 0 },
     marketCapUsd: 7_500_000,
     reserveRemaining: 500_000_000,
     reserveTotal: 1_000_000_000,
@@ -156,12 +181,41 @@ function chainToken(overrides: Partial<ChainSyncedToken> = {}): ChainSyncedToken
     mintAuthorityRevoked: true,
     freezeAuthorityRevoked: true,
     liquidityLocked: true,
+    change24h: null,
+    change24hAt: 0,
+    volume24hUsd: 0,
+    trades24h: 0,
+    curveMining: {
+      open: false,
+      onCurve: false,
+      cap: 0,
+      mined: 0,
+      remaining: 0,
+      progress: 0,
+      blockReward: 0,
+      unpaid: 0,
+    },
+    sellCapacity: { sol: 0, tokens: 0 },
     ...overrides,
   };
 }
 
 function epochSync(): IndexingEvent {
   return { type: "epoch_sync", mint: MINT, timestamp: START };
+}
+
+/**
+ * The program's own refusal, in the shape a keeper call really fails with: anchor logs the error
+ * name and the numeric code, and the transaction error carries the code in its message too.
+ */
+function syncBehindRefusal(): Error {
+  const error = new Error(
+    "Transaction simulation failed: Error processing Instruction 0: custom program error: 0x179c",
+  );
+  (error as { logs?: string[] }).logs = [
+    "Program log: AnchorError caused by account: mine. Error Code: SyncBehind. Error Number: 6044. Error Message: This mine is behind and must be advanced with advance_mine before its positions can settle.",
+  ];
+  return error;
 }
 
 function tradeEvent(trade: Partial<MarketTrade> = {}): IndexingEvent {
@@ -211,6 +265,139 @@ describe("graduation from the indexing loop", () => {
     // the pass still happened.
     expect(recordSample).toHaveBeenCalledTimes(1);
     expect(metricCalls("keeper.mine_advanced")).toBe(0);
+  });
+
+  it("graduates a zero-power market that reached its SOL target, instead of deferring for ever", async () => {
+    // The regression this pins: the loop refused to ask while its own model said the mine was
+    // behind, and a mine with no power is one the program never walks - advance_mine answers
+    // CaughtUp without moving the cursor - so the worker's model reported it tens of thousands of
+    // segments behind on every single tick. Graduation was deferred for ever and the pool never
+    // formed. The program is the authority on whether a ledger is caught up, so the call is made
+    // and its answer is what defers.
+    advanceMine.mockResolvedValue({
+      mint: MINT,
+      behindSegments: 80_000,
+      signatures: [],
+      caughtUp: false,
+    });
+    syncWithVenue.mockResolvedValue({
+      token: tokenSummary(),
+      chain: chainToken({ venue: "curve", graduationReady: true }),
+    });
+    graduate.mockResolvedValue("5KeeperSignature");
+
+    await processQueueEvent(epochSync(), env);
+
+    expect(graduate).toHaveBeenCalledTimes(1);
+    expect(metricCalls("chain.market_graduated")).toBe(1);
+    expect(metricCalls("chain.graduation_deferred")).toBe(0);
+    // And the rest of the pass is unaffected: the catch-up and the price sample still happened.
+    expect(recordSample).toHaveBeenCalledTimes(1);
+    expect(syncWithVenue).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats the program's SyncBehind answer as the retryable deferral, and retries next tick", async () => {
+    syncWithVenue.mockResolvedValue({
+      token: tokenSummary(),
+      chain: chainToken({ venue: "curve", graduationReady: true }),
+    });
+    // graduate_market walks the mine to the present under the curve phase before it ends that
+    // phase, and refuses with SyncBehind while the mine is further behind than one bounded walk
+    // can cover. That refusal is retryable: this tick already advanced the mine as far as its
+    // budget allowed, so the next one continues from there.
+    graduate.mockRejectedValue(syncBehindRefusal());
+
+    await expect(processQueueEvent(epochSync(), env)).resolves.toBeUndefined();
+
+    expect(metricCalls("chain.graduation_deferred")).toBe(1);
+    expect(metricCalls("chain.graduation_failed")).toBe(0);
+    expect(metricCalls("chain.market_graduated")).toBe(0);
+    // Not a queue retry: the price sample this pass already wrote is not idempotent.
+    expect(recordSample).toHaveBeenCalledTimes(1);
+
+    graduate.mockResolvedValue("5KeeperSignature");
+    await processQueueEvent(epochSync(), env);
+    expect(metricCalls("chain.market_graduated")).toBe(1);
+  });
+
+  it("keeps asking while the mine is behind, and graduates on the pass that catches it up", async () => {
+    advanceMine.mockResolvedValue({
+      mint: MINT,
+      behindSegments: 400,
+      signatures: ["advance-1"],
+      caughtUp: false,
+    });
+    syncWithVenue.mockResolvedValue({
+      token: tokenSummary(),
+      chain: chainToken({ venue: "curve", graduationReady: true }),
+    });
+
+    // The mine is still behind, so the program refuses and the keeper's own no-op answer stands
+    // for that refusal here: the pass stays alive and the next one asks again.
+    await processQueueEvent(epochSync(), env);
+    expect(graduate).toHaveBeenCalledTimes(1);
+    expect(metricCalls("chain.market_graduated")).toBe(0);
+
+    advanceMine.mockResolvedValue({
+      mint: MINT,
+      behindSegments: 400,
+      signatures: [],
+      caughtUp: true,
+    });
+    graduate.mockResolvedValue("5KeeperSignature");
+
+    await processQueueEvent(epochSync(), env);
+    expect(graduate).toHaveBeenCalledTimes(2);
+    expect(metricCalls("chain.market_graduated")).toBe(1);
+  });
+
+  it("re-reads the token row once graduation has landed", async () => {
+    syncWithVenue.mockResolvedValue({
+      token: tokenSummary({ status: "LAUNCHING" }),
+      chain: chainToken({ venue: "curve", status: "LAUNCHING", graduationReady: true }),
+    });
+    graduate.mockResolvedValue("5KeeperSignature");
+
+    await processQueueEvent(epochSync(), env);
+
+    // The first read describes the curve, and the row it wrote carries that venue, those reserves
+    // and that price. Graduation has just moved all of it into the pool, so the row is rewritten
+    // from a read taken after it - otherwise the API serves a curve price for up to five minutes
+    // after the pool took the liquidity.
+    expect(syncWithVenue).toHaveBeenCalledTimes(2);
+    expect(syncWithVenue.mock.calls[1][1]).toBe(MINT);
+    expect(syncWithVenue.mock.invocationCallOrder[1]).toBeGreaterThan(
+      graduate.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("does not re-read the row when nothing graduated", async () => {
+    syncWithVenue.mockResolvedValue({
+      token: tokenSummary(),
+      chain: chainToken({ venue: "curve", graduationReady: true }),
+    });
+    // The keeper's own no-op: there was nothing to graduate.
+    graduate.mockResolvedValue(null);
+
+    await processQueueEvent(epochSync(), env);
+
+    expect(graduate).toHaveBeenCalledTimes(1);
+    expect(syncWithVenue).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the pass alive when the post-graduation re-read fails", async () => {
+    syncWithVenue
+      .mockResolvedValueOnce({
+        token: tokenSummary(),
+        chain: chainToken({ venue: "curve", graduationReady: true }),
+      })
+      .mockRejectedValueOnce(new Error("rpc unavailable"));
+    graduate.mockResolvedValue("5KeeperSignature");
+
+    // The fresh row is a bonus, not the point of the pass: a read that fails costs the row and
+    // nothing else, and the next pass re-reads anyway.
+    await expect(processQueueEvent(epochSync(), env)).resolves.toBeUndefined();
+    expect(metricCalls("chain.market_graduated")).toBe(1);
   });
 
   it("leaves a market that is short of its target alone", async () => {

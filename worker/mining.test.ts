@@ -160,6 +160,10 @@ function mineStateFixture(overrides: Partial<MineState> = {}): MineState {
     epochLength: 604_800,
     epochEndsAt: 0,
     authority: "OFFCHAIN",
+    // A mine whose budget is the Mining Reserve, which is what every mine was before curve
+    // mining existed; tests that want the curve phase set emissionSource and curve themselves.
+    emissionSource: "RESERVE",
+    curve: { graduated: true, cap: 0n, mined: 0n, unpaid: 0n, blockReward: 0n },
     ...overrides,
   };
 }

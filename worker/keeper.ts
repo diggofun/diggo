@@ -51,8 +51,12 @@ import {
   decodePlayer,
   decodeProtocolConfig,
   decodeLaunchMarket,
-  decodeLiquidityPool,
+ decodeLiquidityPool,
+  type DecodedLaunchMarket,
+  type DecodedMine,
   type DecodedLiquidityPool,
+  deriveMarketPdaSync,
+  SYNC_BEHIND_ERROR_CODE,
 } from "../shared/program";
 import { getChainRpc } from "./chain";
 
@@ -206,6 +210,49 @@ export async function keeperClaimDiscovery(
 }
 
 /**
+ * True when a keeper call was refused by the program with `SyncBehind` - the retryable answer that
+ * says a mine's ledger is still behind, rather than a failure.
+ *
+ * The program is the authority on whether a mine is caught up, so the keeper asks and reacts
+ * instead of predicting. A disagreement between the program's rule and this worker's model of it
+ * must be able to cost a wasted transaction; it must never be able to stall a market that would
+ * otherwise graduate. Both shapes the refusal arrives in are matched - the anchor error name that
+ * the program logs, and the numeric code - because a preflight failure surfaces as a transaction
+ * error whose logs carry the name and whose message may carry either.
+ */
+export function isSyncBehindError(error: unknown): boolean {
+  const text = errorText(error);
+  return (
+    text.includes("SyncBehind") ||
+    text.includes(`Error Number: ${SYNC_BEHIND_ERROR_CODE}`) ||
+    text.includes(`custom program error: 0x${SYNC_BEHIND_ERROR_CODE.toString(16)}`)
+  );
+}
+
+/** An error's own text: its message, its logs, and the same for everything that caused it. */
+function errorText(error: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current; depth += 1) {
+    if (typeof current === "string") {
+      parts.push(current);
+      break;
+    }
+    if (typeof current !== "object") break;
+    const record = current as { message?: unknown; logs?: unknown; cause?: unknown };
+    if (typeof record.message === "string") parts.push(record.message);
+    if (Array.isArray(record.logs)) parts.push(record.logs.join("\n"));
+    try {
+      parts.push(String(current));
+    } catch {
+      // A throwing getter is not worth losing the fields above for.
+    }
+    current = record.cause;
+  }
+  return parts.join("\n");
+}
+
+/**
  * Graduates a market whose bonding curve has reached its target, moving the curve's whole
  * SOL and token liquidity into the program-owned constant-product pool (spec 36).
  *
@@ -214,6 +261,14 @@ export async function keeperClaimDiscovery(
  * to do: no market account, an already graduated market, a market that has not reached its
  * target, or a pool that already exists. That way the caller can run it on every indexing
  * pass without turning a normal state into an error.
+ *
+ * One refusal it cannot pre-empt is a mine whose ledger is behind: the program walks the mine to
+ * the present under the curve phase before it ends that phase - every block that landed before
+ * graduation is paid out of the curve's own inventory - and answers SyncBehind while the mine is
+ * further behind than one bounded walk can cover. That is a retryable throw rather than a no-op,
+ * and the indexing loop reacts to it (isSyncBehindError) rather than trying to predict it: the
+ * program's own verdict is the only authority on whether a ledger is caught up, and a caller that
+ * pre-empts it from its own model can defer a graduation that would have succeeded.
  *
  * The program never flips the graduated flag on a buy: the flag and the pool are created
  * together here, so a market can never end up graduated with its liquidity stranded in
@@ -400,6 +455,15 @@ export interface MineAdvanceCursor {
   nextBlockAt: number;
   /** Mine.block_interval, the seconds between blocks. */
   blockInterval: number;
+  /**
+   * False when the program will not move this ledger whatever the keeper pays: a graduated mine
+   * with an empty Mining Reserve, or one the program has already marked FullyMined. A mine whose
+   * curve budget is spent is still emittable - those blocks pay nothing, but the cursor has to
+   * move past them, and that is what keeps the idle stretch from being paid out of the Mining
+   * Reserve once the market graduates. Optional and true by default, so a cursor built without
+   * it keeps the old behaviour.
+   */
+  emittable?: boolean;
 }
 
 /**
@@ -420,10 +484,54 @@ export interface MineAdvancer {
  * advance.
  */
 export function mineSegmentsBehind(cursor: MineAdvanceCursor, now: number): number {
+  // A mine the program cannot source a block for is not behind: its cursor stays where it is
+  // however many times it is walked, so paying to advance it would be a loop that never ends.
+  if (cursor.emittable === false) return 0;
   if (!(cursor.blockInterval > 0) || !(cursor.nextBlockAt > 0)) return 0;
   if (now <= cursor.nextBlockAt) return 0;
   return Math.ceil((now - cursor.nextBlockAt) / cursor.blockInterval);
 }
+
+/**
+ * True while this mine still owes the stretch of ledger that ends at its graduation cursor: it
+ * has graduated, a cursor was recorded, and the walk has not consumed the stretch yet.
+ *
+ * Those blocks are curve-phase for good, so they may never be paid out of the Mining Reserve - and
+ * they are also why a graduated mine with an empty reserve can still have work to do. Mirrors the
+ * program's curve_phase_pending exactly.
+ */
+function curvePhasePending(mine: DecodedMine): boolean {
+  return mine.graduated && mine.curvePhaseEndsAt > 0n && mine.nextBlockAt < mine.curvePhaseEndsAt;
+}
+
+/**
+ * Whether `advance_mine` can move this mine's ledger at all.
+ *
+ * This is a mirror of the program's own opening short-circuit (sync_is_complete), because the
+ * program is what decides whether a cursor moves, and a keeper that disagrees with it does not
+ * merely waste a call - it loops. The two halves that matter:
+ *
+ * - A mine with **no power** owes nothing at all: no block reward can be divided by zero power, so
+ *   advance_mine answers CaughtUp and deliberately leaves the cursor where it is. Reading that as
+ *   "behind" is a gap no number of calls can close, which is exactly how a zero-power market used
+ *   to look permanently behind and never graduate.
+ * - A **graduated** mine can only move while its Mining Reserve has something left, or while it
+ *   still owes the stretch ending at its graduation cursor. Before graduation the cursor always
+ *   can, and that is deliberate even when the curve's budget is spent: those blocks accrue
+ *   nothing, but the walk has to consume them, or the whole idle stretch would be paid out of the
+ *   Mining Reserve in one go the moment the market graduated.
+ *
+ * A mine the program has already finished is not advanced, and neither is one whose market could
+ * not be read: unknown is left as "ask again", so the next call fails loudly rather than stalling a
+ * mine that is genuinely behind.
+ */
+export function mineLedgerCanMove(mine: DecodedMine, market: DecodedLaunchMarket | null): boolean {
+  if (mine.totalPower === 0n) return false;
+  if (mine.status === "FullyMined") return false;
+  if (!market || !market.graduated) return true;
+  return mine.remainingReserve > 0n || curvePhasePending(mine);
+}
+
 
 /** The production advancer: the mine account itself, and the permissionless advance_mine call. */
 export function createChainMineAdvancer(env: KeeperEnv): MineAdvancer {
@@ -432,17 +540,34 @@ export function createChainMineAdvancer(env: KeeperEnv): MineAdvancer {
       const rpc = getChainRpc(env);
       const programAddress = address(env.DIGGO_PROGRAM_ID);
       const { mine } = await deriveMineAddresses(programAddress, address(mint));
-      const info = await rpc.getAccountInfo(mine, { commitment: "confirmed", encoding: "base64" }).send();
+      const marketPda = deriveMarketPdaSync(programAddress, address(mint));
+      const [info, marketInfo] = await Promise.all([
+        rpc.getAccountInfo(mine, { commitment: "confirmed", encoding: "base64" }).send(),
+        rpc.getAccountInfo(marketPda, { commitment: "confirmed", encoding: "base64" }).send(),
+      ]);
       if (!info.value) return null;
       const decoded = decodeMine(base64ToBytes(info.value.data[0]));
-      return { nextBlockAt: Number(decoded.nextBlockAt), blockInterval: Number(decoded.blockInterval) };
+      // See mineLedgerCanMove: which is a property of the market, and deliberately not "is there a
+      // block to pay" - an idle curve-phase mine still has a cursor to move.
+      const emittable = marketInfo.value
+        ? mineLedgerCanMove(decoded, decodeLaunchMarket(base64ToBytes(marketInfo.value.data[0])))
+        : true;
+      return {
+        nextBlockAt: Number(decoded.nextBlockAt),
+        blockInterval: Number(decoded.blockInterval),
+        emittable,
+      };
     },
     async advance(mint: string): Promise<string> {
       const rpc = getChainRpc(env);
       const programAddress = address(env.DIGGO_PROGRAM_ID);
       const { mine } = await deriveMineAddresses(programAddress, address(mint));
       const keeper = await getKeeperSigner(env);
-      return signSendConfirm(rpc, keeper, [buildAdvanceMineInstruction({ programAddress, mine })]);
+      // The market is what the walk reads to decide which side pays the blocks it credits, so
+      // advance_mine requires it; the mint is what its PDA is derived from.
+      return signSendConfirm(rpc, keeper, [
+        buildAdvanceMineInstruction({ programAddress, mine, mint: address(mint) }),
+      ]);
     },
   };
 }

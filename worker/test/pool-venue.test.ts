@@ -59,6 +59,9 @@ const PLATFORM_FEE_BPS = 50;
 /** Distinct, well-formed 32-byte addresses; these are opaque labels, never derived from. */
 const addr = (fill: number): Address => new PublicKey(new Uint8Array(32).fill(fill)).toBase58() as Address;
 
+/** No indexed 24h history: the shape a token that has never traded reads as. */
+const NO_METRICS = { change24h: null, change24hAt: 0, volume24hUsd: 0, trades24h: 0 } as const;
+
 const MINT = addr(1);
 const TRADER = addr(2);
 const TRADER_TOKENS = addr(3);
@@ -94,6 +97,12 @@ function market(overrides: Partial<DecodedLaunchMarket> = {}): DecodedLaunchMark
     platformFeeBps: PLATFORM_FEE_BPS,
     bump: 255,
     version: 1,
+    // A market written before curve mining existed: no budget, which is the pre-curve rule of
+    // a mine that only emits once it has graduated. Tests that want a curve phase say so.
+    curveMiningCap: 0n,
+    curveMiningMined: 0n,
+    curveMiningUnpaid: 0n,
+    curveMiningBlockReward: 0n,
     ...overrides,
   };
 }
@@ -152,6 +161,9 @@ function mine(overrides: Partial<DecodedMine> = {}): DecodedMine {
     discoveryEpochBudget: 1_000n * RAW,
     discoveryEpochSpent: 0n,
     discoveryEpochEndsAt: 1_800_086_400n,
+    curveMiningOpen: false,
+    graduated: false,
+    curvePhaseEndsAt: 0n,
     discoveryPaused: false,
     bump: 253,
     version: 1,
@@ -367,6 +379,7 @@ describe("indexing a graduated market from its pool", () => {
       mintInfo: { decimals: DECIMALS, mintAuthorityRevoked: true, freezeAuthorityRevoked: true },
       decimals: DECIMALS,
       solUsd,
+      metrics: NO_METRICS,
     });
 
     // Pricing from the market account alone is exactly the bug this replaces.
@@ -398,6 +411,7 @@ describe("indexing a graduated market from its pool", () => {
       mintInfo: { decimals: DECIMALS, mintAuthorityRevoked: false, freezeAuthorityRevoked: false },
       decimals: DECIMALS,
       solUsd,
+      metrics: NO_METRICS,
     });
     expect(synced.liquidityLamports).toBe(45n * LAMPORTS);
     expect(synced.liquidityUsd).toBeCloseTo(45 * solUsd, 6);
@@ -414,6 +428,7 @@ describe("indexing a graduated market from its pool", () => {
       mintInfo: { decimals: DECIMALS, mintAuthorityRevoked: false, freezeAuthorityRevoked: false },
       decimals: DECIMALS,
       solUsd,
+      metrics: NO_METRICS,
     }).graduationReady).toBe(true);
 
     // Short of the target, already graduated, and holding a pool all mean "nothing to do".
