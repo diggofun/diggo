@@ -49,6 +49,18 @@ export function tokenAmount(value: number): string {
   return value.toLocaleString(undefined, { maximumFractionDigits: value < 1 ? 6 : 2 });
 }
 
+/**
+ * A SOL figure, which ranges from the dust left in a bonding curve to six-figure market caps. Under
+ * 1000 it keeps enough decimals to be real rather than a rounded zero, and above that it is compact.
+ * Formatted in `en` rather than the visitor's locale, like compact(), so a SOL amount sits next to
+ * the toFixed() figures the trading panel already prints without switching separators.
+ */
+export function solAmount(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0";
+  if (value >= 1_000) return compact(value);
+  return value.toLocaleString("en", { maximumFractionDigits: value < 1 ? 6 : 2 });
+}
+
 export function percent(fraction: number): string {
   return `${(Math.max(0, Math.min(1, fraction)) * 100).toFixed(fraction >= 0.9995 ? 0 : 2)}%`;
 }

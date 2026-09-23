@@ -20,6 +20,7 @@ import {
   Hammer,
   HardHat,
   LockKeyhole,
+  Minus,
   Pickaxe,
   Plus,
   Radio,
@@ -27,9 +28,10 @@ import {
   TrendingUp,
   Users,
 } from "lucide-react";
-import type { PlayerProfile, TokenSummary } from "../../shared/types";
+import type { MineInfo, PlayerProfile, TokenSummary } from "../../shared/types";
 import { GAMEPLAY_DEFAULTS } from "../../shared/economics";
-import { compact, countdown, money, shortAddress } from "../format";
+import { compact, countdown, money, percent, shortAddress, solAmount } from "../format";
+import { describeEmissionWindow, resolveNetworkPower } from "../mineView";
 import { requestWalletMenu } from "../wallet";
 import { BrandMark } from "./AppHeader";
 import { LEGAL_ROUTES } from "./legal/routes";
@@ -177,7 +179,13 @@ export function Ticker({ tokens }: { tokens: TokenSummary[] }) {
         {[...tokens, ...tokens].map((token, index) => (
           <span key={token.symbol + "-" + index}>
             <b>${token.symbol}</b> {money(token.priceUsd)}{" "}
-            <i className={token.change24h >= 0 ? "up" : "down"}>{token.change24h >= 0 ? "+" : ""}{token.change24h}%</i>
+            {/* The worker reports null when no honest 24h change exists yet, so the ticker falls
+                back to the indexed trades that did happen instead of printing a fake zero. */}
+            {token.change24h === null ? (
+              <i className="unknown">{token.trades24h} trades</i>
+            ) : (
+              <i className={token.change24h >= 0 ? "up" : "down"}>{token.change24h >= 0 ? "+" : ""}{token.change24h}%</i>
+            )}
           </span>
         ))}
       </div>
@@ -200,7 +208,15 @@ function sortTokens(tokens: TokenSummary[], mode: SortMode): TokenSummary[] {
   if (mode === "new") return list.sort((a, b) => b.createdAt - a.createdAt);
   if (mode === "reduction") return list.sort((a, b) => a.nextEpochAt - b.nextEpochAt);
   if (mode === "almost") return list.sort((a, b) => left(a) - left(b));
-  return list.sort((a, b) => b.change24h - a.change24h);
+  // Trending ranks on the measured 24h change. A token whose change is unknown (null, never zero)
+  // ranks after the measured ones, ordered by the trades that did happen.
+  return list.sort((a, b) => {
+    if (a.change24h === null || b.change24h === null) {
+      if (a.change24h !== b.change24h) return a.change24h === null ? 1 : -1;
+      return b.trades24h - a.trades24h;
+    }
+    return b.change24h - a.change24h;
+  });
 }
 
 export function ExploreBoard({ tokens, limit, onLaunch }: { tokens: TokenSummary[]; limit?: number; onLaunch(): void }) {
@@ -250,7 +266,15 @@ export function ExploreBoard({ tokens, limit, onLaunch }: { tokens: TokenSummary
 
 function TokenCard({ token }: { token: TokenSummary }) {
   const reservePercent = token.reserveTotal > 0 ? Math.round((token.reserveRemaining / token.reserveTotal) * 100) : 0;
-  const up = token.change24h >= 0;
+  const change = token.change24h;
+  const up = change !== null && change >= 0;
+  /**
+   * Before graduation the budget paying this mine's blocks is the curve's own launch cap, and the
+   * card's bar has to count that budget rather than a reserve nothing is drawing down yet. A mine
+   * launched without a curve share stays on the reserve reading.
+   */
+  const curve = token.curveMining;
+  const onCurve = curve.onCurve && curve.cap > 0;
   return (
     <a className="token-card" href={"/mines?mint=" + encodeURIComponent(token.mint)} aria-label={"Open the " + token.name + " mine"}>
       <div className="token-card-head">
@@ -259,23 +283,52 @@ function TokenCard({ token }: { token: TokenSummary }) {
           <h3>{token.name}</h3>
           <span>${token.symbol}</span>
         </div>
-        <span className={"change " + (up ? "positive" : "negative")}>
-          {up ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
-          <span className="sr-only">{up ? "up" : "down"}</span>
-          {Math.abs(token.change24h)}%
+        <span className={"change " + (change === null ? "unknown" : up ? "positive" : "negative")}>
+          {change === null ? (
+            <>
+              <Minus size={13} />
+              <span className="sr-only">no measured change</span>—
+            </>
+          ) : (
+            <>
+              {up ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
+              <span className="sr-only">{up ? "up" : "down"}</span>
+              {Math.abs(change)}%
+            </>
+          )}
         </span>
       </div>
       <div className="card-price">
         <strong>{money(token.priceUsd)}</strong>
         <span>{compact(token.marketCapUsd)} mcap</span>
       </div>
-      <div className="reserve-row">
-        <span><Pickaxe size={13} /> unmined reserve</span>
-        <strong>{reservePercent}%</strong>
-      </div>
-      <div className="progress" aria-hidden="true"><i style={{ width: reservePercent + "%" }} /></div>
+      {onCurve ? (
+        <>
+          <div className="reserve-row">
+            <span><TrendingUp size={13} /> curve mining</span>
+            <strong>{percent(curve.progress)}</strong>
+          </div>
+          <div className="progress is-curve" aria-hidden="true"><i style={{ width: percent(curve.progress) }} /></div>
+          <p className="card-curve-line">
+            {curve.open
+              ? compact(curve.mined) + " of " + compact(curve.cap) + " $" + token.symbol + " mined from the curve, which moves the price like a buy"
+              : compact(curve.mined) + " of " + compact(curve.cap) + " $" + token.symbol + " mined — the curve cap is spent, so blocks pay nothing until graduation"}
+          </p>
+        </>
+      ) : (
+        <>
+          <div className="reserve-row">
+            <span><Pickaxe size={13} /> unmined reserve</span>
+            <strong>{reservePercent}%</strong>
+          </div>
+          <div className="progress" aria-hidden="true"><i style={{ width: reservePercent + "%" }} /></div>
+        </>
+      )}
       <div className="card-foot">
         <span><Gauge size={13} /> {compact(token.networkPower)} power</span>
+        <span className={"badge " + (onCurve ? "badge-curve" : "badge-reserve")}>
+          <i aria-hidden="true" /> {onCurve ? "Curve emission" : "Reserve emission"}
+        </span>
         <span className="card-cta" aria-hidden="true">Mine <ChevronRight size={14} /></span>
       </div>
     </a>
@@ -284,17 +337,38 @@ function TokenCard({ token }: { token: TokenSummary }) {
 
 export function SelectedMine({
   token,
+  mineInfo,
   now,
   canSwitch,
   onSwitch,
 }: {
   token: TokenSummary;
+  /**
+   * The live mine info payload for this mine once it has landed. It is the authoritative source for
+   * the crew power on the mine and the only place the curve runway is estimated, so the panels below
+   * take both from it rather than from the token list's cached columns.
+   */
+  mineInfo: MineInfo | null;
   now: number;
   canSwitch: boolean;
   onSwitch(): void;
 }) {
   const [copied, setCopied] = useState(false);
   const reservePercent = token.reserveTotal > 0 ? (token.reserveRemaining / token.reserveTotal) * 100 : 0;
+  /** Pre-graduation the curve's own launch cap is the budget paying this mine's blocks. */
+  const curve = token.curveMining;
+  const onCurve = curve.onCurve;
+  const hasCurveBudget = onCurve && curve.cap > 0;
+  const networkPower = resolveNetworkPower(token, mineInfo);
+  /** Only mine info estimates the runway, and only for the mine it was fetched for. */
+  const curveDaysRemaining = mineInfo && mineInfo.mint === token.mint ? mineInfo.curveMiningDaysRemaining : null;
+  /** A curve-phase mine has no next reduction: its rate is flat until the cap or graduation ends it. */
+  const emission = describeEmissionWindow({
+    curve,
+    daysRemaining: curveDaysRemaining,
+    epochEndsAt: token.nextEpochAt,
+    now,
+  });
   function copyMint() {
     navigator.clipboard.writeText(token.mint).then(() => {
       setCopied(true);
@@ -305,7 +379,12 @@ export function SelectedMine({
     <section className="selected-mine page-shell" id="mines">
       <div className="selected-heading">
         <div>
-          <span className="mono-label">SELECTED MINE // ${token.symbol}</span>
+          <div className="selected-flags">
+            <span className="mono-label">SELECTED MINE // ${token.symbol}</span>
+            <span className={"badge " + (onCurve ? "badge-curve" : "badge-reserve")}>
+              <i aria-hidden="true" /> {onCurve ? "Curve emission" : "Reserve emission"}
+            </span>
+          </div>
           <h1 className="selected-title">{token.name}</h1>
         </div>
         <div className="selected-heading-actions">
@@ -325,13 +404,64 @@ export function SelectedMine({
       </div>
       <div className="selected-grid">
         <div className="reserve-panel">
-          <div className="reserve-number"><span>UNMINED SUPPLY</span><strong>{reservePercent.toFixed(1)}%</strong><small>{compact(token.reserveRemaining)} ${token.symbol} remain</small></div>
+          <div className="reserve-number">
+            <span>{hasCurveBudget ? "CURVE CAP REMAINING" : "UNMINED SUPPLY"}</span>
+            <strong>{reservePercent.toFixed(1)}%</strong>
+            <small>
+              {compact(token.reserveRemaining)} ${token.symbol} {hasCurveBudget ? "of the launch cap left" : "remain"}
+            </small>
+          </div>
           <div className="shaft" aria-hidden="true"><i style={{ height: reservePercent + "%" }}><Pickaxe size={28} /></i></div>
         </div>
-        <div className="metric-panel"><Gauge /><span>Network power</span><strong>{compact(token.networkPower)}</strong><small>total crew power on this mine</small></div>
-        <div className="metric-panel"><Clock3 /><span>Next reduction</span><strong>{countdown(token.nextEpochAt, now)}</strong><small>block reward steps down each epoch</small></div>
+        <div className="metric-panel">
+          <Gauge />
+          <span>Network power</span>
+          <strong>{networkPower === null ? "—" : compact(networkPower)}</strong>
+          <small>
+            {networkPower === null
+              ? "not reported yet — opening the mine's own figure"
+              : "total crew power on this mine"}
+          </small>
+        </div>
+        <div className="metric-panel">
+          <Clock3 />
+          <span>{emission.label}</span>
+          <strong className={emission.onCurve ? "is-phrase" : undefined}>{emission.value}</strong>
+          <small>{emission.detail}</small>
+        </div>
         <div className="metric-panel"><Users /><span>Custody</span><strong>NON-CUSTODIAL</strong><small>only the LP is program-controlled</small></div>
       </div>
+      {hasCurveBudget && (
+        <div className="selected-curve">
+          <div className="selected-curve-head">
+            <span className="mono-label">CURVE MINING // PRE-GRADUATION</span>
+            <span>{percent(curve.progress)} of the launch cap mined</span>
+          </div>
+          <div
+            className="tier-progress-bar"
+            role="img"
+            aria-label={"Curve mining " + percent(curve.progress) + " of the launch cap mined"}
+          >
+            <i style={{ width: percent(curve.progress) }} />
+          </div>
+          <div className="selected-curve-stats">
+            <div><span>Mined</span><strong>{compact(curve.mined)} <small>${token.symbol}</small></strong></div>
+            <div><span>Launch cap</span><strong>{compact(curve.cap)} <small>${token.symbol}</small></strong></div>
+            <div><span>Cap left</span><strong>{compact(curve.remaining)} <small>${token.symbol}</small></strong></div>
+            <div><span>Block reward</span><strong>{compact(curve.blockReward)} <small>${token.symbol}</small></strong></div>
+            <div>
+              <span>Sell capacity</span>
+              <strong>{solAmount(token.sellCapacity.sol)} <small>SOL of buyers' money</small></strong>
+            </div>
+          </div>
+          <p>
+            Mining is paid out of the curve's own token inventory, not the Mining Reserve, so every
+            block moves the price the same way a buy does. Mining adds no SOL: before graduation a
+            seller can only take out what buyers have put into the curve, which is the sell capacity
+            above.
+          </p>
+        </div>
+      )}
     </section>
   );
 }

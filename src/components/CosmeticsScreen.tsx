@@ -126,11 +126,6 @@ export function CosmeticsScreen({ signedIn, previewTier = 3 }: CosmeticsScreenPr
         </div>
       </div>
 
-      <p className="cosmetics-rule">
-        Cosmetics are visual only. They never change Mining Power, ORE or discovery odds, and nothing
-        here can be bought with money.
-      </p>
-
       {!signedIn && <p className="board-empty">Sign in to unlock and equip your cosmetics.</p>}
       {signedIn && loading && !view && (
         <div className="cosmetics-loading" aria-busy="true">

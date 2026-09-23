@@ -62,7 +62,9 @@ test("the leaderboards page renders its tables without a wallet", async ({ page 
   await expect(page.getByText("Leaderboards are unavailable right now.")).toHaveCount(0);
 
   const head = page.locator(".leaderboard-head");
-  await expect(head).toContainText("Wallet");
+  // The column is headed "Miner" rather than "Wallet": the rows show the player's username
+  // (falling back to a shortened address) instead of the raw wallet, see LeaderboardsScreen.
+  await expect(head).toContainText("Miner");
   await expect(head).toContainText("Score");
 
   await page.getByRole("button", { name: "Mines" }).click();

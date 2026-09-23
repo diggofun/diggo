@@ -11,7 +11,9 @@ import { useEffect, useState } from "react";
 import { Trophy } from "lucide-react";
 import type { TokenSummary } from "../../shared/types";
 import { getLeaderboards, type LeaderboardsView, type RankedEntry } from "../api";
-import { compact, shortAddress } from "../format";
+import { compact } from "../format";
+import { describeMineStatus } from "../mineView";
+import { displayName } from "../username";
 import { TokenOrb } from "./TokenOrb";
 
 export interface LeaderboardsScreenProps {
@@ -98,7 +100,7 @@ export function LeaderboardsScreen({ tokens, onSelectMine }: LeaderboardsScreenP
       <div className="leaderboard-table">
         <div className="leaderboard-row leaderboard-head">
           <span>#</span>
-          <span>{tab === "mines" ? "Mine" : "Wallet"}</span>
+          <span>{tab === "mines" ? "Mine" : "Miner"}</span>
           <span>{tab === "mines" ? "Network power" : "Score"}</span>
           <span>{tab === "mines" ? "Status" : "Detail"}</span>
         </div>
@@ -111,7 +113,7 @@ export function LeaderboardsScreen({ tokens, onSelectMine }: LeaderboardsScreenP
                 <TokenOrb symbol={mine.symbol} imageUrl={mine.imageUrl} /> {mineSymbol(mine.symbol)}
               </span>
               <strong>{compact(mine.networkPower)}</strong>
-              <em>{mine.status.replace("_", " ")}</em>
+              <em>{describeMineStatus(mine.status).badge}</em>
             </button>
           ))}
 
@@ -119,7 +121,7 @@ export function LeaderboardsScreen({ tokens, onSelectMine }: LeaderboardsScreenP
           entries.map((entry) => (
             <div className="leaderboard-row" key={tab + "-" + entry.wallet}>
               <b>{entry.rank}</b>
-              <span>{shortAddress(entry.wallet)}</span>
+              <span>{displayName(entry.wallet, entry.username)}</span>
               <strong>{valueFor(tab, entry)}</strong>
               <em>{detailFor(tab, entry)}</em>
             </div>

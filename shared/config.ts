@@ -431,6 +431,39 @@ export interface DiggoConfig {
   discovery: DiscoveryConfig;
   rarity: RarityConfig;
   risk: RiskConfig;
+  /** Curve-phase mining and the windows the indexed 24h metrics are measured over. */
+  curve: CurveMiningConfig;
+}
+
+/**
+ * Curve-phase mining: mining works from the launch block, and before graduation its block
+ * rewards are paid out of the market's own curve token inventory instead of the mine's
+ * Mining Reserve (see shared/curve.ts).
+ *
+ * The share and the runway are per-launch parameters — a launcher picks them for each mine —
+ * so these are the defaults a launch that does not pick gets, plus the bounds the program
+ * enforces. They mirror the program's own constants, and shared/curve.test.ts pins that they
+ * have not drifted, because a default the program would reject is a launch that cannot land.
+ */
+export interface CurveMiningConfig {
+  /** Default share of a curve's initial token inventory that pre-graduation mining may emit. */
+  defaultMiningBps: number;
+  /** Hard ceiling on that share; the program validates the same bound at launch. */
+  maxMiningBps: number;
+  /** Default runway, in whole days, over which the curve budget is spread. */
+  defaultRunwayDays: number;
+  /** Longest runway a launch may ask for. */
+  maxRunwayDays: number;
+  /**
+   * How old a price observation must be before it may back a reported 24h change. Because
+   * the sampler runs every few minutes rather than exactly on the hour, this is a whole day
+   * minus an hour of slack rather than a whole day exactly: a baseline that is only 23 hours
+   * old still describes real 24h-scale movement, and refusing it would report nothing at all
+   * on a token whose history is sampled on a schedule.
+   */
+  changeBaselineSeconds: number;
+  /** The window the indexed 24h volume and trade count are measured over. */
+  volumeWindowSeconds: number;
 }
 
 export const DIGGO_CONFIG_DEFAULTS: DiggoConfig = {
@@ -690,6 +723,17 @@ export const DIGGO_CONFIG_DEFAULTS: DiggoConfig = {
       abuseFlagsForZeroTrust: 3,
       solBalanceIsNotAnInput: true,
     },
+  },
+  // Mining is live from the launch block, so a mine already pays block rewards while its
+  // market is still on the curve. The share is small on purpose: the curve has to stay a
+  // curve, and graduation still moves whatever inventory mining left behind.
+  curve: {
+    defaultMiningBps: 500,
+    maxMiningBps: 1_000,
+    defaultRunwayDays: 30,
+    maxRunwayDays: 3_650,
+    changeBaselineSeconds: 82_800,
+    volumeWindowSeconds: 86_400,
   },
 };
 

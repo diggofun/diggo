@@ -10,11 +10,13 @@
 import { address } from "@solana/kit";
 import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
-import { buildAdvanceMineInstruction } from "../../shared/program";
+import { buildAdvanceMineInstruction, deriveMarketPdaSync } from "../../shared/program";
 import {
   MINE_ADVANCE_CALLS_PER_TICK,
   MINE_ADVANCE_SEGMENTS_PER_CALL,
+  isSyncBehindError,
   keeperAdvanceMine,
+  mineLedgerCanMove,
   mineSegmentsBehind,
   type KeeperEnv,
   type MineAdvanceCursor,
@@ -70,6 +72,14 @@ describe("mineSegmentsBehind", () => {
     expect(mineSegmentsBehind({ nextBlockAt: 0, blockInterval: INTERVAL }, NOW)).toBe(0);
     expect(mineSegmentsBehind({ nextBlockAt: NOW - 10 * INTERVAL, blockInterval: 0 }, NOW)).toBe(0);
     expect(mineSegmentsBehind({ nextBlockAt: NOW - 10 * INTERVAL, blockInterval: -1 }, NOW)).toBe(0);
+  });
+
+  it("reports nothing for a ledger the program will not move, however far behind it looks", () => {
+    // The zero-power mine: the program answers CaughtUp and leaves the cursor exactly where it is,
+    // so a gap measured against `now` is a gap no advance_mine call can ever close.
+    expect(
+      mineSegmentsBehind({ nextBlockAt: NOW - 80_000 * INTERVAL, blockInterval: INTERVAL, emittable: false }, NOW),
+    ).toBe(0);
   });
 });
 
@@ -139,17 +149,157 @@ describe("keeperAdvanceMine", () => {
 
     expect(report).toMatchObject({ behindSegments: 0, signatures: [], caughtUp: true });
   });
+
+  it("reports a zero-power mine as caught up instead of paying to walk it for ever", async () => {
+    // The regression this pins: the program short-circuits a mine with no power to divide a block
+    // reward by (sync_is_complete) and answers CaughtUp without moving the cursor. The keeper read
+    // the untouched cursor as a backlog of tens of thousands of segments, spent its whole call
+    // budget on transactions that changed nothing, reported `caughtUp: false` every tick - and
+    // graduation waits on that flag, so the market never formed its pool.
+    const behind = 80_000;
+    let calls = 0;
+    const advancer: MineAdvancer = {
+      async readCursor(): Promise<MineAdvanceCursor> {
+        return { nextBlockAt: NOW - behind * INTERVAL, blockInterval: INTERVAL, emittable: false };
+      },
+      async advance(): Promise<string> {
+        calls += 1;
+        return "advance-" + calls;
+      },
+    };
+
+    const report = await keeperAdvanceMine(env(), MINT, { now: NOW, advancer });
+
+    expect(report).toMatchObject({ mint: MINT, behindSegments: 0, signatures: [], caughtUp: true });
+    expect(calls).toBe(0);
+  });
 });
 
 describe("buildAdvanceMineInstruction", () => {
-  it("names the mine and nothing else, as the program's AdvanceMine accounts declare", () => {
+  it("names the mine and its market, as the program's AdvanceMine accounts declare", () => {
     const mine = address(key(7));
-    const instruction = buildAdvanceMineInstruction({ programAddress: address(PROGRAM_ID), mine });
+    const mint = address(key(9));
+    const instruction = buildAdvanceMineInstruction({
+      programAddress: address(PROGRAM_ID),
+      mine,
+      mint,
+    });
 
     expect(instruction.programAddress).toBe(PROGRAM_ID);
-    expect(instruction.accounts).toHaveLength(1);
+    // Two writable accounts: the mine, and the market the walk reads to decide which side of
+    // the mine pays the blocks it is about to credit.
+    expect(instruction.accounts).toHaveLength(2);
     expect(instruction.accounts?.[0]).toMatchObject({ address: mine, role: 1 }); // WRITABLE
+    expect(instruction.accounts?.[1]).toMatchObject({
+      address: deriveMarketPdaSync(address(PROGRAM_ID), mint),
+      role: 1,
+    });
     // The advance_mine discriminator, and no arguments: the instruction takes none.
     expect(Array.from(instruction.data as Uint8Array)).toEqual([219, 100, 97, 253, 117, 231, 58, 7]);
+  });
+
+  it("refuses to build a call it cannot name a market for", () => {
+    // The program requires the market, so a builder that silently dropped it would produce a
+    // transaction that always fails. Better to say so here.
+    expect(() =>
+      buildAdvanceMineInstruction({ programAddress: address(PROGRAM_ID), mine: address(key(7)) }),
+    ).toThrow(/market/);
+  });
+});
+
+describe("mineLedgerCanMove", () => {
+  function mine(
+    overrides: {
+      status?: string;
+      remainingReserve?: bigint;
+      totalPower?: bigint;
+      graduated?: boolean;
+      nextBlockAt?: bigint;
+      curvePhaseEndsAt?: bigint;
+    } = {},
+  ) {
+    return {
+      status: overrides.status ?? "MiningActive",
+      remainingReserve: overrides.remainingReserve ?? 1_000_000n,
+      totalPower: overrides.totalPower ?? 1_000n,
+      graduated: overrides.graduated ?? false,
+      nextBlockAt: overrides.nextBlockAt ?? 0n,
+      curvePhaseEndsAt: overrides.curvePhaseEndsAt ?? 0n,
+    } as unknown as Parameters<typeof mineLedgerCanMove>[0];
+  }
+  function market(graduated: boolean) {
+    return { graduated } as unknown as Parameters<typeof mineLedgerCanMove>[1];
+  }
+
+  it("keeps advancing a mine that is still on its curve, however little its budget can pay", () => {
+    // Pre-graduation the cursor always has work to do: a spent curve budget pays nothing for the
+    // blocks that land while it is spent, but walking past them is exactly what stops that idle
+    // stretch from being paid out of the Mining Reserve once the market graduates.
+    expect(mineLedgerCanMove(mine(), market(false))).toBe(true);
+    expect(mineLedgerCanMove(mine({ remainingReserve: 0n }), market(false))).toBe(true);
+  });
+
+  it("stops once the reserve is the source and is empty, or the program is finished", () => {
+    expect(mineLedgerCanMove(mine(), market(true))).toBe(true);
+    expect(mineLedgerCanMove(mine({ remainingReserve: 0n }), market(true))).toBe(false);
+    expect(mineLedgerCanMove(mine({ status: "FullyMined" }), market(true))).toBe(false);
+    expect(mineLedgerCanMove(mine({ status: "FullyMined" }), market(false))).toBe(false);
+  });
+
+  it("stops on a mine with no power, which the program never moves", () => {
+    // Mirrors the program's own opening short-circuit: total_power == 0 means no block reward can
+    // be divided, so advance_mine answers CaughtUp and the cursor stays where it is. Reading that
+    // as "behind" is an endless loop, and graduation is what it stalls.
+    expect(mineLedgerCanMove(mine({ totalPower: 0n }), market(false))).toBe(false);
+    expect(mineLedgerCanMove(mine({ totalPower: 0n }), market(true))).toBe(false);
+    expect(mineLedgerCanMove(mine({ totalPower: 0n }), null)).toBe(false);
+  });
+
+  it("keeps advancing a graduated mine that still owes its graduation cursor's stretch", () => {
+    // A graduated mine with an empty reserve is not finished while the walk has not consumed the
+    // blocks that landed before its graduation cursor: those are curve-phase for good, so they
+    // must be walked past rather than left for the reserve to pay.
+    const owing = mine({ graduated: true, remainingReserve: 0n, nextBlockAt: 300n, curvePhaseEndsAt: 900n });
+    expect(mineLedgerCanMove(owing, market(true))).toBe(true);
+    expect(
+      mineLedgerCanMove(
+        mine({ graduated: true, remainingReserve: 0n, nextBlockAt: 900n, curvePhaseEndsAt: 900n }),
+        market(true),
+      ),
+    ).toBe(false);
+  });
+
+  it("treats an unreadable market as ask again, so a real backlog still fails loudly", () => {
+    expect(mineLedgerCanMove(mine(), null)).toBe(true);
+    expect(mineLedgerCanMove(mine({ remainingReserve: 0n }), null)).toBe(true);
+  });
+});
+
+describe("isSyncBehindError", () => {
+  it("matches the anchor error name the program logs", () => {
+    const error = new Error("Transaction simulation failed");
+    (error as { logs?: string[] }).logs = [
+      "Program log: AnchorError caused by account: mine. Error Code: SyncBehind. Error Number: 6044. Error Message: This mine is behind.",
+    ];
+    expect(isSyncBehindError(error)).toBe(true);
+  });
+
+  it("matches the numeric code, in the shape a preflight failure arrives in", () => {
+    expect(
+      isSyncBehindError(
+        new Error("custom program error: 0x179c"),
+      ),
+    ).toBe(true);
+    // And through a cause chain, which is where @solana/kit keeps the simulation logs.
+    expect(
+      isSyncBehindError(new Error("failed to send", { cause: new Error("Error Number: 6044") })),
+    ).toBe(true);
+  });
+
+  it("does not match any other refusal", () => {
+    expect(isSyncBehindError(new Error("Keeper transaction confirmation timed out"))).toBe(false);
+    expect(isSyncBehindError(new Error("custom program error: 0x179d"))).toBe(false);
+    expect(isSyncBehindError(new Error("Error Number: 6012"))).toBe(false);
+    expect(isSyncBehindError(undefined)).toBe(false);
   });
 });

@@ -82,7 +82,8 @@ export type GatedAction =
   | "switch_mine"
   | "crew_upgrade"
   | "auth"
-  | "bootstrap";
+  | "bootstrap"
+  | "profile_update";
 
 export const GATED_ACTIONS: readonly GatedAction[] = [
   "activate",
@@ -93,6 +94,7 @@ export const GATED_ACTIONS: readonly GatedAction[] = [
   "crew_upgrade",
   "auth",
   "bootstrap",
+  "profile_update",
 ];
 
 export function isGatedAction(value: unknown): value is GatedAction {

@@ -37,6 +37,7 @@ import {
 } from "./mining";
 import { getNotifications, markNotificationsRead, runSocialCron } from "./notifications";
 import { AccountCreationDenied, playerProfile } from "./player";
+import { publicProfile, setUsername } from "./profile";
 import { PlayerLockTimeoutError, withPlayerLock } from "./playerLock";
 import {
   deletePushSubscription,
@@ -123,6 +124,14 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
     }
     if (request.method === "GET" && pathname === "/api/auth/session") {
       return walletSession(request, env);
+    }
+    // Public usernames (worker/profile.ts): a public read of one name, and the signed, gated,
+    // cooldown-bound write that sets it. The write takes the per-wallet lock like every other
+    // player mutation, so a double-submit cannot land two changes at once.
+    const profileMatch = pathname.match(/^\/api\/profile\/([^/]+)$/);
+    if (request.method === "GET" && profileMatch) return publicProfile(request, env, profileMatch[1]);
+    if (request.method === "POST" && pathname === "/api/profile/username") {
+      return locked(request, env, () => setUsername(request, env));
     }
     if (request.method === "POST" && pathname === "/api/media") return uploadMedia(request, env);
     if (request.method === "POST" && pathname === "/api/tokens/register") {
@@ -299,13 +308,20 @@ export default {
     env: RuntimeEnv,
     ctx: ExecutionContext,
   ): Promise<void> {
+    // The social sweep goes first and inside its own guard. It is the only place that generates
+    // notifications for players who are not in the app (spec 75), so it must not be skipped because
+    // an unrelated cron step failed, and a failure in it must not stop reserve reconciliation or the
+    // risk sweep from running. It is reported instead of rethrown, for the same reason.
+    try {
+      const social = await runSocialCron(env);
+      console.log(JSON.stringify({ event: "social.cron", ...social }));
+    } catch (error) {
+      console.error(JSON.stringify({ event: "social.cron_failed", error: String(error) }));
+      ctx.waitUntil(reportError(env, error, { trigger: "scheduled", step: "social" }));
+    }
     try {
       const queued = await queueEpochSync(env);
       console.log(JSON.stringify({ event: "epoch.cron", queued }));
-      // Social sweep: achievements, cosmetic unlocks, seasonal point high-water marks and the
-      // notifications due for recently active accounts (spec 68, 75).
-      const social = await runSocialCron(env);
-      console.log(JSON.stringify({ event: "social.cron", ...social }));
       const risk = await riskCron(env);
       console.log(JSON.stringify({ event: "risk.cron", ...risk }));
       // Reserve reconciliation (spec 57, 78): compare each mine's D1 accounting against the

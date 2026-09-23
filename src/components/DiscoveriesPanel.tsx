@@ -8,11 +8,10 @@
  *
  * Claims need their own wallet-signed, single-use challenge, exactly like reward claims.
  */
-import { useEffect, useRef } from "react";
 import { Compass, ExternalLink, Gem, Pickaxe, Repeat2, Sparkles, TrendingUp } from "lucide-react";
 import type { DiscoveryOpportunity, DiscoveryRecord, TokenSummary } from "../../shared/types";
 import { tokenAmount } from "../format";
-import { discoveryRarityOf, playSound, useReducedMotion } from "../sound";
+import { useReducedMotion } from "../motion";
 import { requestWalletMenu } from "../wallet";
 import { DiscoveryArt } from "./MineScene";
 import { EmptyState } from "./StatusViews";
@@ -43,18 +42,6 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
   const { signedIn, discoveries, opportunity, tokens, loading, rolling, claimingId, error, notice } = props;
   const claimable = discoveries.filter((discovery) => discovery.claimable);
   const reducedMotion = useReducedMotion();
-  const newest = discoveries[0]?.id ?? "";
-
-  // The reveal cue belongs to a discovery the server has just produced, not to a re-render.
-  const lastDiscovery = useRef(newest);
-  useEffect(() => {
-    if (newest && newest !== lastDiscovery.current) {
-      playSound("discovery", {
-        rarity: discoveryRarityOf(discoveries.find((entry) => entry.id === newest)?.rarity),
-      });
-    }
-    lastDiscovery.current = newest;
-  }, [newest, discoveries]);
 
   const spent = opportunity !== null && opportunity.status !== "PENDING" && opportunity.status !== "ELIGIBLE";
   const rollLabel = rolling ? "Digging" : spent ? "Window spent" : opportunity ? "Roll this window" : "Ask for an opportunity";

@@ -3,6 +3,7 @@
  * artwork upload/delivery and trade recording. On-chain reads via ./chain stay authoritative;
  * D1 and KV are only ever a cache of them.
  */
+import { isCurveMiningDisabled } from "../shared/curve";
 import type { TokenStatus, TokenSummary } from "../shared/types";
 import { sessionWallet } from "./auth";
 import { getChainRpc, readTokenFromChain, syncTokenToD1 } from "./chain";
@@ -30,9 +31,24 @@ interface TokenRow {
   next_epoch_at: number;
   created_at: number;
   decimals: number;
+  /** observed_at of the price sample change_24h was measured against; 0 means unknown. */
+  change_24h_at: number;
+  volume_24h_usd: number;
+  trades_24h: number;
+  venue: string;
+  curve_mining_open: number;
+  curve_mining_cap: number;
+  curve_mining_mined: number;
+  curve_mining_unpaid: number;
+  curve_mining_block_reward: number;
+  curve_sell_capacity_sol: number;
+  curve_sell_capacity_tokens: number | null;
 }
 
-export const TOKEN_CACHE_KEY = "tokens:v2:1000";
+// Bumped with the curve-mining and 24h-metric fields: a payload cached by an older revision
+// is a TokenSummary missing them, and serving it would hand a client undefined where the API
+// promises a number.
+export const TOKEN_CACHE_KEY = "tokens:v3:1000";
 const MAX_BOOTSTRAP_TOKENS = 1_000;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const SUPABASE_MEDIA_BUCKET = "token-media";
@@ -52,7 +68,39 @@ function mapToken(row: TokenRow): TokenSummary {
     status: row.status,
     priceSol: row.price_sol,
     priceUsd: row.price_usd,
-    change24h: row.change_24h,
+    // change_24h_at is the record of whether the percentage was ever measured. Without it
+    // the column default of 0 would be served as a real, flat 24h change.
+    change24h: row.change_24h_at > 0 ? row.change_24h : null,
+    volume24hUsd: row.volume_24h_usd,
+    trades24h: row.trades_24h,
+    curveMining: {
+      open: row.curve_mining_open === 1,
+      // A market on its curve that never had a budget at all — launched with a zero share, or
+      // written before the ledger existed, where a migration can only default the cap to zero.
+      // Read off the same rule the mine-info and chain-sync payloads use, so the list a client
+      // caches cannot describe a legacy market as a budget that is 0% spent.
+      disabled: isCurveMiningDisabled({
+        graduated: row.venue === "pool",
+        cap: BigInt(row.curve_mining_cap),
+        mined: BigInt(row.curve_mining_mined),
+        unpaid: BigInt(row.curve_mining_unpaid),
+        blockReward: BigInt(row.curve_mining_block_reward),
+      }),
+      onCurve: row.venue !== "pool",
+      cap: row.curve_mining_cap,
+      mined: row.curve_mining_mined,
+      remaining: Math.max(0, row.curve_mining_cap - row.curve_mining_mined),
+      progress:
+        row.curve_mining_cap > 0
+          ? Math.min(1, Math.max(0, row.curve_mining_mined / row.curve_mining_cap))
+          : 0,
+      blockReward: row.curve_mining_block_reward,
+      unpaid: row.curve_mining_unpaid,
+    },
+    sellCapacity: {
+      sol: row.curve_sell_capacity_sol,
+      tokens: row.curve_sell_capacity_tokens,
+    },
     marketCapUsd: row.market_cap_usd,
     reserveRemaining: row.reserve_remaining,
     reserveTotal: row.reserve_total,

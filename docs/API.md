@@ -22,6 +22,8 @@
 | `GET` | `/api/player/:wallet/rewards` | authenticated (self only) reward-claim history |
 | `POST` | `/api/crew/upgrade` | authenticated, ORE-only Crew component upgrade |
 | `GET` | `/api/player/:wallet` | authenticated (self only) Crew/ORE/streak/activation profile |
+| `GET` | `/api/profile/:wallet` | public: one wallet's public username, or `null` when it never set one |
+| `POST` | `/api/profile/username` | authenticated; set or change the public username (3-20 characters, case-insensitively unique, one change per 7 days) |
 | `POST` | `/api/discovery/opportunity` | authenticated; lazily authors this window's single-use discovery opportunity (idempotent inside the window) |
 | `POST` | `/api/discovery/roll` | authenticated; consumes the window's opportunity and rolls the server-authoritative discovery. 409 once the window is spent |
 | `POST` | `/api/discovery/claim/challenge` | create a single-use, wallet-signed discovery-claim message |
@@ -29,7 +31,7 @@
 | `GET` | `/api/discovery/commitments` | public, unauthenticated commit-reveal RNG schedule: the current epoch, its commitment and its window |
 | `GET` | `/api/discovery/commitments/:epoch` | one epoch's commitment, plus its revealed seed once that epoch has ended |
 | `GET` | `/api/player/:wallet/discoveries` | authenticated (self only) discovery history plus the live opportunity |
-| `GET` | `/api/notifications` | authenticated; the signed-in wallet's notifications and unread count |
+| `GET` | `/api/notifications` | authenticated; generates anything due for the signed-in wallet, then returns its notifications and unread count |
 | `POST` | `/api/notifications/read` | authenticated; mark one notification, or all of them, read |
 | `GET` | `/api/push/key` | the VAPID application server key a browser needs before it can subscribe (readable before sign-in) |
 | `POST` | `/api/push/subscription` | authenticated; register this device for the signed-in wallet |
@@ -107,6 +109,72 @@ deciding one can only lift restrictions, never add them. **Web push and Telegram
 channels for notifications a player can already read through `/api/notifications`; both are opt-in,
 both are optional to the deployment, and a push subscription is always scoped to the signed-in
 wallet.
+
+## Notifications
+
+Notifications are **server-authored**. `shared/social.ts` (`computeNotifications`) is the only
+place that decides one exists — a mine expiring within three hours, a mine that has expired, a
+streak deadline inside twelve hours, a rare discovery, a seven-day streak milestone, a reward
+reduction coming, a mine nearly out of reserve — and `worker/notifications.ts` is the only place
+that stores it. The bell in the header renders what `GET /api/notifications` returns and marks
+rows read; it cannot invent a row, and neither can anything else in `src/`.
+
+Generation runs on two paths, both idempotent:
+
+- the **scheduled trigger** (`*/5 * * * *`, `worker/index.ts`) calls `runSocialCron`, which
+  sweeps every `NORMAL` account that has a notification due and not yet stored. This is the path
+  that reaches players who are not in the app at all, and it runs first in the handler inside its
+  own guard, so a failure in an unrelated cron step cannot skip it.
+- `GET /api/notifications` generates for the signed-in wallet before it reads, so opening the bell
+  between two cron ticks still shows what is due.
+
+Both write through `INSERT OR IGNORE` against `notifications.dedupe_key`, which is `UNIQUE`, so
+an event is never stored twice however often either path runs. The stored key is namespaced by
+wallet (`<wallet>:<kind>:<event>`) because the underlying event values are not unique across
+players — two wallets can be in the same mine, and two wallets can activate in the same second — so
+a bare key would let whichever account was swept first claim the row and deny the same notification
+to everyone else.
+
+The sweep is bounded to 200 accounts per tick, to stay inside the Worker's subrequest budget, and it
+selects only accounts that still owe a notification, most urgent first. A backlog therefore drains
+over consecutive ticks instead of starving the accounts behind it. `UNDER_REVIEW`, `HELD` and
+`BLOCKED` accounts are never swept: a restricted account is not nudged to chase rewards.
+
+Delivery is separate from generation and never invents an alert. In-app, the bell polls
+`GET /api/notifications` every 60 seconds and again when the window regains focus or the page
+becomes visible, shows the unread count, and marks rows read through
+`POST /api/notifications/read` — one id, a list of ids, or everything unread when the body omits
+`ids`. Web Push and Telegram are the opt-in channels for those same stored rows; both are
+described above, both are off by default, and `push_deliveries` claims each
+(notification, channel, target) with `INSERT OR IGNORE` before the network call, so delivery is at
+most once per target.
+
+### Exercising notifications locally
+
+`wrangler dev` does not fire cron triggers on a clock, and Wrangler 4 exposes the handler without
+any extra flag. With the local pair running (`npm run dev:local`), invoke one tick by hand:
+
+```sh
+curl http://localhost:8787/cdn-cgi/handler/scheduled
+```
+
+That runs the same `scheduled` handler production runs, notification sweep included, against local
+D1. To see a notification appear end to end, give a wallet a mine that is about to close, take one
+tick, and read what was stored:
+
+```sh
+npx wrangler d1 execute diggo-db --local --command \
+  "UPDATE players SET activation_expires_at = unixepoch() + 7200, last_activation_at = unixepoch() - 3600, streak = 5 WHERE wallet = '<wallet>'"
+curl http://localhost:8787/cdn-cgi/handler/scheduled
+npx wrangler d1 execute diggo-db --local --command \
+  "SELECT kind, dedupe_key FROM notifications WHERE wallet = '<wallet>'"
+```
+
+`GET /api/notifications` with that wallet's session then returns the same row, and a second tick
+stores nothing further. The full handler also runs the epoch, risk, reconciliation and
+RNG-commitment steps, so a local environment without on-chain configuration logs failures from
+those; the notification sweep is guarded and still runs. `npm test` covers the generation and
+dedupe rules with no dev server at all — see `worker/test/notifications-cron.test.ts`.
 
 ## Price oracle
 

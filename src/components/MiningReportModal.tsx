@@ -7,11 +7,11 @@
  * belongs to it. The UI renders the event; it never picks a rarity, a token or an amount, and
  * there is no client-side randomness anywhere in this file (spec 55).
  */
-import { useEffect, useRef } from "react";
 import { Coins, Compass, Hammer, Repeat2, Sparkles, X } from "lucide-react";
 import type { DiscoveryVisualEvent, MiningReport } from "../../shared/types";
 import { duration, oreAmount, tokenAmount } from "../format";
-import { discoveryRarityOf, playSound, useReducedMotion } from "../sound";
+import { useReducedMotion } from "../motion";
+import { displayName, useViewerUsername } from "../username";
 import { CountUp } from "./CountUp";
 import { DiscoveryArt, GameArt } from "./MineScene";
 import { useDialog } from "./useDialog";
@@ -54,23 +54,10 @@ export function MiningReportModal({
   const mineLabel = mineSymbol ? dollar(mineSymbol) : "the mine";
   const dialogRef = useDialog<HTMLElement>(onClose);
   const reducedMotion = useReducedMotion();
-
-  // The discovery cue announces what the server rolled; the collect cue marks the player's own
-  // confirmation. Neither reads anything back into the report.
-  const discoveryId = report.discovery?.id ?? "";
-  const announced = useRef("");
-  useEffect(() => {
-    if (discoveryId && discoveryId !== announced.current) {
-      announced.current = discoveryId;
-      playSound("discovery", { rarity: discoveryRarityOf(report.discovery?.rarity) });
-    }
-  }, [discoveryId, report.discovery]);
-
-  const wasCollected = useRef(collected);
-  useEffect(() => {
-    if (collected && !wasCollected.current) playSound("collect");
-    wasCollected.current = collected;
-  }, [collected]);
+  // Who the report belongs to: the public username when one is set, the shortened wallet otherwise
+  // (src/username.ts). Unknown until the session answers, and the greeting simply omits the name.
+  const viewer = useViewerUsername();
+  const viewerName = viewer.wallet === null ? null : displayName(viewer.wallet, viewer.username);
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
@@ -86,7 +73,17 @@ export function MiningReportModal({
           <X size={20} />
         </button>
         <div className="eyebrow">
-          <Sparkles size={14} /> WELCOME BACK
+          <Sparkles size={14} />
+          <span>
+            WELCOME BACK
+            {viewerName !== null && (
+              <>
+                {", "}
+                {/* The eyebrow is uppercased; a player's own name is not. */}
+                <span style={{ textTransform: "none" }}>{viewerName}</span>
+              </>
+            )}
+          </span>
         </div>
         <h2 id="report-title">
           Your crew worked

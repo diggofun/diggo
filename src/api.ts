@@ -29,18 +29,29 @@ import { DEVICE_HEADER, deviceId } from "./device";
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string | null;
+  /** The `retry-after` the Worker sent, in seconds, when it sent one (429 answers). */
+  readonly retryAfterSec: number | null;
 
-  constructor(message: string, status: number, code: string | null = null) {
+  constructor(message: string, status: number, code: string | null = null, retryAfterSec: number | null = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.retryAfterSec = retryAfterSec;
   }
 
   /** True when the risk gate answered 403 VERIFICATION_REQUIRED (spec 52). */
   get verificationRequired(): boolean {
     return this.status === 403 && this.code === "VERIFICATION_REQUIRED";
   }
+}
+
+/** The retry-after a 429 carries, in seconds, or null when the Worker sent none. */
+function retryAfterSeconds(response: Response): number | null {
+  const header = response.headers.get("retry-after");
+  if (header === null) return null;
+  const value = Number(header);
+  return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -56,6 +67,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
       data?.error ?? data?.message ?? "Request failed (" + response.status + ")",
       response.status,
       data?.code ?? null,
+      retryAfterSeconds(response),
     );
   }
   if (data === null) throw new ApiError("Malformed server response", response.status, null);
@@ -235,6 +247,22 @@ export async function getPlayerProfile(wallet: string): Promise<PlayerProfile> {
   return data.player;
 }
 
+/* Public usernames (worker/profile.ts). Reading one is public; setting one needs the session. */
+
+export interface PublicProfile {
+  wallet: string;
+  /** The chosen display name, or null when the player never set one. */
+  username: string | null;
+}
+
+export async function getProfile(wallet: string): Promise<PublicProfile> {
+  return getJson<PublicProfile>("/api/profile/" + encodeURIComponent(wallet));
+}
+
+export async function setUsername(username: string): Promise<{ username: string }> {
+  return postJson<{ username: string }>("/api/profile/username", { username });
+}
+
 /* Reward claims: real token rewards, kept strictly apart from ORE progression (spec 53, 57) */
 
 export type RewardClaimStatus = "ELIGIBLE" | "PENDING" | "CLAIMED" | "HELD" | "EXPIRED";
@@ -383,6 +411,8 @@ export async function verifyChallenge(input: {
 export interface RankedEntry {
   rank: number;
   wallet: string;
+  /** Public username when the player set one; the screen falls back to the shortened wallet. */
+  username?: string | null;
   power: number;
   crewTier: number;
   crewTotalLevel: number;

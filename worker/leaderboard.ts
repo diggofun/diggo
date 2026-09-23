@@ -34,6 +34,8 @@ const RANK_LIMIT = 20;
 export interface LeaderboardRow extends PlayerRow {
   achievement_count?: number;
   seasonal_points?: number;
+  /** Present only on the query shape that joins the usernames table (migrations/0018). */
+  username?: string | null;
 }
 
 const CANDIDATE_COLUMNS =
@@ -41,18 +43,33 @@ const CANDIDATE_COLUMNS =
   " ore_balance, active_mint, risk_state";
 
 /**
- * Candidate rows for the progression boards. Achievement and seasonal columns are joined when the
- * social migration is present; the caller falls back to the base query otherwise.
+ * The same columns, qualified for a query that joins another table carrying a `wallet` column:
+ * an unqualified `wallet` in a join would be ambiguous, and the qualification is derived from the
+ * one column list above so the two shapes cannot drift apart.
  */
-export function leaderboardCandidatesSql(withSocialColumns: boolean): string {
+const JOINED_CANDIDATE_COLUMNS = CANDIDATE_COLUMNS.split(",")
+  .map((column) => "players." + column.trim())
+  .join(", ");
+
+/**
+ * Candidate rows for the progression boards. Achievement and seasonal columns need the social
+ * migration, the display name needs the usernames migration, and the caller falls back to the
+ * shapes a database without one of them can still answer.
+ */
+export function leaderboardCandidatesSql(withSocialColumns: boolean, withUsernames = false): string {
+  const columns = withUsernames ? JOINED_CANDIDATE_COLUMNS : CANDIDATE_COLUMNS;
+  const username = withUsernames ? ", u.username AS username" : "";
+  const from = withUsernames
+    ? " FROM players LEFT JOIN usernames u ON u.wallet = players.wallet WHERE players.risk_state = 'NORMAL'"
+    : " FROM players WHERE risk_state = 'NORMAL'";
   if (!withSocialColumns) {
-    return "SELECT " + CANDIDATE_COLUMNS + " FROM players WHERE risk_state = 'NORMAL'";
+    return "SELECT " + columns + username + from;
   }
   return (
-    "SELECT " + CANDIDATE_COLUMNS + "," +
+    "SELECT " + columns + username + "," +
     " (SELECT COUNT(*) FROM player_achievements a WHERE a.wallet = players.wallet) AS achievement_count," +
     " COALESCE((SELECT s.points FROM seasonal_points s WHERE s.wallet = players.wallet AND s.season_id = ?1), 0) AS seasonal_points" +
-    " FROM players WHERE risk_state = 'NORMAL'"
+    from
   );
 }
 
@@ -81,6 +98,7 @@ export function rowToCandidate(row: LeaderboardRow): LeaderboardCandidate {
     seasonalPoints: Math.max(row.seasonal_points ?? 0, derivedPoints),
     oreBalance: row.ore_balance,
     activeMint: row.active_mint,
+    username: row.username ?? null,
   };
 }
 
@@ -96,14 +114,25 @@ export function rankCandidates(
 }
 
 async function loadCandidates(env: RuntimeEnv, seasonId: string): Promise<LeaderboardCandidate[]> {
-  try {
-    const rows = (await env.DB.prepare(leaderboardCandidatesSql(true)).bind(seasonId).all<LeaderboardRow>()).results;
-    return rows.map(rowToCandidate);
-  } catch {
-    // Social tables are absent (an unmigrated local database): fall back to the base columns.
-    const rows = (await env.DB.prepare(leaderboardCandidatesSql(false)).all<LeaderboardRow>()).results;
-    return rows.map(rowToCandidate);
+  // Each shape needs one more migration than the last: the social tables (0011) for achievements and
+  // seasonal points, the usernames table (0018) for the display name. A database missing one falls
+  // through to the next shape instead of failing the board, which is what an unmigrated local run
+  // looks like.
+  const attempts: { sql: string; bind: readonly string[] }[] = [
+    { sql: leaderboardCandidatesSql(true, true), bind: [seasonId] },
+    { sql: leaderboardCandidatesSql(true, false), bind: [seasonId] },
+    { sql: leaderboardCandidatesSql(false, false), bind: [] },
+  ];
+  let lastError: unknown = null;
+  for (const attempt of attempts) {
+    try {
+      const rows = (await env.DB.prepare(attempt.sql).bind(...attempt.bind).all<LeaderboardRow>()).results;
+      return rows.map(rowToCandidate);
+    } catch (error) {
+      lastError = error;
+    }
   }
+  throw lastError instanceof Error ? lastError : new Error("Leaderboard query failed");
 }
 
 export async function leaderboards(env: RuntimeEnv, ctx: ExecutionContext): Promise<Response> {
@@ -125,6 +154,7 @@ export async function leaderboards(env: RuntimeEnv, ctx: ExecutionContext): Prom
             activeDays: entry.activeDays,
             oreBalance: entry.oreBalance,
             activeMint: entry.activeMint,
+            username: entry.username ?? null,
           }) satisfies LeaderboardEntry,
       );
   const mines = (await loadTokens(env, ctx, 20)).tokens

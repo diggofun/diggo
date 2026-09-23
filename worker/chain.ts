@@ -23,11 +23,28 @@ import {
 // this module, so the two form an import cycle — safe here because neither module calls the other
 // at module scope, only from inside the functions below.
 import { keeperReadVenue, type MarketVenue } from "./keeper";
-import type { TokenStatus, TokenSummary } from "../shared/types";
+import {
+  type CurveMiningSummary,
+  type CurveSellCapacitySummary,
+  type TokenChange24h,
+  type TokenStatus,
+  type TokenSummary,
+} from "../shared/types";
+import {
+  curveMiningProgress,
+  curveMiningRoom,
+  curveMiningStateOf,
+  curveSellCapacity,
+  isCurveMiningDisabled,
+  isCurveMiningOpen,
+} from "../shared/curve";
+import { DIGGO_CONFIG, type DiggoConfig } from "../shared/config";
 import type { RuntimeEnv } from "./env";
 import { getSolUsd, ILLUSTRATIVE_DEVNET_SOL_USD } from "./oracle";
 
 export const DEFAULT_DEVNET_RPC = "https://api.devnet.solana.com";
+
+export const LAMPORTS_PER_SOL = 1_000_000_000;
 
 /**
  * The SOL/USD rate used for the display-only USD columns of a synced token.
@@ -73,6 +90,86 @@ function base64ToBytes(base64: string): Uint8Array {
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
 }
+/** One token's measured 24h window. */
+export interface Token24hMetrics {
+  /** Percent change against the baseline observation, or null when there is none to show. */
+  change24h: TokenChange24h;
+  /** The baseline's observed_at, or 0 when no change is reported. */
+  change24hAt: number;
+  /** Indexed traded volume in the window, in USD. */
+  volume24hUsd: number;
+  /** Indexed trades in the window. */
+  trades24h: number;
+}
+
+/**
+ * The honest 24h change: the live price against an observation at least a day old, or null.
+ *
+ * Both halves have to be there. A percentage with no day-old observation is not a 24h change,
+ * and one with no indexed trade behind it describes a window in which this token's market did
+ * nothing at all, so it answers unknown rather than a fabricated 0%. Null is not zero, and
+ * every client is expected to render it that way.
+ *
+ * Rounded to two decimals because the underlying prices are floats: reporting more digits than
+ * the measurement supports would be a different kind of invented precision.
+ */
+export function change24hOf(input: {
+  priceUsd: number;
+  baselinePriceUsd: number | null;
+  trades24h: number;
+}): number | null {
+  const baseline = input.baselinePriceUsd;
+  if (baseline === null || !(baseline > 0)) return null;
+  if (!(input.trades24h > 0)) return null;
+  if (!(input.priceUsd > 0)) return null;
+  const change = (input.priceUsd / baseline - 1) * 100;
+  if (!Number.isFinite(change)) return null;
+  return Math.round(change * 100) / 100;
+}
+
+/**
+ * Reads one token's 24h window out of what the indexer has already recorded: its own price
+ * observations (token_price_samples, appended by the epoch sync) and its indexed trades.
+ *
+ * The baseline is the newest observation at or before now - changeBaselineSeconds, a whole day
+ * less an hour of slack: the sampler runs on a schedule rather than exactly on the hour, so
+ * demanding a full 24 hours would report nothing at all on a real deployment. Nothing here
+ * fabricates a value: a token with no history reads as unknown.
+ */
+export async function readToken24hMetrics(
+  env: RuntimeEnv,
+  mint: string,
+  priceUsd: number,
+  now: number,
+  config: DiggoConfig = DIGGO_CONFIG,
+): Promise<Token24hMetrics> {
+  const baselineBefore = now - config.curve.changeBaselineSeconds;
+  const windowStart = now - config.curve.volumeWindowSeconds;
+  const [baseline, traded] = await Promise.all([
+    env.DB.prepare(
+      "SELECT price_usd, observed_at FROM token_price_samples" +
+        " WHERE mint = ?1 AND observed_at <= ?2 ORDER BY observed_at DESC LIMIT 1",
+    )
+      .bind(mint, baselineBefore)
+      .first<{ price_usd: number; observed_at: number }>(),
+    env.DB.prepare(
+      "SELECT COALESCE(SUM(amount * price_usd), 0) AS volume_usd, COUNT(*) AS trades" +
+        " FROM trades WHERE mint = ?1 AND block_time >= ?2",
+    )
+      .bind(mint, windowStart)
+      .first<{ volume_usd: number; trades: number }>(),
+  ]);
+  const trades24h = Math.max(0, Number(traded?.trades ?? 0));
+  const volume24hUsd = Math.max(0, Number(traded?.volume_usd ?? 0));
+  const baselinePriceUsd = baseline ? Number(baseline.price_usd) : null;
+  const change24h = change24hOf({ priceUsd, baselinePriceUsd, trades24h });
+  return {
+    change24h,
+    change24hAt: change24h === null ? 0 : Number(baseline?.observed_at ?? 0),
+    volume24hUsd,
+    trades24h,
+  };
+}
 
 export interface MintInfo {
   decimals: number;
@@ -110,10 +207,25 @@ export async function readMintInfo(rpc: Rpc<SolanaRpcApi>, mint: Address): Promi
   };
 }
 
-function mineStatusToTokenStatus(mine: DecodedMine, market: DecodedLaunchMarket): TokenStatus {
+export function mineStatusToTokenStatus(mine: DecodedMine, market: DecodedLaunchMarket): TokenStatus {
+  // The program's own terminal state, which it now only reaches with a spent Mining Reserve
+  // after graduation: nothing is left to pay, whatever the venue says.
   if (mine.status === "FullyMined") return "FULLY_MINED";
-  if (mine.status === "MiningActive" || market.graduated) return "MINING_ACTIVE";
-  return "LAUNCHING";
+  if (market.graduated) {
+    // Post-graduation the Mining Reserve is the only source, so the mine is finished exactly
+    // when that reserve is empty - the walk sets FullyMined a moment later, and reporting it
+    // here keeps the cache honest in between.
+    return mine.remainingReserve <= 0n ? "FULLY_MINED" : "MINING_ACTIVE";
+  }
+  // Still on the curve: mining is live from the launch block and its budget is the curve's own
+  // token inventory. If that has room, the mine is actively emitting. If it is spent - or the
+  // market never had one, which is what a legacy market reads as after migration - the mine is
+  // idle: its blocks accrue nothing until graduation, and the Mining Reserve it has not touched
+  // is what starts paying then. That is CURVE_CAP_REACHED, deliberately not FULLY_MINED: a
+  // FULLY_MINED token is one a client can stop tracking, and this one must stay in the sync
+  // loop precisely so that graduation is noticed.
+  if (isCurveMiningOpen(curveMiningStateOf(market))) return "MINING_ACTIVE";
+  return "CURVE_CAP_REACHED";
 }
 
 export interface ChainSyncedToken {
@@ -158,6 +270,21 @@ export interface ChainSyncedToken {
    * program PDAs, so no creator or admin can withdraw them (spec 35, 36).
    */
   liquidityLocked: boolean;
+  /**
+   * Real 24h change, measured from this token's own indexed observations, or null when it
+   * cannot be measured honestly. See change24hOf: null is unknown, never zero.
+   */
+  change24h: TokenChange24h;
+  /** The observed_at the change was measured against, or 0 when there is no change to show. */
+  change24hAt: number;
+  /** Indexed traded volume over the same 24h window, in USD. */
+  volume24hUsd: number;
+  /** Indexed trades in that window; the ranking signal when change24h is unknown. */
+  trades24h: number;
+  /** Curve-phase mining: how much of the pre-graduation budget is left. */
+  curveMining: CurveMiningSummary;
+  /** What a seller can really get out of the curve right now. */
+  sellCapacity: CurveSellCapacitySummary;
 }
 
 /**
@@ -212,6 +339,8 @@ export interface SyncedTokenInput {
   decimals: number;
   /** SOL/USD for the display-only USD columns; see displaySolUsd. */
   solUsd: number;
+  /** The token's measured 24h window, read from what the indexer has already recorded. */
+  metrics: Token24hMetrics;
 }
 
 /**
@@ -226,6 +355,12 @@ export function buildSyncedToken(input: SyncedTokenInput): ChainSyncedToken {
   const priceUsd = priceSol * solUsd;
   const totalSupplyWhole = Number(mine.totalSupply) / scale;
   const liquidityLamports = venueLiquidityLamports(venue);
+  const whole = (value: bigint) => Number(value) / scale;
+  // The curve ledger lives on the market, so it is read from whichever account the venue
+  // read actually returned. A graduated market reports a closed, empty ledger: its emission
+  // moved to the Mining Reserve and its curve inventory moved into the pool.
+  const curve = curveMiningStateOf(venue.market);
+  const capacity = curveSellCapacity(venue.market);
   return {
     mint: input.mintAddress,
     name: mine.name,
@@ -255,6 +390,29 @@ export function buildSyncedToken(input: SyncedTokenInput): ChainSyncedToken {
     mintAuthorityRevoked: input.mintInfo.mintAuthorityRevoked,
     freezeAuthorityRevoked: input.mintInfo.freezeAuthorityRevoked,
     liquidityLocked: true,
+    change24h: input.metrics.change24h,
+    change24hAt: input.metrics.change24hAt,
+    volume24hUsd: input.metrics.volume24hUsd,
+    trades24h: input.metrics.trades24h,
+   curveMining: {
+     open: isCurveMiningOpen(curve),
+      // A market on its curve that never had a budget at all - launched with a zero share, or
+      // written before the ledger existed, where a migration can only default the cap to zero.
+      // The UI has to say "mining starts at graduation" for these rather than draw a progress
+      // bar over a budget that was never granted.
+      disabled: isCurveMiningDisabled(curve),
+      onCurve: !venue.graduated,
+      cap: whole(curve.cap),
+      mined: whole(curve.mined),
+      remaining: whole(curveMiningRoom(curve)),
+      progress: curveMiningProgress(curve),
+      blockReward: whole(curve.blockReward),
+      unpaid: whole(curve.unpaid),
+    },
+    sellCapacity: {
+      sol: Number(capacity.realSolLamports) / LAMPORTS_PER_SOL,
+      tokens: capacity.tokensForFullCapacity === null ? null : whole(capacity.tokensForFullCapacity),
+    },
   };
 }
 
@@ -286,13 +444,21 @@ export async function readTokenFromChain(
 
   const venue = await settledVenue(env, mintAddress, venueRead);
   const solUsd = await displaySolUsd(env);
+  const decodedMine = decodeMine(base64ToBytes(mineInfo.value.data[0]));
+  const metrics = await readToken24hMetrics(
+    env,
+    mintAddress,
+    venueSpotPriceLamports(venue, mintInfo.decimals) / 1_000_000_000 * solUsd,
+    Math.floor(Date.now() / 1_000),
+  );
   return buildSyncedToken({
     mintAddress,
-    mine: decodeMine(base64ToBytes(mineInfo.value.data[0])),
+    mine: decodedMine,
     venue,
     mintInfo,
     decimals: mintInfo.decimals,
     solUsd,
+    metrics,
   });
 }
 
@@ -355,29 +521,46 @@ export async function syncTokenWithVenue(
        reward_per_block, network_power, next_block_at, next_epoch_at, decimals, synced_at, created_at,
        discovery_reserve_remaining, discovery_reserve_total, discovery_epoch_budget,
        discovery_epoch_spent, discovery_epoch_ends_at, discovery_paused, liquidity_usd,
-       mint_authority_revoked, freeze_authority_revoked, liquidity_locked, discovery_synced_at
-     ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,
-               ?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33)
-     ON CONFLICT(mint) DO UPDATE SET
-       name = excluded.name, symbol = excluded.symbol, creator = excluded.creator,
-       status = excluded.status, price_usd = excluded.price_usd, price_sol = excluded.price_sol,
-       market_cap_usd = excluded.market_cap_usd, reserve_remaining = excluded.reserve_remaining,
-       reserve_total = excluded.reserve_total, reward_per_block = excluded.reward_per_block,
-       network_power = excluded.network_power, next_block_at = excluded.next_block_at,
-       next_epoch_at = excluded.next_epoch_at, decimals = excluded.decimals, synced_at = excluded.synced_at,
-       discovery_reserve_remaining = excluded.discovery_reserve_remaining,
-       discovery_reserve_total = excluded.discovery_reserve_total,
-       discovery_epoch_budget = excluded.discovery_epoch_budget,
-       discovery_epoch_spent = excluded.discovery_epoch_spent,
-       discovery_epoch_ends_at = excluded.discovery_epoch_ends_at,
-       discovery_paused = excluded.discovery_paused,
-       liquidity_usd = excluded.liquidity_usd,
-       mint_authority_revoked = excluded.mint_authority_revoked,
-       freeze_authority_revoked = excluded.freeze_authority_revoked,
-       liquidity_locked = excluded.liquidity_locked,
-       discovery_synced_at = excluded.discovery_synced_at,
-       description = CASE WHEN ?21 THEN excluded.description ELSE tokens.description END,
-       image_key = CASE WHEN ?22 THEN excluded.image_key ELSE tokens.image_key END`,
+       mint_authority_revoked, freeze_authority_revoked, liquidity_locked, discovery_synced_at,
+       venue, curve_mining_open, curve_mining_cap, curve_mining_mined, curve_mining_unpaid,
+       curve_mining_block_reward, curve_mining_synced_at, curve_sell_capacity_sol,
+       curve_sell_capacity_tokens, change_24h_at, volume_24h_usd, trades_24h
+    ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?43,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,
+              ?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,
+              ?34,?35,?36,?37,?38,?39,?40,?41,?42,?44,?45,?46)
+    ON CONFLICT(mint) DO UPDATE SET
+      name = excluded.name, symbol = excluded.symbol, creator = excluded.creator,
+      status = excluded.status, price_usd = excluded.price_usd, price_sol = excluded.price_sol,
+      market_cap_usd = excluded.market_cap_usd, reserve_remaining = excluded.reserve_remaining,
+      reserve_total = excluded.reserve_total, reward_per_block = excluded.reward_per_block,
+      network_power = excluded.network_power, next_block_at = excluded.next_block_at,
+      next_epoch_at = excluded.next_epoch_at, decimals = excluded.decimals, synced_at = excluded.synced_at,
+      discovery_reserve_remaining = excluded.discovery_reserve_remaining,
+      discovery_reserve_total = excluded.discovery_reserve_total,
+      discovery_epoch_budget = excluded.discovery_epoch_budget,
+      discovery_epoch_spent = excluded.discovery_epoch_spent,
+      discovery_epoch_ends_at = excluded.discovery_epoch_ends_at,
+      discovery_paused = excluded.discovery_paused,
+      liquidity_usd = excluded.liquidity_usd,
+      mint_authority_revoked = excluded.mint_authority_revoked,
+      freeze_authority_revoked = excluded.freeze_authority_revoked,
+      liquidity_locked = excluded.liquidity_locked,
+      discovery_synced_at = excluded.discovery_synced_at,
+      change_24h = excluded.change_24h,
+      change_24h_at = excluded.change_24h_at,
+      volume_24h_usd = excluded.volume_24h_usd,
+      trades_24h = excluded.trades_24h,
+      venue = excluded.venue,
+      curve_mining_open = excluded.curve_mining_open,
+      curve_mining_cap = excluded.curve_mining_cap,
+      curve_mining_mined = excluded.curve_mining_mined,
+      curve_mining_unpaid = excluded.curve_mining_unpaid,
+      curve_mining_block_reward = excluded.curve_mining_block_reward,
+      curve_mining_synced_at = excluded.curve_mining_synced_at,
+      curve_sell_capacity_sol = excluded.curve_sell_capacity_sol,
+      curve_sell_capacity_tokens = excluded.curve_sell_capacity_tokens,
+      description = CASE WHEN ?21 THEN excluded.description ELSE tokens.description END,
+      image_key = CASE WHEN ?22 THEN excluded.image_key ELSE tokens.image_key END`,
   )
     .bind(
       mintAddress, slug, chain.name, chain.symbol, description, chain.creator, imageKey, chain.status,
@@ -397,6 +580,22 @@ export async function syncTokenWithVenue(
       chain.freezeAuthorityRevoked ? 1 : 0,
       chain.liquidityLocked ? 1 : 0,
       now,
+      // The curve-mining ledger and the read-only sell capacity, straight from the market.
+      chain.venue,
+      chain.curveMining.open ? 1 : 0,
+      chain.curveMining.cap,
+      chain.curveMining.mined,
+      chain.curveMining.unpaid,
+      chain.curveMining.blockReward,
+      now,
+      chain.sellCapacity.sol,
+      chain.sellCapacity.tokens,
+      // change_24h_at = 0 is what makes change_24h "unknown": the column is NOT NULL, so the
+      // percentage itself defaults to 0 and is only ever read when a baseline was recorded.
+      chain.change24h ?? 0,
+      chain.change24hAt,
+      chain.volume24hUsd,
+      chain.trades24h,
     )
     .run();
 
@@ -411,7 +610,11 @@ export async function syncTokenWithVenue(
     status: chain.status,
     priceSol: chain.priceSol,
     priceUsd: chain.priceUsd,
-    change24h: 0,
+    change24h: chain.change24h,
+    volume24hUsd: chain.volume24hUsd,
+    trades24h: chain.trades24h,
+    curveMining: chain.curveMining,
+    sellCapacity: chain.sellCapacity,
     marketCapUsd: chain.marketCapUsd,
     reserveRemaining: chain.reserveRemaining,
     reserveTotal: chain.reserveTotal,

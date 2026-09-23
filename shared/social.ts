@@ -591,6 +591,11 @@ export interface LeaderboardCandidate {
   readonly seasonalPoints: number;
   readonly oreBalance: number;
   readonly activeMint: string | null;
+  /**
+   * The player's public username, or null/absent when they never set one. Display identity only:
+   * it is never an input to ranking, eligibility or a prize (worker/leaderboard.ts joins it).
+   */
+  readonly username?: string | null;
 }
 
 export interface RankedLeaderboardEntry extends LeaderboardCandidate {

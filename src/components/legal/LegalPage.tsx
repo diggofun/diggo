@@ -2,7 +2,7 @@
  * The legal pages: /terms, /privacy, /risk and /cookies.
  *
  * Deliberately plain and readable without JavaScript-dependent decoration, because a legal notice
- * that is hard to read is worse than useless. Every page carries the DRAFT notice, the document
+ * that is hard to read is worse than useless. Every page carries the document
  * title, the revision date, the section list and the two controls that belong next to the text
  * rather than behind a settings dialog: change your analytics choice, and reset this browser's
  * device id (src/device.ts, the anti-abuse identifier described in the Privacy Policy).
@@ -18,7 +18,7 @@ import {
   subscribeConsent,
   type ConsentDecision,
 } from "./consent";
-import { DRAFT_NOTICE, LEGAL_DOCUMENTS, type LegalSection } from "./content";
+import { LEGAL_DOCUMENTS, type LegalSection } from "./content";
 import { LEGAL_ROUTES, legalDocId } from "./routes";
 
 function Section({ section, index }: { section: LegalSection; index: number }): ReactElement {
@@ -78,13 +78,6 @@ export function LegalRoute({ pathname }: { pathname: string }): ReactElement {
 
   return (
     <article className="legal-page" data-legal-document={doc.id}>
-      <div className="legal-draft" role="note">
-        <strong>
-          DRAFT - requires lawyer review before launch
-        </strong>
-        <p>{DRAFT_NOTICE}</p>
-      </div>
-
       <h1 className="legal-title">{doc.title}</h1>
       <p className="legal-summary">{doc.summary}</p>
       <p className="legal-meta">Version: {doc.updated}</p>

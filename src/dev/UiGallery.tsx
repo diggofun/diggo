@@ -6,15 +6,16 @@
  */
 import { useState } from "react";
 import type { MineInfo, MiningReport, PlayerProfile, TokenSummary } from "../../shared/types";
+import type { DiscoveryRecord } from "../../shared/types";
 import { DIGGO_CONFIG } from "../../shared/economics";
 import { discoveryVisualEvent } from "../../shared/discoveryVisual";
 import { CrewScreen } from "../components/CrewScreen";
 import { DashboardPanel } from "../components/DashboardPanel";
+import { DiscoveriesPanel } from "../components/DiscoveriesPanel";
+import { ExploreBoard, SelectedMine } from "../components/HomeSections";
 import { DiscoveryArt, GameArt, MineScene } from "../components/MineScene";
 import { MineInfoPanel } from "../components/MineInfoPanel";
 import { MiningReportModal } from "../components/MiningReportModal";
-import { SoundToggle } from "../components/SoundToggle";
-import { playSound } from "../sound";
 
 const NOW = Math.floor(Date.now() / 1_000);
 
@@ -30,9 +31,15 @@ const SAMPLE_MINE: TokenSummary = {
   priceSol: 0.000001,
   priceUsd: 0.25,
   change24h: 4.2,
+  volume24hUsd: 48_200,
+  trades24h: 132,
+  curveMining: { open: true, onCurve: true, cap: 1_000_000, mined: 160_000, remaining: 840_000, progress: 0.16, blockReward: 250, unpaid: 1_240 },
+  sellCapacity: { sol: 41.5, tokens: 176_500 },
   marketCapUsd: 250_000,
-  reserveRemaining: 42_000,
-  reserveTotal: 50_000,
+  // On the curve the API's remainingReserve / reserveTotal are that curve's own cap and room, not
+  // the Mining Reserve: 160K of a 1M cap emitted leaves 840K of budget.
+  reserveRemaining: 840_000,
+  reserveTotal: 1_000_000,
   rewardPerBlock: 250,
   networkPower: 12_400,
   nextBlockAt: NOW + 184,
@@ -107,18 +114,79 @@ const SAMPLE_MINE_INFO: MineInfo = {
   status: "MINING_ACTIVE",
   blockReward: 250,
   totalMiningPower: 12_400,
-  remainingReserve: 42_000,
-  reserveTotal: 50_000,
+  remainingReserve: 840_000,
+  reserveTotal: 1_000_000,
   estimatedShare: 0.148,
   estimatedRewardPerBlock: 37,
   estimateLabel: "Estimate only — your share moves with every crew that joins.",
   reductionSchedule: [250, 214, 183, 157, 134, 115, 98],
   fullyMinedProgress: 0.16,
+  curveMining: SAMPLE_MINE.curveMining,
+  emissionSource: "CURVE",
+  curveMiningDaysRemaining: 12.4,
   nextBlockAt: NOW + 184,
   epoch: 3,
   epochEndsAt: NOW + 86_400 * 3,
   playerPower: 1_840,
   accounting: { source: "ONCHAIN_INDEXED", authoritative: true, label: "On-chain program accounts for every block." },
+};
+
+/**
+ * The same mine after graduation, when blocks come out of the Mining Reserve instead of the curve.
+ * Kept beside the curve-phase sample so both emission sources are reviewable on one page.
+ */
+const SAMPLE_RESERVE_MINE_INFO: MineInfo = {
+  ...SAMPLE_MINE_INFO,
+  emissionSource: "RESERVE",
+  estimateLabel: "Estimate based on current conditions.",
+  // Graduated, so these are the Mining Reserve's own numbers again.
+  remainingReserve: 42_000,
+  reserveTotal: 50_000,
+  curveMining: {
+    ...SAMPLE_MINE.curveMining,
+    open: false,
+    onCurve: false,
+    mined: SAMPLE_MINE.curveMining.cap,
+    remaining: 0,
+    progress: 1,
+    unpaid: 0,
+  },
+  curveMiningDaysRemaining: null,
+};
+
+/** The same market once it graduated: reserve emissions, pool liquidity, and no measurable 24h change. */
+const SAMPLE_RESERVE_TOKEN: TokenSummary = {
+  ...SAMPLE_MINE,
+  mint: "Samp1eReserveMint11111111111111111111111111",
+  slug: "sample-doggo-graduated",
+  name: "Sample Doggo (graduated)",
+  symbol: "DOGGO2",
+  change24h: null,
+  curveMining: SAMPLE_RESERVE_MINE_INFO.curveMining,
+  sellCapacity: { sol: 0, tokens: null },
+  reserveRemaining: 640_000,
+  reserveTotal: 900_000,
+};
+
+/**
+ * A mine whose curve cap is spent but which has not graduated: nothing pays a block, and the spare
+ * reserve does not stand in for the cap. Worth reviewing, because it is the state where a curve
+ * figure could easily be read as still emitting.
+ */
+const SAMPLE_SPENT_MINE_INFO: MineInfo = {
+  ...SAMPLE_MINE_INFO,
+  status: "FULLY_MINED",
+  remainingReserve: 0,
+  fullyMinedProgress: 1,
+  curveMining: {
+    ...SAMPLE_MINE.curveMining,
+    open: false,
+    mined: SAMPLE_MINE.curveMining.cap,
+    remaining: 0,
+    progress: 1,
+    unpaid: 0,
+  },
+  curveMiningDaysRemaining: null,
 };
 
 /** Equipped maps that exercise every cosmetic slot the mine scene reads. */
@@ -131,15 +199,12 @@ const LOADOUTS: readonly { name: string; equipped: Record<string, string> }[] = 
   { name: "Deep core", equipped: { mine_theme: "theme_deepcore", cart: "cart_hauler" } },
 ];
 
-/** Every file public/assets/game is expected to hold, with its intrinsic size. */
+/** The square sprites and finds public/assets/game is expected to hold, with their intrinsic size. */
 const ART_FILES: readonly { name: string; width: number; height: number }[] = [
-  { name: "logo", width: 1024, height: 476 },
-  { name: "logo-icon", width: 512, height: 512 },
-  { name: "mine-bg", width: 1672, height: 941 },
   { name: "miner", width: 768, height: 768 },
+  { name: "foreman", width: 768, height: 768 },
   { name: "drill", width: 768, height: 768 },
   { name: "cart", width: 768, height: 768 },
-  { name: "foreman", width: 768, height: 768 },
   { name: "storage", width: 768, height: 768 },
   { name: "discovery-stone", width: 512, height: 512 },
   { name: "discovery-meme-vein", width: 512, height: 512 },
@@ -147,10 +212,42 @@ const ART_FILES: readonly { name: string; width: number; height: number }[] = [
   { name: "discovery-ancient-geode", width: 512, height: 512 },
   { name: "discovery-golden-block", width: 512, height: 512 },
   { name: "discovery-degen-core", width: 512, height: 512 },
-  { name: "og-image", width: 1200, height: 630 },
+];
+
+/** Art with a shape of its own: a square thumbnail would hide what it actually looks like. */
+const WIDE_ART_FILES: readonly { name: string; width: number; height: number; className: string }[] = [
+  { name: "mine-bg", width: 1920, height: 1080, className: "ui-gallery-wide-art" },
+  { name: "og-image", width: 1200, height: 630, className: "ui-gallery-wide-art is-social" },
+];
+
+/** The brand lockups from public/assets/brand, exactly as the header uses them. */
+const BRAND_FILES: readonly { src: string; alt: string; className?: string }[] = [
+  { src: "/assets/brand/logo.svg", alt: "Diggo wordmark" },
+  { src: "/assets/brand/logo-dark.svg", alt: "Diggo wordmark for dark backgrounds" },
+  { src: "/assets/brand/logo-mark.svg", alt: "Diggo mark", className: "is-mark" },
 ];
 
 const RARITIES = ["common", "uncommon", "rare", "epic", "legendary", "mythic"] as const;
+
+/** One sample find per rarity, so the discovery card art is reviewed at the size it ships at. */
+const SAMPLE_DISCOVERIES: DiscoveryRecord[] = RARITIES.map((rarity, index) => ({
+  id: "sample-" + rarity,
+  eventId: "sample-event-" + rarity,
+  window: "sample-window",
+  mint: SAMPLE_MINE.mint,
+  symbol: SAMPLE_MINE.symbol,
+  rarity,
+  visualEvent: discoveryVisualEvent(rarity),
+  tokenAmount: 12 + index * 8,
+  valueUsd: 3 + index * 2.5,
+  priceUsd: 0.25,
+  eligibilityScore: 60 + index * 6,
+  status: index === 0 ? "PENDING" : "ELIGIBLE",
+  claimable: index > 0,
+  claimedAt: null,
+  txSignature: null,
+  createdAt: NOW - 600 * (index + 1),
+}));
 
 export function UiGallery() {
   const [now] = useState(() => Date.now());
@@ -178,8 +275,8 @@ export function UiGallery() {
         <span className="mono-label">DEV ONLY // UI GALLERY</span>
         <p>
           Sample data, no Worker calls. Filter with
-          ?section=active|paused|first|tiers|crew|loadouts|art|sound|mineinfo and open the report
-          with ?report.
+          ?section=active|paused|first|tiers|crew|loadouts|discoveries|art|market|mineinfo and open
+          the report with ?report.
         </p>
         <button className="btn btn-ghost btn-sm" onClick={() => { setCollected(false); setReportOpen(true); }}>Open mining report</button>
       </section>
@@ -209,6 +306,25 @@ export function UiGallery() {
       {show("crew") && (
         <CrewScreen player={samplePlayer({})} pending={null} error="" notice="" onUpgrade={noop} />
       )}
+      {show("discoveries") && (
+        <DiscoveriesPanel
+          signedIn
+          discoveries={SAMPLE_DISCOVERIES}
+          opportunity={null}
+          tokens={[SAMPLE_MINE]}
+          loading={false}
+          rolling={false}
+          claimingId={null}
+          error=""
+          notice=""
+          onRequestOpportunity={noop}
+          onRoll={noop}
+          onClaim={noop}
+          onOpenToken={noop}
+          onTrade={noop}
+          onSwitchCrew={noop}
+        />
+      )}
       {show("loadouts") && (
         <section className="page-shell ui-gallery-tiers">
           <h2>Equipped cosmetics in the mine</h2>
@@ -228,10 +344,43 @@ export function UiGallery() {
       )}
       {show("art") && (
         <section className="page-shell ui-gallery-tiers">
-          <h2>Generated art</h2>
+          <h2>Brand</h2>
+          <p className="ui-gallery-note">
+            The header lockup and the square mark, from public/assets/brand. Both are SVG, so they
+            stay sharp at any size and at any zoom.
+          </p>
+          <div className="ui-gallery-brand">
+            {BRAND_FILES.map((file) => (
+              <img key={file.src} className={file.className} src={file.src} alt={file.alt} />
+            ))}
+          </div>
+          <h2>Scene and social art</h2>
+          <p className="ui-gallery-note">
+            Reviewed at their own ratio: the mine cross-section the crew stands on, and the social
+            card that ships with the copy composited into its empty left half.
+          </p>
+          <div>
+            {WIDE_ART_FILES.map((file) => (
+              <figure className="ui-gallery-figure ui-gallery-art ui-gallery-wide" key={file.name}>
+                <GameArt
+                  name={file.name}
+                  alt={file.name + " art"}
+                  width={file.width}
+                  height={file.height}
+                  className={file.className}
+                  eager
+                  fallback={<span className="ui-gallery-art-missing">no file — SVG fallback</span>}
+                />
+                <figcaption>{file.name}</figcaption>
+              </figure>
+            ))}
+          </div>
+          <h2>Sprites and discovery art</h2>
           <p className="ui-gallery-note">
             Files that exist render; files that do not are replaced by the drawn fallback, with no
-            broken image and no layout shift.
+            broken image and no layout shift. Every tile here loads eagerly, because the gallery is
+            captured whole: a sprite whose load or decode is still deferred is an empty box in a
+            full-page screenshot even though the file itself is served fine.
           </p>
           <div>
             {ART_FILES.map((file) => (
@@ -242,6 +391,7 @@ export function UiGallery() {
                   width={file.width}
                   height={file.height}
                   className="ui-gallery-art-img"
+                  eager
                   fallback={<span className="ui-gallery-art-missing">no file — SVG fallback</span>}
                 />
                 <figcaption>{file.name}</figcaption>
@@ -252,46 +402,52 @@ export function UiGallery() {
           <div>
             {RARITIES.map((rarity) => (
               <figure className="ui-gallery-figure ui-gallery-art" key={rarity}>
-                <DiscoveryArt rarity={rarity} className="ui-gallery-art-img" />
+                <DiscoveryArt rarity={rarity} className="ui-gallery-art-img" eager />
                 <figcaption>{rarity}</figcaption>
               </figure>
             ))}
           </div>
         </section>
       )}
-      {show("sound") && (
-        <section className="page-shell ui-gallery-tiers">
-          <h2>Sound</h2>
-          <div className="ui-gallery-sound">
-            <SoundToggle />
-            {(["activate", "collect", "upgrade"] as const).map((effect) => (
-              <button className="btn btn-ghost btn-sm" key={effect} onClick={() => playSound(effect)}>
-                {effect}
-              </button>
-            ))}
-            {RARITIES.map((rarity) => (
-              <button className="btn btn-ghost btn-sm" key={rarity} onClick={() => playSound("discovery", { rarity })}>
-                {rarity}
-              </button>
-            ))}
-          </div>
-          <p className="ui-gallery-note">
-            Muted by default, and the toggle remembers the choice. Every cue is synthesised with
-            WebAudio — there are no audio files.
-          </p>
-        </section>
+      {show("market") && (
+        <>
+          <SelectedMine token={SAMPLE_MINE} mineInfo={SAMPLE_MINE_INFO} now={NOW} canSwitch onSwitch={noop} />
+          <ExploreBoard tokens={[SAMPLE_MINE, SAMPLE_RESERVE_TOKEN]} onLaunch={noop} />
+        </>
       )}
       {show("mineinfo") && (
-        <MineInfoPanel
-          mine={SAMPLE_MINE_INFO}
-          mineName={SAMPLE_MINE.name}
-          now={NOW}
-          loading={false}
-          error=""
-          canSwitch
-          switching={false}
-          onSwitchHere={noop}
-        />
+        <>
+          <MineInfoPanel
+            mine={SAMPLE_MINE_INFO}
+            mineName={SAMPLE_MINE.name}
+            now={NOW}
+            loading={false}
+            error=""
+            canSwitch
+            switching={false}
+            onSwitchHere={noop}
+          />
+          <MineInfoPanel
+            mine={SAMPLE_RESERVE_MINE_INFO}
+            mineName={SAMPLE_MINE.name}
+            now={NOW}
+            loading={false}
+            error=""
+            canSwitch
+            switching={false}
+            onSwitchHere={noop}
+          />
+          <MineInfoPanel
+            mine={SAMPLE_SPENT_MINE_INFO}
+            mineName={SAMPLE_MINE.name}
+            now={NOW}
+            loading={false}
+            error=""
+            canSwitch
+            switching={false}
+            onSwitchHere={noop}
+          />
+        </>
       )}
       {reportOpen && (
         <MiningReportModal

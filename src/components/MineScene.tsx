@@ -1,20 +1,25 @@
 /**
  * The mine, drawn as layers that grow with the crew tier (spec 72).
  *
- * Everything is a pure function of the tier: more galleries, more miners, drills from tier 2, ore
- * carts from tier 2, deeper shafts from tier 4 and surface buildings from tier 3. There is no
- * randomness anywhere in this file — the picture reports progression, it does not roll anything.
+ * Everything is a pure function of the tier: more miners, drills from tier 2, ore carts from tier 2,
+ * surface storage from tier 3 and a foreman once the operation is worth supervising. There is no
+ * randomness anywhere in this file - the picture reports progression, it does not roll anything.
  *
- * The same scene is also drawn from generated art when it is available (see GameArt below):
- * public/assets/game holds the illustrated mine, the crew sprites and the logo, and every one of
- * them falls back to the SVG that ships with the app, so the scene is never empty and never waits
- * on a network request to make sense. Equipped cosmetics (src/components/CosmeticsScreen.tsx) are
- * applied as colours and tints on top of either drawing; they are purely visual and are read from
- * the server's own equipped map, so nothing here can touch Mining Power, ORE or discovery odds.
+ * The scene stands on public/assets/game/mine-bg.webp: a flat 16:9 cross-section with an empty sky,
+ * three dark tunnel bands cut through the rock and a headframe at the far left. The crew and the
+ * machines are the sprites from the same folder, placed on the floor of a band or on the ground
+ * line and sized from their own alpha bounding box (SPRITE_ART), so a miner and a cart read at the
+ * size they were drawn rather than at the size of their transparent canvas. The box keeps the
+ * illustration's 16:9 ratio on every screen and nothing is ever cropped, which is why a percentage
+ * in this file is a percentage of the drawing itself. When a file is missing the SVG below draws the
+ * same scene in the same colours, so nothing here waits on a network request to make sense.
+ *
+ * Equipped cosmetics (src/components/CosmeticsScreen.tsx) are cosmetic only: a theme filters the
+ * whole scene layer at once and an outfit, cart or pickaxe colours the frame, so no cosmetic can
+ * touch Mining Power, ORE or discovery odds.
  */
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { DiscoveryRarity } from "../../shared/config";
-import { playSound } from "../sound";
 
 /* ------------------------------------------------------------------------------------------------
    Generated game art
@@ -44,8 +49,20 @@ export function discoveryArtName(rarity: string | null | undefined): string | nu
 /**
  * The art for one discovery, keyed by the rarity the server reported. Renders nothing at all for a
  * rarity without art, which is how every discovery screen keeps its drawn fallback.
+ *
+ * `eager` is passed straight through to GameArt for callers that are reviewed rather than played:
+ * the dev-only gallery holds every sprite on one page, well below the fold, where a lazy image is
+ * simply not painted yet when the page is captured.
  */
-export function DiscoveryArt({ rarity, className }: { rarity: string; className: string }) {
+export function DiscoveryArt({
+  rarity,
+  className,
+  eager = false,
+}: {
+  rarity: string;
+  className: string;
+  eager?: boolean;
+}) {
   const name = discoveryArtName(rarity);
   if (!name) return null;
   return (
@@ -55,6 +72,7 @@ export function DiscoveryArt({ rarity, className }: { rarity: string; className:
       width={512}
       height={512}
       className={className}
+      eager={eager}
     />
   );
 }
@@ -96,7 +114,7 @@ function probeImage(source: string): Promise<boolean> {
 }
 
 export interface GameArtProps {
-  /** File stem under /assets/game, e.g. "logo" or "discovery-legendary". Give the component a new
+  /** File stem under /assets/game, e.g. "mine-bg" or "discovery-legendary". Give the component a new
    * key when it should show a different file. */
   name: string;
   /** Empty for decorative art that repeats a label the surrounding markup already carries. */
@@ -161,8 +179,9 @@ export function GameArt({
     if (image?.complete && image.naturalWidth > 0) {
       setLoaded(true);
       notify.current?.(true);
+      if (eager) void image.decode?.().catch(() => undefined);
     }
-  }, [source]);
+  }, [source, eager]);
 
   if (failed || !source) return <>{fallback}</>;
 
@@ -178,6 +197,11 @@ export function GameArt({
       decoding="async"
       style={style}
       onLoad={() => {
+        // Eager art is decoded here rather than left to decode-on-paint. A caller that is reviewed
+        // as a whole page (the gallery) holds every sprite at once, most of them off screen, and an
+        // image whose decode is still deferred is an empty box in a full-page capture even though
+        // the file has already arrived.
+        if (eager) void imageRef.current?.decode?.().catch(() => undefined);
         setLoaded(true);
         notify.current?.(true);
       }}
@@ -190,7 +214,7 @@ export function GameArt({
 }
 
 /* ------------------------------------------------------------------------------------------------
-   Cosmetics — colour only
+   Cosmetics - colour only
    ------------------------------------------------------------------------------------------------ */
 
 /**
@@ -212,8 +236,13 @@ export interface MineLook {
   lamp: string;
   /** The lamp while the crew is working; themes light their own colour. */
   lampLit: string;
-  /** CSS filter applied to the illustrated mine, so a theme also recolours the raster art. */
-  artFilter: string;
+  /**
+   * A CSS filter for the whole scene layer - illustration, crew and machines together - so a theme
+   * recolours the picture evenly instead of tinting one layer on top of another.
+   */
+  sceneFilter: string;
+  /** The cosmetic's own colour, carried by the scene's frame and by the shift badge. */
+  accent: string;
 }
 
 const OUTFITS: Readonly<Record<string, Pick<MineLook, "minerBody" | "minerHelmet">>> = {
@@ -250,7 +279,7 @@ const THEMES: Readonly<Record<string, Partial<MineLook>>> = {
     vein: "#ffb627",
     lamp: "#6a4a3a",
     lampLit: "#ff8a4c",
-    artFilter: "sepia(.35) saturate(1.4) hue-rotate(-18deg) brightness(1.04)",
+    sceneFilter: "sepia(.35) saturate(1.4) hue-rotate(-18deg) brightness(1.04)",
   },
   theme_arcane: {
     skyTop: "#2b2350",
@@ -261,7 +290,7 @@ const THEMES: Readonly<Record<string, Partial<MineLook>>> = {
     vein: "#a07bff",
     lamp: "#4a4470",
     lampLit: "#c9b6ff",
-    artFilter: "hue-rotate(215deg) saturate(1.15) brightness(.95)",
+    sceneFilter: "hue-rotate(215deg) saturate(1.15) brightness(.95)",
   },
   theme_deepcore: {
     skyTop: "#0f1b1e",
@@ -272,7 +301,7 @@ const THEMES: Readonly<Record<string, Partial<MineLook>>> = {
     vein: "#39ffd0",
     lamp: "#1e3a3a",
     lampLit: "#7ff0d8",
-    artFilter: "hue-rotate(150deg) saturate(1.25) brightness(.84)",
+    sceneFilter: "hue-rotate(150deg) saturate(1.25) brightness(.84)",
   },
 };
 
@@ -290,24 +319,29 @@ const DEFAULT_LOOK: MineLook = {
   vein: "rgba(215,255,63,.55)",
   lamp: "#5a5c50",
   lampLit: "#ffd76a",
-  artFilter: "none",
+  // Empty on purpose: the illustration is finished art and takes no filter of its own.
+  sceneFilter: "",
+  accent: "var(--acid)",
 };
 
 /**
- * Turns the server's equipped map (slot → cosmetic id) into colours. Unknown ids and unequipped
+ * Turns the server's equipped map (slot -> cosmetic id) into colours. Unknown ids and unequipped
  * slots keep the default palette, and the slot keys come from shared/social.ts.
  */
 export function mineLookFromEquipped(equipped: Readonly<Record<string, string>> | undefined): MineLook {
   const outfit = OUTFITS[equipped?.outfit ?? ""] ?? {};
   const cart = CARTS[equipped?.cart ?? ""] ?? {};
+  const pickaxe = PICKAXES[equipped?.pickaxe ?? ""];
   const theme = THEMES[equipped?.mine_theme ?? ""] ?? {};
   return {
     ...DEFAULT_LOOK,
     ...outfit,
     cartBody: cart.cartBody ?? DEFAULT_LOOK.cartBody,
     cartWheel: cart.cartWheel ?? DEFAULT_LOOK.cartWheel,
-    minerTool: PICKAXES[equipped?.pickaxe ?? ""] ?? DEFAULT_LOOK.minerTool,
+    minerTool: pickaxe ?? DEFAULT_LOOK.minerTool,
     ...theme,
+    // The first equipped slot that carries a colour paints the scene's frame.
+    accent: outfit.minerBody ?? cart.cartBody ?? pickaxe ?? DEFAULT_LOOK.accent,
   };
 }
 
@@ -320,21 +354,64 @@ export interface MineSceneProps {
   tier: number;
   /** True while the crew is inside an activation window, which animates the working layers. */
   active?: boolean;
-  /** Compact renders the same layers in the small dashboard card. */
+  /** Compact renders the same scene in the dashboard card, without the tier caption. */
   compact?: boolean;
   /** Optional caption (the crew tier name) pinned to the top-left of the scene. */
   label?: string;
-  /** The equipped cosmetics map (slot → id); visual only. */
+  /** The equipped cosmetics map (slot -> id); visual only. */
   cosmetics?: Readonly<Record<string, string>>;
 }
 
-interface Point {
-  x: number;
-  y: number;
+/**
+ * The scene box keeps the 16:9 ratio of the illustration everywhere, the compact dashboard card
+ * included, so a percentage below is always a percentage of the drawing and nothing is cropped.
+ */
+const SCENE_ASPECT = 16 / 9;
+
+/**
+ * Anchors measured from public/assets/game/mine-bg.webp (1920x1080): the off-white sky ends at
+ * 30.2% of the height, the three dark tunnel bands are cut at 54.6-57.6%, 73.2-76.2% and
+ * 89.7-92.4%, and the headframe with its shaft owns the far-left 9% of the width. People and
+ * machines stand on the floor of a band, so the bottom edge of each band is the anchor.
+ */
+const GROUND_Y = 0.302;
+const BAND_FLOORS = [0.576, 0.762, 0.924] as const;
+/** A row keeps clear of the headframe on the left and of the frame on the right. */
+const ROW_LEFT = 0.14;
+const ROW_RIGHT = 0.92;
+
+type SpriteKind = "miner" | "foreman" | "cart" | "drill" | "storage";
+
+interface SpriteArt {
+  /** File stem under /assets/game. */
+  name: string;
+  /** Alpha bounding box of the square file, as fractions of its canvas. */
+  bx: number;
+  bw: number;
+  by: number;
+  bh: number;
+  /** How tall the sprite's own ink should read, as a fraction of the scene height. */
+  ink: number;
 }
 
-/** A sprite's position and size as percentages of the scene box, ready for CSS. */
-interface SpriteSpec {
+/**
+ * Every sprite file is 768x768 with a different amount of empty canvas around the subject: the
+ * miner fills 65% of its width, the cart 84% and the storage 54% of its height. Giving them all one
+ * CSS width is what made equal sprites look unequal on screen, so each one is sized from its own
+ * bounding box and lands at the optical height in "ink".
+ */
+const SPRITE_ART: Readonly<Record<SpriteKind, SpriteArt>> = {
+  miner: { name: "miner", bx: 0.1745, bw: 0.6497, by: 0.0794, bh: 0.8411, ink: 0.16 },
+  foreman: { name: "foreman", bx: 0.3385, bw: 0.3216, by: 0.0794, bh: 0.8398, ink: 0.16 },
+  cart: { name: "cart", bx: 0.0794, bw: 0.8398, by: 0.0833, bh: 0.832, ink: 0.115 },
+  drill: { name: "drill", bx: 0.0794, bw: 0.8398, by: 0.1784, bh: 0.6432, ink: 0.105 },
+  storage: { name: "storage", bx: 0.0794, bw: 0.8398, by: 0.2318, bh: 0.5365, ink: 0.15 },
+};
+
+/** One sprite's place in the scene, in percentages of the scene box. */
+interface Placement {
+  key: string;
+  kind: SpriteKind;
   left: string;
   top: string;
   width: string;
@@ -342,64 +419,113 @@ interface SpriteSpec {
 }
 
 /**
- * Ore veins in the rock, in the SVG's own 320x200 coordinates: fixed positions, more of them
- * visible as the mine goes deeper.
+ * Places a sprite so that the bottom of its ink sits on "floor" (a fraction of the scene height)
+ * and its ink is centred on "center" (a fraction of the width). The box is the sprite's whole
+ * canvas, so the offsets absorb the empty margins of the file instead of moving the subject.
+ */
+function place(kind: SpriteKind, key: string, center: number, floor: number, delay = "0s"): Placement {
+  const art = SPRITE_ART[kind];
+  const height = art.ink / art.bh; // the canvas, as a fraction of the scene height
+  const width = height / SCENE_ASPECT; // the same canvas, as a fraction of the scene width
+  return {
+    key,
+    kind,
+    left: ((center - (art.bx + art.bw / 2) * width) * 100).toFixed(3) + "%",
+    top: ((floor - (art.by + art.bh) * height) * 100).toFixed(3) + "%",
+    width: (width * 100).toFixed(3) + "%",
+    delay,
+  };
+}
+
+/** Splits a count across the bands as evenly as possible, filling the shallowest band first. */
+function deals(count: number, bands: number): number[] {
+  const base = Math.floor(count / bands);
+  const extra = count % bands;
+  return Array.from({ length: bands }, (_, index) => base + (index < extra ? 1 : 0));
+}
+
+/**
+ * Miners with the machines of one gallery spread between them, so a cart or a drill is never
+ * bunched at one end of a row.
+ */
+function interleave(miners: number, machines: readonly SpriteKind[]): SpriteKind[] {
+  const total = miners + machines.length;
+  const row: (SpriteKind | null)[] = Array.from({ length: total }, () => null);
+  const taken = new Set<number>();
+  machines.forEach((kind, index) => {
+    let slot = Math.round(((index + 1) * total) / (machines.length + 1)) - 1;
+    slot = Math.max(0, Math.min(total - 1, slot));
+    while (taken.has(slot)) slot = (slot + 1) % total;
+    taken.add(slot);
+    row[slot] = kind;
+  });
+  return row.map((kind) => kind ?? "miner");
+}
+
+/** One gallery: its crew and machines, spaced across the clear width of the scene. */
+function bandRow(kinds: readonly SpriteKind[], floor: number, depth: number): Placement[] {
+  if (kinds.length === 0) return [];
+  const share = (ROW_RIGHT - ROW_LEFT) / kinds.length;
+  return kinds.map((kind, index) =>
+    place(
+      kind,
+      kind + "-" + depth + "-" + index,
+      ROW_LEFT + share * (index + 0.5),
+      floor,
+      ((index + depth) % 4) * 0.22 + "s",
+    ),
+  );
+}
+
+/**
+ * Ore veins in the rock of the drawn fallback, in its own 320x200 coordinates: fixed positions,
+ * more of them visible as the mine goes deeper.
  */
 const VEINS = [
   [64, 88], [214, 76], [100, 128], [246, 140], [40, 170], [180, 182], [284, 112], [118, 190],
 ] as const satisfies readonly (readonly [number, number])[];
 
-function sprite(x: number, y: number, width: string, delay = "0s"): SpriteSpec {
-  return {
-    left: ((x / 320) * 100).toFixed(2) + "%",
-    top: ((y / 200) * 100).toFixed(2) + "%",
-    width,
-    delay,
-  };
-}
-
 export function MineScene({ tier, active = false, compact = false, label, cosmetics }: MineSceneProps) {
   const level = Math.max(1, Math.min(6, Math.round(tier) || 1));
   const galleries = level;
-  const miners: Point[] = Array.from({ length: Math.min(3 + level, 9) }, (_, index) => ({
-    x: 22 + ((index * 37 + level * 11) % 250),
-    y: 62 + ((index * 23 + level * 7) % Math.max(1, galleries * 22)),
-  }));
+  const miners = Math.min(3 + level, 9);
   const drills = level >= 2 ? Math.min(level - 1, 4) : 0;
   const carts = Math.min(1 + Math.floor(level / 2), 4);
-  const buildings = level >= 3 ? Math.min(level - 2, 4) : 0;
+  const storages = level >= 3 ? Math.min(level - 2, 4) : 0;
+  const hasForeman = level >= 3;
   const deepShafts = level >= 4 ? level - 3 : 0;
   const elevatorHeight = 20 + level * 6;
   const veins = VEINS.slice(0, 3 + level);
 
   const look = mineLookFromEquipped(cosmetics);
 
-  // Sprites grow a little with the tier, so a deeper mine reads as a bigger operation.
-  const spriteWidth = (base: number) => (base * (0.88 + level * 0.05)).toFixed(2) + "%";
+  // The illustration is the scene; the SVG is only what the app draws when the file is missing.
+  const [bgArt, setBgArt] = useState(false);
 
-  // Which generated files actually exist; the SVG draws anything that is missing.
-  const [art, setArt] = useState<Readonly<Record<string, boolean>>>({});
-  const markArt = useCallback((key: string, available: boolean) => {
-    setArt((current) => (current[key] === available ? current : { ...current, [key]: available }));
-  }, []);
+  // The crew and the machines are placed against the illustration's own anchors, and they ride with
+  // it alone: half a download can never mix the two coordinate systems.
+  const crew: Placement[] = [];
+  if (hasForeman) crew.push(place("foreman", "foreman", 0.16, GROUND_Y));
+  for (let index = 0; index < storages; index++) {
+    const center = storages === 1 ? 0.4 : 0.3 + (index * 0.6) / (storages - 1);
+    crew.push(place("storage", "storage-" + index, center, GROUND_Y, index * 0.3 + "s"));
+  }
+  const minersPerBand = deals(miners, BAND_FLOORS.length);
+  const cartsPerBand = deals(carts, BAND_FLOORS.length);
+  const drillsPerBand = deals(drills, BAND_FLOORS.length);
+  BAND_FLOORS.forEach((floor, depth) => {
+    const machines: SpriteKind[] = [
+      ...Array.from({ length: cartsPerBand[depth] }, () => "cart" as SpriteKind),
+      ...Array.from({ length: drillsPerBand[depth] }, () => "drill" as SpriteKind),
+    ];
+    crew.push(...bandRow(interleave(minersPerBand[depth], machines), floor, depth));
+  });
 
-  // The activation cue belongs to the moment the shift starts, not to every render of the scene.
-  const wasActive = useRef(active);
-  useEffect(() => {
-    if (active && !wasActive.current) playSound("activate");
-    wasActive.current = active;
-  }, [active]);
-
-  const showSvg = !art["mine-bg"];
   const sceneClass = [
     "mine-diorama",
     compact ? "mine-diorama-compact" : "",
     active ? "is-working" : "is-idle",
-    art["mine-bg"] ? "has-art-bg" : "",
-    art.miner ? "has-art-miner" : "",
-    art.drill ? "has-art-drill" : "",
-    art.cart ? "has-art-cart" : "",
-    art.storage ? "has-art-storage" : "",
+    bgArt ? "has-art-bg" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -418,14 +544,13 @@ export function MineScene({ tier, active = false, compact = false, label, cosmet
     "--diorama-miner-tool": look.minerTool,
     "--diorama-cart-body": look.cartBody,
     "--diorama-cart-wheel": look.cartWheel,
-    "--diorama-art-filter": look.artFilter,
-    // Deeper mines read as bigger: a small, purely decorative zoom that grows with the tier.
-    "--tier-zoom": (1 + (level - 1) * 0.015).toFixed(3),
+    "--diorama-scene-filter": look.sceneFilter,
+    "--diorama-accent": look.accent,
   } as CSSProperties;
 
   return (
     <div className={sceneClass} data-tier={level} style={lookVars} aria-hidden="true">
-      {showSvg && (
+      <div className="diorama-stage">
         <svg className="diorama-svg" viewBox="0 0 320 200" role="presentation" preserveAspectRatio="xMidYMid slice">
           <defs>
             <linearGradient id="diggo-sky" x1="0" y1="0" x2="0" y2="1">
@@ -449,7 +574,7 @@ export function MineScene({ tier, active = false, compact = false, label, cosmet
           ))}
 
           {/* Surface buildings appear once the operation is big enough to need them. */}
-          {Array.from({ length: buildings }, (_, index) => (
+          {Array.from({ length: storages }, (_, index) => (
             <g className="diorama-building" key={"building-" + index}>
               <rect x={10 + index * 30} y={40 - (12 + index * 2)} width={22} height={12 + index * 2} />
               <rect className="diorama-building-roof" x={8 + index * 30} y={40 - (14 + index * 2)} width={26} height={3} />
@@ -523,169 +648,48 @@ export function MineScene({ tier, active = false, compact = false, label, cosmet
           ))}
 
           {/* The crew itself: one miner per layer, spread over the galleries and benches. */}
-          {miners.map((miner, index) => (
-            <g className="diorama-miner" key={"miner-" + index} style={{ animationDelay: (index % 5) * 0.18 + "s" }}>
-              <circle cx={miner.x} cy={miner.y - 8} r={2.6} />
-              <rect x={miner.x - 2.6} y={miner.y - 5} width={5.2} height={7} />
-              <line x1={miner.x + 4} y1={miner.y - 6} x2={miner.x + 9} y2={miner.y - 11} />
-            </g>
-          ))}
+          {Array.from({ length: miners }, (_, index) => {
+            const x = 22 + ((index * 37 + level * 11) % 250);
+            const y = 62 + ((index * 23 + level * 7) % Math.max(1, galleries * 22));
+            return (
+              <g className="diorama-miner" key={"miner-" + index} style={{ animationDelay: (index % 5) * 0.18 + "s" }}>
+                <circle cx={x} cy={y - 8} r={2.6} />
+                <rect x={x - 2.6} y={y - 5} width={5.2} height={7} />
+                <line x1={x + 4} y1={y - 6} x2={x + 9} y2={y - 11} />
+              </g>
+            );
+          })}
         </svg>
-      )}
 
-      {/* The illustrated mine, when public/assets/game has one: it covers the SVG drawing and the
-          SVG is dropped as soon as the image has painted. */}
-      <GameArt
-        name="mine-bg"
-        alt=""
-        width={1672}
-        height={941}
-        className="diorama-art-bg"
-        onAvailable={(available) => markArt("mine-bg", available)}
-      />
-
-      {/* Crew sprites replace the drawn figures when the art exists, and carry the equipped
-          outfit and cart colours as a tint. */}
-      {miners.map((miner, index) => {
-        const spot = sprite(miner.x, miner.y, spriteWidth(6.5), (index % 5) * 0.18 + "s");
-        return (
-          <Sprite
-            key={"sprite-miner-" + index}
-            name="miner"
-            alt=""
-            className="diorama-sprite-miner"
-            left={spot.left}
-            top={spot.top}
-            width={spot.width}
-            delay={spot.delay}
-            tint={look.minerBody}
-            onAvailable={(available) => markArt("miner", available)}
-          />
-        );
-      })}
-      {Array.from({ length: drills }, (_, index) => {
-        const spot = sprite(196 + index * 20, 58 + ((index + 1) % galleries) * 22 + 4, spriteWidth(7));
-        return (
-          <Sprite
-            key={"sprite-drill-" + index}
-            name="drill"
-            alt=""
-            className="diorama-sprite-drill"
-            left={spot.left}
-            top={spot.top}
-            width={spot.width}
-            onAvailable={(available) => markArt("drill", available)}
-          />
-        );
-      })}
-      {Array.from({ length: carts }, (_, index) => {
-        const spot = sprite(28 + index * 34, 58 + (index % galleries) * 22, spriteWidth(7.5));
-        return (
-          <Sprite
-            key={"sprite-cart-" + index}
-            name="cart"
-            alt=""
-            className="diorama-sprite-cart"
-            left={spot.left}
-            top={spot.top}
-            width={spot.width}
-            tint={look.cartBody}
-            onAvailable={(available) => markArt("cart", available)}
-          />
-        );
-      })}
-      {/* Storage is the surface building; the foreman only appears on a large operation. */}
-      {Array.from({ length: buildings }, (_, index) => {
-        const spot = sprite(12 + index * 30, 40, spriteWidth(9));
-        return (
-          <Sprite
-            key={"sprite-storage-" + index}
-            name="storage"
-            alt=""
-            className="diorama-sprite-storage"
-            left={spot.left}
-            top={spot.top}
-            width={spot.width}
-            onAvailable={(available) => markArt("storage", available)}
-          />
-        );
-      })}
-      {level >= 3 && (
-        <Sprite
-          name="foreman"
+        {/* The illustration, when public/assets/game has one: it fills the box and the drawn scene
+            steps aside for it. */}
+        <GameArt
+          name="mine-bg"
           alt=""
-          className="diorama-sprite-foreman"
-          left="46%"
-          top="40%"
-          width={spriteWidth(8)}
+          width={1920}
+          height={1080}
+          className="diorama-art-bg"
+          onAvailable={setBgArt}
         />
-      )}
 
+        {/* The crew: sprites standing on the tunnel floors and the ground line of the illustration. */}
+        {bgArt &&
+          crew.map((spot) => (
+            <GameArt
+              key={spot.key}
+              name={SPRITE_ART[spot.kind].name}
+              alt=""
+              width={768}
+              height={768}
+              className={"diorama-sprite diorama-sprite-" + spot.kind}
+              style={{ left: spot.left, top: spot.top, width: spot.width, animationDelay: spot.delay }}
+            />
+          ))}
+      </div>
+
+      {/* The caption and the shift state sit on the empty sky, clear of the crew and the machines. */}
       {label && <span className="diorama-label">T{level} · {label}</span>}
       {active ? <span className="diorama-shift">SHIFT ACTIVE</span> : <span className="diorama-shift diorama-shift-idle">PAUSED</span>}
     </div>
-  );
-}
-
-/**
- * A single generated sprite placed over the scene. It renders nothing at all when its file is
- * missing, so the SVG figure it stands in for stays visible instead.
- */
-function Sprite({
-  name,
-  alt,
-  className,
-  left,
-  top,
-  width,
-  delay,
-  tint,
-  onAvailable,
-}: {
-  name: string;
-  alt: string;
-  className: string;
-  left: string;
-  top: string;
-  width: string;
-  delay?: string;
-  /** CSS colour painted over the sprite's own silhouette to carry an equipped cosmetic. */
-  tint?: string;
-  onAvailable?(available: boolean): void;
-}) {
-  const [source, setSource] = useState<string | null>(null);
-  const notify = useRef(onAvailable);
-
-  useEffect(() => {
-    notify.current = onAvailable;
-  }, [onAvailable]);
-
-  useEffect(() => {
-    let live = true;
-    void resolveGameArt(name).then((found) => {
-      if (!live) return;
-      setSource(found);
-      notify.current?.(found !== null);
-    });
-    return () => {
-      live = false;
-    };
-  }, [name]);
-
-  if (!source) return null;
-
-  return (
-    <span
-      className={"diorama-sprite " + className}
-      style={{ left, top, width, animationDelay: delay } as CSSProperties}
-    >
-      <GameArt name={name} alt={alt} width={768} height={768} className="diorama-sprite-art" />
-      {tint && (
-        <i
-          className="diorama-sprite-tint"
-          style={{ background: tint, "--sprite-src": 'url("' + source + '")' } as CSSProperties}
-        />
-      )}
-    </span>
   );
 }

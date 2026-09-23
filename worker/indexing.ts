@@ -17,6 +17,7 @@ import {
   keeperDiscoveryReceiptExists,
   keeperGraduateMarket,
   keeperSyncCrewPower,
+  isSyncBehindError,
 } from "./keeper";
 import { settleRewardClaim } from "./mining";
 import { getSolUsd, refreshExternalQuotesSafely } from "./oracle";
@@ -88,6 +89,12 @@ export async function processQueueEvent(event: IndexingEvent, env: RuntimeEnv): 
       // than that far behind refuses claim_rewards/assign_power with SyncBehind until someone calls
       // it - so this tick is what keeps a player's own claim from being blocked by an idle mine.
       // Bounded per tick on purpose: the rest of a long catch-up waits for the next tick.
+      //
+      // Whether the ledger reached the present is also what graduation now depends on: the
+      // program walks the mine itself before it ends the curve phase, and refuses with SyncBehind
+      // while the mine is further behind than one bounded walk can cover. That answer is reacted
+      // to below rather than predicted here: what this tick learned is only whether it finished
+      // the catch-up itself, and the program is the authority on whether that mattered.
       try {
         const advance = await keeperAdvanceMine(env, event.mint);
         if (advance.signatures.length > 0 || !advance.caughtUp) {
@@ -110,6 +117,11 @@ export async function processQueueEvent(event: IndexingEvent, env: RuntimeEnv): 
       // the labelled illustrative constant when no source is fresh (worker/chain.ts). This sample
       // is what the roll path reads, so when the oracle is reachable the conversion is re-done here
       // against the rate that quote itself returned rather than against whatever the sync used.
+      //
+      // The price this samples is the venue's spot price read a moment ago, so a block the mining
+      // ledger just paid out of the curve is already in it: curve-phase emission moves the token
+      // side of the curve exactly where a buy of the same token amount would, and nothing here
+      // adjusts for it.
       const sol = await getSolUsd(env);
       const priceUsd = sol.fromOracle ? token.priceSol * sol.priceUsd : token.priceUsd;
       await recordPriceSample(env, event.mint, priceUsd, await hourlyVolumeUsd(env, event.mint));
@@ -118,13 +130,34 @@ export async function processQueueEvent(event: IndexingEvent, env: RuntimeEnv): 
       // rather than having to trust it alone. Never throws: an aggregator outage must not fail a
       // chain sync.
       await refreshExternalQuotesSafely(env, event.mint, {
-        graduated: token.status !== "LAUNCHING",
+        // Graduation is a venue question, not a status one: a mine whose curve-phase budget is
+        // spent reads CURVE_CAP_REACHED while its market is still on the curve, and it has no
+        // external market for the aggregator to corroborate. Only the pool has one.
+        graduated: chainToken.venue === "pool",
         fetch: typeof fetch === "function" ? fetch : null,
       });
       // Graduation last, so nothing about it can cost this pass its price sample: a market whose
       // curve has reached its target is moved into its locked pool here, and the next pass retries
       // if that fails.
-      await maybeGraduateMarket(env, event.mint, chainToken);
+      const graduated = await maybeGraduateMarket(env, event.mint, chainToken);
+      if (graduated) {
+        // Everything the read above wrote describes the curve: its reserves, its venue and the
+        // price they imply. Graduation has just moved all of that into the pool, so re-read once
+        // and let the row describe the venue that actually holds the liquidity - otherwise the API
+        // serves a curve price and curve reserves for up to five minutes after the pool took them.
+        // A failure here costs only the fresh row, which the next pass re-reads anyway.
+        try {
+          await syncTokenWithVenue(env, event.mint);
+        } catch (error) {
+          console.error(
+            JSON.stringify({
+              event: "chain.graduation_reread_failed",
+              mint: event.mint,
+              error: String(error),
+            }),
+          );
+        }
+      }
     } catch (error) {
       console.error(JSON.stringify({ event: "epoch.sync_failed", mint: event.mint, error: String(error) }));
     }
@@ -204,23 +237,39 @@ export function priceTrade(
  * graduated market or a curve still short of its target — and this only asks when the fresh chain
  * read says there is something to do, so a healthy graduated market costs nothing.
  *
+ * The mine's ledger has to be caught up first. graduate_market walks the mine to the present under
+ * the curve phase before it ends that phase — every block that landed before graduation is paid
+ * out of the curve's own token inventory — and refuses with SyncBehind while the mine is further
+ * behind than one bounded walk can cover.
+ *
+ * That refusal is the program's verdict, and this loop reacts to it rather than predicting it.
+ * This tick has already advanced the mine as far as its call budget allowed, and a SyncBehind
+ * answer defers graduation to the next tick, which advances it again and asks again. Predicting it
+ * off the worker's own model of the ledger is what used to stall: a mine with no power owes
+ * nothing, so the program answers CaughtUp without moving its cursor, and a keeper that read that
+ * untouched cursor as "still behind" deferred every tick and never formed the pool. A wasted
+ * transaction is an acceptable price for never stalling a graduation the program would allow.
+ *
  * A failure is counted and swallowed, never rethrown: the queue consumer retries the whole epoch
  * sync on a throw, and the price sample this pass already wrote is not idempotent, so a retry
  * would add a second identical observation to the robust-price history. The next sync (every five
  * minutes) retries graduation naturally, and until it lands the market simply keeps trading on its
  * curve, which the program still allows.
+ *
+ * Returns whether the market graduated, which is what tells the caller that its own read of the
+ * mine is a pre-graduation one.
  */
 async function maybeGraduateMarket(
   env: RuntimeEnv,
   mint: string,
   token: ChainSyncedToken,
-): Promise<void> {
-  if (!token.graduationReady) return;
+): Promise<boolean> {
+  if (!token.graduationReady) return false;
   try {
     const signature = await keeperGraduateMarket(env, mint);
     if (!signature) {
       await metric(env, "chain.graduation_noop", 1);
-      return;
+      return false;
     }
     await metric(env, "chain.market_graduated", 1);
     console.log(
@@ -231,9 +280,21 @@ async function maybeGraduateMarket(
         solReserve: token.liquidityLamports.toString(),
       }),
     );
+    return true;
   } catch (error) {
+    // The program's own verdict that the mine is still behind: retryable, not a failure. This
+    // tick advanced the mine as far as its budget allowed, so the next tick continues from there
+    // and asks again.
+    if (isSyncBehindError(error)) {
+      await metric(env, "chain.graduation_deferred", 1, { mint, reason: "sync_behind" });
+      console.log(
+        JSON.stringify({ event: "keeper.graduation_deferred", mint, reason: "sync_behind" }),
+      );
+      return false;
+    }
     await metric(env, "chain.graduation_failed", 1);
     console.error(JSON.stringify({ event: "keeper.graduation_failed", mint, error: String(error) }));
+    return false;
   }
 }
 
@@ -390,7 +451,15 @@ export async function settleDiscoveryClaim(env: RuntimeEnv, discoveryId: string)
 export async function queueEpochSync(env: RuntimeEnv): Promise<number> {
   // Every launched mine gets re-read from chain — including pre-graduation LAUNCHING mines,
   // whose bonding-curve price moves with every buy/sell just as much as a graduated one's.
-  const result = await env.DB.prepare("SELECT mint FROM tokens WHERE status != 'FULLY_MINED'").all<{
+  //
+  // A market that is still on its curve is always re-read, whatever its mining status says:
+  // this pass is also the only thing that notices a curve that has reached its graduation
+  // target, and an idle mine waiting for exactly that graduation is the state most likely to be
+  // skipped. FULLY_MINED only ever excludes a mine the program itself has finished — a spent
+  // Mining Reserve after graduation — which has nothing left to re-read.
+  const result = await env.DB.prepare(
+    "SELECT mint FROM tokens WHERE status != 'FULLY_MINED' OR venue != 'pool'",
+  ).all<{
     mint: string;
   }>();
   const timestamp = Date.now();

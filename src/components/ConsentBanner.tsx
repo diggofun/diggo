@@ -1,15 +1,17 @@
 /**
  * Consent banner for non-essential storage (src/components/legal/consent.ts).
  *
- * Two decisions, no dark patterns: "Essential only" is as prominent as "Allow analytics", both
- * are one click, and neither is hidden behind a settings dialog. Analytics does not start until
- * "Allow analytics" is chosen (src/analytics.ts) and stops again on the next load after a
- * withdrawal, which the legal pages can trigger through requestConsentBanner().
+ * A compact corner card: two one-click decisions, no dark patterns, and a close button for a player
+ * who has read enough. "Essential only" and the close button record the same decision, because
+ * dismissing a notice is not consent, and "Allow analytics" is the only route to PostHog
+ * (src/analytics.ts). A withdrawal from the Cookie & Storage Notice reopens the card through
+ * requestConsentBanner().
  *
  * This banner is not what makes the site work: the session cookie, the random anti-abuse device id
  * and the record of the choice itself are essential and disclosed in the Cookie & Storage Notice.
  */
 import { useCallback, useEffect, useState, type ReactElement } from "react";
+import { X } from "lucide-react";
 import {
   CONSENT_OPEN_EVENT,
   readConsent,
@@ -31,6 +33,13 @@ export function ConsentBanner(): ReactElement | null {
     return () => window.removeEventListener(CONSENT_OPEN_EVENT, open);
   }, []);
 
+  // The card floats over the page (styles.css), so the page keeps room for it while it is up and no
+  // call to action ends up underneath it.
+  useEffect(() => {
+    document.body.classList.toggle("has-consent", visible);
+    return () => document.body.classList.remove("has-consent");
+  }, [visible]);
+
   const decide = useCallback((decision: ConsentDecision) => {
     recordConsent(decision);
     setCurrent(decision);
@@ -40,14 +49,20 @@ export function ConsentBanner(): ReactElement | null {
   if (!visible) return null;
 
   return (
-    <div role="region" aria-label="Cookies and storage" className="consent-banner">
+    <aside role="region" aria-label="Cookies and storage" className="consent-banner">
+      <button
+        type="button"
+        className="consent-dismiss"
+        aria-label="Dismiss — essential storage only"
+        onClick={() => decide("essential")}
+      >
+        <X size={14} />
+      </button>
       <div>
         <strong className="consent-banner-title">Cookies and storage</strong>
         <p className="consent-copy">
-          Diggo needs a session cookie, a random device id for anti-abuse, and remembers your
-          settings. Analytics is off unless you allow it: nothing is sent to PostHog before that.
-          Details are in the <a href="/cookies">Cookie &amp; Storage Notice</a>,{" "}
-          <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms of Service</a>.
+          A session cookie and a random device id keep Diggo working. Analytics is off unless you
+          allow it. The <a href="/cookies">Cookie &amp; Storage Notice</a> has the detail.
           {current !== null && (
             <>
               {" "}
@@ -65,6 +80,7 @@ export function ConsentBanner(): ReactElement | null {
           Essential only
         </button>
       </div>
-    </div>
+    </aside>
   );
 }
+
