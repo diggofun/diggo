@@ -163,6 +163,21 @@ export function canDiscover(state: RewardState): boolean {
   return state === "NORMAL";
 }
 
+/**
+ * What the score alone asks the gate to do with an action, with no operator restriction and no
+ * enforcement decision applied. The gate needs the two separated: in shadow mode it records
+ * "block"/"hold"/"challenge" without acting on them (spec 63), and only the operator's own
+ * restrictions keep their full weight.
+ */
+export type ScoreRefusal = "none" | "challenge" | "hold" | "block";
+
+export function scoreRefusal(state: RewardState): ScoreRefusal {
+  if (state === "BLOCKED") return "block";
+  if (state === "HELD") return "hold";
+  if (state === "UNDER_REVIEW") return "challenge";
+  return "none";
+}
+
 /** Neutral, detail-free status copy (spec 62). No score, weights or reasons. */
 export function publicRiskView(state: RewardState, config: DiggoConfig = DIGGO_CONFIG): PublicRiskView {
   const status: PublicRiskView["status"] =
@@ -218,4 +233,3 @@ export function mineTrust(input: TrustInput, config: DiggoConfig = DIGGO_CONFIG)
     absenceOfAbuse * trust.weights.absenceOfAbuse;
   return clampScore(blended * 100);
 }
-

@@ -4,12 +4,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DIGGO_CONFIG } from "../../shared/config";
-import { RISK_OPS } from "../../shared/riskOps";
+import { RISK_OPS, createRiskOpsConfig } from "../../shared/riskOps";
 import { createChallenge, verifyWallet } from "../auth";
 import { breakerAudit, isBreakerOpen, setBreaker } from "../breakers";
 import { gateAction, refreshAccountRisk, riskCron, verifyChallenge } from "../risk";
 import { AccountCreationDenied, getOrCreatePlayer } from "../player";
-import { fingerprintRequest, setRestriction } from "../signals";
+import { type RequestFingerprint, fingerprintRequest, setRestriction } from "../signals";
 import {
   countRows,
   createTestEnv,
@@ -25,8 +25,31 @@ const MINE = "4rT8mQ2vN6kY3cW9pF1sJ7aB5eH8uL2xG6zP9diggo";
 const OTHER_MINE = "9xK2hM7qT4vB8nP6sR3wY5cF1aG7uJ2eL8mN4diggo";
 const BREAKER_MESSAGE = "Rewards are temporarily paused. Please try again later.";
 
+/**
+ * Launch default is shadow enforcement (spec 63), so anything that wants to assert what the score
+ * *does* to an account has to ask for enforce mode explicitly. Keeping both configs side by side is
+ * what makes the difference between "recorded" and "applied" testable.
+ */
+const ENFORCE_OPS = createRiskOpsConfig({ enforcement: { mode: "enforce" } });
+
+/**
+ * Every test in this file runs on a frozen clock.
+ *
+ * Rate limits are counted in fixed buckets keyed by floor(now / windowSeconds), so a test that ran
+ * across a bucket boundary would see its counters reset halfway through and then assert a different
+ * number depending on when CI happened to start it. Freezing the clock makes the buckets - and the
+ * exact counts these tests assert - deterministic.
+ */
+const FROZEN_NOW_MS = 1_767_225_600_000;
+const FROZEN_NOW = Math.floor(FROZEN_NOW_MS / 1_000);
+
+function freezeClock(): void {
+  vi.useFakeTimers();
+  vi.setSystemTime(FROZEN_NOW_MS);
+}
+
 function nowSeconds(): number {
-  return Math.floor(Date.now() / 1_000);
+  return FROZEN_NOW;
 }
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -37,12 +60,14 @@ describe("risk gate", () => {
   let test: TestEnv;
 
   beforeEach(() => {
+    freezeClock();
     test = createTestEnv();
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     test.close();
   });
@@ -217,6 +242,7 @@ describe("risk gate", () => {
     });
 
     it("classifies a 300-wallet device cluster as HIGH and holds rewards without banning", async () => {
+      // Enforce mode: this is the escalation path itself, so the score's verdict has to be applied.
       const target = newWallet().wallet;
       const request = makeRequest({ device: "farm-rig-300", ip: "198.51.100.30" });
       const fingerprint = await fingerprintRequest(test.env, request);
@@ -240,13 +266,13 @@ describe("risk gate", () => {
         ts: bucketStart + 299,
       });
 
-      const risk = await refreshAccountRisk(test.env, target, { fingerprint });
+      const risk = await refreshAccountRisk(test.env, target, { fingerprint, config: ENFORCE_OPS });
       expect(risk.level).toBe("HIGH");
       expect(risk.rewardState).toBe("HELD");
       expect(risk.flags.strong.length).toBeGreaterThanOrEqual(3);
       expect(risk.flags.response).not.toBe("ban");
 
-      const discovery = await gateAction(test.env, { wallet: target, request, action: "discovery_roll" });
+      const discovery = await gateAction(test.env, { wallet: target, request, action: "discovery_roll" }, { config: ENFORCE_OPS });
       expect(discovery.allowed).toBe(false);
       expect(discovery.challengeRequired).toBe(false);
       expect(discovery.rewardState).toBe("HELD");
@@ -255,7 +281,7 @@ describe("risk gate", () => {
       expect(discovery.publicMessage).not.toMatch(/[0-9]/);
 
       // Mining accounting keeps running for a held account (spec 53).
-      const activation = await gateAction(test.env, { wallet: target, request, action: "activate" });
+      const activation = await gateAction(test.env, { wallet: target, request, action: "activate" }, { config: ENFORCE_OPS });
       expect(activation.allowed).toBe(true);
 
       // The gameplay modules read players.risk_state, so it has to be in sync.
@@ -398,15 +424,226 @@ describe("risk gate", () => {
   });
 });
 
+describe("enforcement modes (spec 63)", () => {
+  let test: TestEnv;
+
+  beforeEach(() => {
+    freezeClock();
+    test = createTestEnv();
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    test.close();
+  });
+
+  /** The 300-wallet farm cluster that reliably scores HIGH, rebuilt per test. */
+  function seedFarmCluster(target: string, fingerprint: RequestFingerprint, now: number): void {
+    const bucketStart = now - 600 - ((now - 600) % RISK_OPS.synchronyBucketSeconds);
+    for (let index = 0; index < 299; index += 1) {
+      const wallet = "farm-wallet-" + index;
+      seedPlayer(test, wallet, { createdAt: now - 3_600, activeMint: MINE });
+      seedSignal(test, {
+        wallet,
+        deviceHash: fingerprint.deviceHash,
+        networkHash: fingerprint.networkHash,
+        ts: bucketStart + index,
+      });
+    }
+    seedPlayer(test, target, { createdAt: now - 3_600, activeMint: MINE });
+    seedSignal(test, {
+      wallet: target,
+      deviceHash: fingerprint.deviceHash,
+      networkHash: fingerprint.networkHash,
+      ts: bucketStart + 299,
+    });
+  }
+
+  it("records a score refusal instead of acting on it while the mode shadows", async () => {
+    const target = newWallet().wallet;
+    const request = makeRequest({ device: "shadow-farm", ip: "198.51.100.44" });
+    const fingerprint = await fingerprintRequest(test.env, request);
+    const now = nowSeconds();
+    seedFarmCluster(target, fingerprint, now);
+
+    const risk = await refreshAccountRisk(test.env, target, { fingerprint, now });
+    // The score still reaches its verdict, and it is still recorded in full.
+    expect(risk.level).toBe("HIGH");
+    expect(risk.computedState).toBe("HELD");
+    expect(risk.flags.strong.length).toBeGreaterThanOrEqual(3);
+    expect(risk.flags.shadowed).toBe(true);
+    // Nothing is enforced, so nothing is stored as enforced either - including the copy of the
+    // state that every gameplay module reads.
+    expect(risk.rewardState).toBe("NORMAL");
+    const stored = test.db.prepare("SELECT reward_state, computed_state FROM account_risk WHERE wallet = ?").get(target) as
+      | { reward_state: string; computed_state: string }
+      | undefined;
+    expect(stored?.reward_state).toBe("NORMAL");
+    expect(stored?.computed_state).toBe("HELD");
+    const player = test.db.prepare("SELECT risk_state FROM players WHERE wallet = ?").get(target) as
+      | { risk_state: string }
+      | undefined;
+    expect(player?.risk_state).toBe("NORMAL");
+
+    const discovery = await gateAction(test.env, { wallet: target, request, action: "discovery_roll" }, { now });
+    expect(discovery.allowed).toBe(true);
+    expect(discovery.challengeRequired).toBe(false);
+    expect(discovery.rewardState).toBe("NORMAL");
+    expect(discovery.shadowState).toBe("HELD");
+    // Neutral: the shadow verdict must not leak into anything the caller can show a player.
+    expect(discovery.publicMessage).toBeUndefined();
+
+    // The decision is reviewable: one signal row and one counter, both named for what they are.
+    expect(
+      countRows(
+        test.db,
+        "SELECT COUNT(*) AS n FROM account_signals WHERE wallet = ?1 AND outcome = 'shadow_would_block'",
+        target,
+      ),
+    ).toBe(1);
+    expect(
+      countRows(test.db, "SELECT COUNT(*) AS n FROM metrics_counters WHERE name = 'risk.shadow_would_block'"),
+    ).toBe(1);
+  });
+
+  it("blocks the same action once the mode says enforce", async () => {
+    const target = newWallet().wallet;
+    const request = makeRequest({ device: "enforced-farm", ip: "198.51.100.45" });
+    const fingerprint = await fingerprintRequest(test.env, request);
+    const now = nowSeconds();
+    seedFarmCluster(target, fingerprint, now);
+
+    const risk = await refreshAccountRisk(test.env, target, { fingerprint, now, config: ENFORCE_OPS });
+    expect(risk.rewardState).toBe("HELD");
+    expect(risk.computedState).toBe("HELD");
+    expect(risk.flags.shadowed).toBe(false);
+
+    const discovery = await gateAction(
+      test.env,
+      { wallet: target, request, action: "discovery_roll" },
+      { config: ENFORCE_OPS, now },
+    );
+    expect(discovery.allowed).toBe(false);
+    expect(discovery.rewardState).toBe("HELD");
+    expect(discovery.publicMessage).toBe(DIGGO_CONFIG.risk.publicStatus.HELD);
+    expect(discovery.shadowState).toBeUndefined();
+    // The observation count stays at zero: nothing was shadowed, so nothing is recorded as such.
+    expect(
+      countRows(test.db, "SELECT COUNT(*) AS n FROM account_signals WHERE outcome = 'shadow_would_block'"),
+    ).toBe(0);
+  });
+
+  it("lets one action be enforced by override while the default keeps shadowing", async () => {
+    const staged = createRiskOpsConfig({ enforcement: { overrides: { discovery_roll: "enforce" } } });
+    const target = newWallet().wallet;
+    const request = makeRequest({ device: "staged-farm", ip: "198.51.100.46" });
+    const fingerprint = await fingerprintRequest(test.env, request);
+    const now = nowSeconds();
+    seedFarmCluster(target, fingerprint, now);
+    await refreshAccountRisk(test.env, target, { fingerprint, now, config: staged });
+
+    const discovery = await gateAction(
+      test.env,
+      { wallet: target, request, action: "discovery_roll" },
+      { config: staged, now },
+    );
+    expect(discovery.allowed).toBe(false);
+    expect(discovery.rewardState).toBe("HELD");
+
+    // The very same account, one action over. A real-value claim is held whatever the mode says
+    // (spec 53, 63): holding is reversible and destroys nothing, so it is the one score-derived
+    // response that is never shadowed - which is what keeps an undetected farm from draining real
+    // tokens before an operator has looked at it (spec 64).
+    const claim = await gateAction(
+      test.env,
+      { wallet: target, request, action: "claim_reward" },
+      { config: staged, now },
+    );
+    expect(claim.allowed).toBe(false);
+    expect(claim.challengeRequired).toBe(false);
+    expect(claim.rewardState).toBe("HELD");
+    expect(claim.shadowState).toBeUndefined();
+    expect(claim.publicMessage).toBe(DIGGO_CONFIG.risk.publicStatus.HELD);
+
+    // The launch default (shadow everywhere) holds the same claim for the same reason.
+    const shadowClaim = await gateAction(
+      test.env,
+      { wallet: target, request, action: "claim_reward" },
+      { config: RISK_OPS, now },
+    );
+    expect(shadowClaim.allowed).toBe(false);
+    expect(shadowClaim.rewardState).toBe("HELD");
+  });
+
+  it("still enforces rate limits, breakers and an operator restriction while shadowing", async () => {
+    const account = newWallet().wallet;
+    seedPlayer(test, account);
+    const request = makeRequest({ device: "hard-safety", ip: "203.0.113.90" });
+
+    // An operator restriction is not a score decision, so shadow mode does not touch it.
+    await setRestriction(test.env, {
+      wallet: account,
+      kind: "CLAIM_HOLD",
+      reasonCode: "operator_review",
+      createdBy: "admin-wallet",
+    });
+    const held = await gateAction(test.env, { wallet: account, request, action: "claim_reward" });
+    expect(held.allowed).toBe(false);
+    expect(held.rewardState).toBe("HELD");
+    expect(held.shadowState).toBeUndefined();
+    await setRestriction(test.env, {
+      wallet: account,
+      kind: "ACCOUNT_BLOCK",
+      reasonCode: "operator_block",
+      createdBy: "admin-wallet",
+    });
+    const blocked = await gateAction(test.env, { wallet: account, request, action: "activate" });
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.rewardState).toBe("BLOCKED");
+
+    // So is a circuit breaker, and so is a rate limit.
+    const breakerAccount = newWallet().wallet;
+    seedPlayer(test, breakerAccount);
+    await setBreaker(test.env, { scope: "discoveries", open: true, reason: "manual_test", actor: "admin-wallet" });
+    const halted = await gateAction(test.env, {
+      wallet: breakerAccount,
+      request: makeRequest({ device: "hard-safety-breaker", ip: "203.0.113.92" }),
+      action: "discovery_roll",
+    });
+    expect(halted.allowed).toBe(false);
+    expect(halted.publicMessage).toBe(BREAKER_MESSAGE);
+    await setBreaker(test.env, { scope: "discoveries", open: false, reason: "manual_test_done", actor: "admin-wallet" });
+
+    const tight = createRiskOpsConfig({ rateLimits: { activate: { wallet: 1 } } });
+    const second = newWallet().wallet;
+    seedPlayer(test, second);
+    const budgetRequest = makeRequest({ device: "tight-budget", ip: "203.0.113.91" });
+    expect((await gateAction(test.env, { wallet: second, request: budgetRequest, action: "activate" }, { config: tight })).allowed).toBe(true);
+    const exhausted = await gateAction(
+      test.env,
+      { wallet: second, request: budgetRequest, action: "activate" },
+      { config: tight },
+    );
+    expect(exhausted.allowed).toBe(false);
+    expect(exhausted.retryAfterSec).toBeGreaterThan(0);
+  });
+});
+
+
 describe("account creation gate (spec 48, 58)", () => {
   let test: TestEnv;
 
   beforeEach(() => {
+    freezeClock();
     test = createTestEnv();
     vi.spyOn(console, "log").mockImplementation(() => undefined);
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     test.close();
   });

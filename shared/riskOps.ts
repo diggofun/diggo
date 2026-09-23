@@ -11,7 +11,13 @@
  * returned to a client (spec 62). Only neutral copy is public.
  */
 
-import { DIGGO_CONFIG, type DeepPartial, deepFreeze, type RiskSignalName } from "./config";
+import {
+  DIGGO_CONFIG,
+  type DeepPartial,
+  type RewardState,
+  deepFreeze,
+  type RiskSignalName,
+} from "./config";
 import type { RiskSignals } from "./risk";
 
 /** Every action the risk gate can gate (see gateAction in worker/risk.ts). */
@@ -24,6 +30,71 @@ export type GatedActionKey =
   | "crew_upgrade"
   | "auth"
   | "bootstrap";
+
+/**
+ * How the gate treats a *score-derived* refusal (spec 63).
+ *
+ * "shadow" is the launch default: the gate still computes and records every decision it would
+ * have made, but only hard safety (replay, rate limits, circuit breakers and an admin's own
+ * block) actually stops anybody. That way a false positive costs an operator a row in
+ * account_signals instead of a real player a blocked claim, and enforcing is one config change
+ * away once the observed decisions have been reviewed.
+ *
+ * "enforce" is the classic behaviour: the score's response is applied progressively.
+ */
+export type EnforcementMode = "shadow" | "enforce";
+
+/**
+ * Why a gated action was refused, in the gate's own vocabulary. Hard refusals are the ones that
+ * hold in every enforcement mode; the score-derived ones are what shadow mode observes.
+ */
+export type GateRefusalKind =
+  | "replay"
+  | "rate_limit"
+  | "breaker"
+  | "admin_block"
+  | "admin_hold"
+  | "admin_challenge"
+  | "score_block"
+  | "score_hold"
+  | "score_challenge";
+
+/** A refusal that is enforced regardless of risk.enforcement.mode. */
+export const HARD_REFUSALS: readonly GateRefusalKind[] = [
+  "replay",
+  "rate_limit",
+  "breaker",
+  "admin_block",
+  "admin_hold",
+  "admin_challenge",
+];
+
+export function isHardRefusal(kind: GateRefusalKind): boolean {
+  return HARD_REFUSALS.includes(kind);
+}
+
+export interface EnforcementConfig {
+  /** Global default. "shadow" for launch, so nothing is blocked on a score alone. */
+  mode: EnforcementMode;
+  /**
+   * Per-action overrides, for the staged rollout: an action may enforce while the default
+   * shadows, or the other way round. Actions not listed follow mode.
+   */
+  overrides: Readonly<Partial<Record<GatedActionKey, EnforcementMode>>>;
+}
+
+/** Shape of an enforcement decision, kept pure so the gate stays a thin wrapper around it. */
+export interface EnforcementDecision {
+  action: GatedActionKey | null;
+  mode: EnforcementMode;
+  kind: GateRefusalKind;
+  /** True when the refusal holds even in shadow mode. */
+  hard: boolean;
+  /** True when the gate must refuse the action. */
+  enforced: boolean;
+  /** True when the gate would have refused, but shadow mode let it through. */
+  shadowed: boolean;
+}
 
 /**
  * Gating is always keyed on several dimensions at once, never on IP alone (spec 48, 51):
@@ -57,6 +128,92 @@ export interface ChallengeConfig {
 }
 
 export type AlertSeverity = "info" | "warning" | "critical";
+
+export type AppealStatus = "OPEN" | "ACCEPTED" | "REJECTED";
+export type AppealResolution = "accepted" | "rejected";
+
+export const APPEAL_STATUSES: readonly AppealStatus[] = ["OPEN", "ACCEPTED", "REJECTED"];
+export const APPEAL_RESOLUTIONS: readonly AppealResolution[] = ["accepted", "rejected"];
+
+/** The reward states a player may appeal from. A NORMAL account has nothing to appeal about. */
+export const APPEAL_STATES: readonly RewardState[] = ["HELD", "UNDER_REVIEW", "BLOCKED"];
+
+export function appealEligible(state: RewardState): boolean {
+  return APPEAL_STATES.includes(state);
+}
+
+export function appealStatusFor(resolution: AppealResolution): AppealStatus {
+  return resolution === "accepted" ? "ACCEPTED" : "REJECTED";
+}
+
+/** Shortest and longest appeal a player may file. Kept in one place so copy cannot drift. */
+export const APPEAL_MIN_MESSAGE_LENGTH = 20;
+export const APPEAL_MAX_MESSAGE_LENGTH = 2_000;
+export const APPEAL_MAX_NOTE_LENGTH = 500;
+
+/**
+ * Player appeals (spec 53, 62). An appeal is how a real player asks a *person* to look again at
+ * a hold. It is a request for review and nothing more: submitting one cannot lift a restriction,
+ * change a reward state or move value, and the answer a player sees is neutral copy with no
+ * score, weight or reason in it (spec 62).
+ */
+export interface AppealConfig {
+  minMessageLength: number;
+  maxMessageLength: number;
+  /** Body size refused before anything is parsed. */
+  maxBodyBytes: number;
+  /** Independent rate-limit dimensions; every one of them must have budget (spec 48, 51). */
+  windowSeconds: number;
+  wallet: number;
+  session: number;
+  ip: number;
+  device: number;
+  network: number;
+  /** Open appeals one account may have at the same time. */
+  maxOpenPerAccount: number;
+  /** Longest admin resolution note that is stored. */
+  maxNoteLength: number;
+  publicMessage: string;
+  notEligibleMessage: string;
+  tooManyMessage: string;
+  invalidMessage: string;
+  /** Neutral status copy per appeal status; never a reason or a score. */
+  statusMessages: Readonly<Record<AppealStatus, string>>;
+}
+
+export type AdminStepUpAction =
+  | "restriction.set"
+  | "restriction.lift"
+  | "breaker.open"
+  | "breaker.close"
+  | "appeal.resolve";
+
+export const ADMIN_STEP_UP_ACTIONS: readonly AdminStepUpAction[] = [
+  "restriction.set",
+  "restriction.lift",
+  "breaker.open",
+  "breaker.close",
+  "appeal.resolve",
+];
+
+/**
+ * Admin step-up (spec 65, 67). An admin session alone is not enough to mutate anything: every
+ * mutating admin call also has to carry a fresh wallet signature over that exact action and
+ * payload, so a stolen or replayed session cookie, or a request replayed from a log, cannot
+ * place a restriction, flip a breaker or resolve an appeal.
+ */
+export interface AdminStepUpConfig {
+  /** How long one signed step-up stays usable. Deliberately short: it authorises one mutation. */
+  ttlSeconds: number;
+  /** Largest canonical payload that may be bound to a nonce. */
+  maxPayloadBytes: number;
+  /** The actions that require a signature. */
+  actions: readonly AdminStepUpAction[];
+}
+
+export function isAdminStepUpAction(value: unknown): value is AdminStepUpAction {
+  return typeof value === "string" && (ADMIN_STEP_UP_ACTIONS as readonly string[]).includes(value);
+}
 
 /** The alert-ready metric set of spec 66. */
 export interface AlertMetricSnapshot {
@@ -110,6 +267,12 @@ export interface BreakerThresholdConfig {
 export interface RiskOpsConfig {
   rateLimits: Readonly<Record<GatedActionKey, ActionRateLimitConfig>>;
   challenge: ChallengeConfig;
+  /** Whether a score-derived refusal is applied or only recorded (spec 63). */
+  enforcement: EnforcementConfig;
+  /** Reward holds: the one score-derived response that is never shadowed (spec 53, 63). */
+  claimHold: ClaimHoldConfig;
+  appeals: AppealConfig;
+  adminStepUp: AdminStepUpConfig;
   /** Window used for device/network cluster counting. */
   clusterWindowSeconds: number;
   /** Window used for burst and claim counting. */
@@ -128,6 +291,53 @@ export interface RiskOpsConfig {
   cronRefreshLimit: number;
   alerts: readonly AlertRule[];
   breakers: BreakerThresholdConfig;
+}
+
+/**
+ * Reward holding (spec 53, 63, 64).
+ *
+ * A hold is the one score-derived response that is applied in *every* enforcement mode, shadow
+ * mode included, because holding is non-destructive: mining accounting keeps running, the tokens
+ * stay in the mine's program-controlled Mining Reserve, and a cleared account still owns everything
+ * it accrued. What a hold stops is the *release* of real tokens to an account the score is still
+ * unsure about. That is exactly what spec 53 asks for (mining accounting may keep being observed,
+ * withdrawal/claim may be suspended) and what spec 64 wants bounded (a bot nobody caught must not
+ * be able to do much damage).
+ *
+ * Friction stays governed by the enforcement mode: a hold never adds a challenge, never changes an
+ * activation outcome and never touches a discovery roll's parameters.
+ */
+export interface ClaimHoldConfig {
+  /** Reward states whose real-value claims are parked instead of released. */
+  states: readonly RewardState[];
+  /** The actions a hold applies to: real-value claims only. */
+  actions: readonly GatedActionKey[];
+}
+
+export const DEFAULT_CLAIM_HOLD: ClaimHoldConfig = {
+  states: ["UNDER_REVIEW", "HELD", "BLOCKED"],
+  actions: ["claim_reward", "claim_discovery"],
+};
+
+/**
+ * Whether one action on one account has to be held rather than released. Pure, so the gate, the
+ * claim handlers and the economy simulation all apply the same rule.
+ */
+export function claimHoldApplies(
+  computed: RewardState,
+  action: GatedActionKey,
+  config: RiskOpsConfig = RISK_OPS,
+): boolean {
+  return config.claimHold.states.includes(computed) && config.claimHold.actions.includes(action);
+}
+
+/** The state a hold parks a claim under, which is the account's computed state (spec 53). */
+export function claimHoldState(
+  computed: RewardState,
+  action: GatedActionKey,
+  config: RiskOpsConfig = RISK_OPS,
+): RewardState | null {
+  return claimHoldApplies(computed, action, config) ? computed : null;
 }
 
 export const RISK_OPS_DEFAULTS: RiskOpsConfig = {
@@ -151,6 +361,51 @@ export const RISK_OPS_DEFAULTS: RiskOpsConfig = {
     heldActions: ["activate", "auth", "bootstrap", "switch_mine", "crew_upgrade"],
     publicMessage: "Additional verification required.",
     challengeMessage: "Additional verification required.",
+  },
+  // Launch default (spec 63): the gate keeps deciding and recording, while only hard safety is
+  // enforced. A score cannot stop a real player until an operator has reviewed what it would
+  // have done.
+  enforcement: {
+    mode: "shadow",
+    overrides: {},
+  },
+  // Reward holds are enforced whatever the mode says (spec 53, 63): they cost a suspect account
+  // nothing it cannot get back, and they are what keeps an undetected farm from draining real
+  // tokens before an operator has looked at it (spec 64).
+  claimHold: DEFAULT_CLAIM_HOLD,
+  appeals: {
+    minMessageLength: APPEAL_MIN_MESSAGE_LENGTH,
+    maxMessageLength: APPEAL_MAX_MESSAGE_LENGTH,
+    maxBodyBytes: 8_192,
+    windowSeconds: 3_600,
+    // Appeals are rare and deliberate, so the wallet budget is small. The IP budget stays
+    // generous: a household, dorm or office behind one address has to stay able to appeal.
+    wallet: 3,
+    session: 3,
+    ip: 12,
+    device: 6,
+    network: 20,
+    maxOpenPerAccount: 3,
+    maxNoteLength: APPEAL_MAX_NOTE_LENGTH,
+    publicMessage: "Your appeal has been received. A person reviews every appeal.",
+    notEligibleMessage: "There is nothing under review for this account right now.",
+    tooManyMessage: "Too many appeals. Please wait before trying again.",
+    invalidMessage:
+      "Please describe your situation in " +
+      APPEAL_MIN_MESSAGE_LENGTH +
+      " to " +
+      APPEAL_MAX_MESSAGE_LENGTH +
+      " characters.",
+    statusMessages: {
+      OPEN: "Your appeal is waiting for review.",
+      ACCEPTED: "Your appeal was reviewed and accepted.",
+      REJECTED: "Your appeal was reviewed and no change was made.",
+    },
+  },
+  adminStepUp: {
+    ttlSeconds: 120,
+    maxPayloadBytes: 16_384,
+    actions: ADMIN_STEP_UP_ACTIONS,
   },
   clusterWindowSeconds: 86_400,
   burstWindowSeconds: 3_600,
@@ -226,6 +481,64 @@ export function rateLimitDimensions(limits: ActionRateLimitConfig): readonly { d
 }
 
 // --- signal aggregation -----------------------------------------------------------------
+
+// --- enforcement decisions --------------------------------------------------------------
+
+/** The enforcement mode that governs one action: its override, or the global default. */
+export function enforcementModeFor(
+  action: GatedActionKey,
+  config: RiskOpsConfig = RISK_OPS,
+): EnforcementMode {
+  return config.enforcement.overrides[action] ?? config.enforcement.mode;
+}
+
+/**
+ * Turns a refusal into a decision. Hard safety is enforced in every mode; a score-derived
+ * refusal is enforced only when the action's mode says so, and is otherwise left to be recorded
+ * as a shadow decision (spec 63). Reward holds do not come through here: they are decided by
+ * claimHoldApplies() and applied in every mode, because holding a claim is reversible.
+ */
+export function enforcementDecision(
+  kind: GateRefusalKind,
+  action: GatedActionKey | null,
+  config: RiskOpsConfig = RISK_OPS,
+): EnforcementDecision {
+  const mode = action === null ? config.enforcement.mode : enforcementModeFor(action, config);
+  const hard = isHardRefusal(kind);
+  const enforced = hard || mode === "enforce";
+  return { action, mode, kind, hard, enforced, shadowed: !hard && !enforced };
+}
+
+/**
+ * The state the gate persists onto account_risk/players and that every gameplay module reads.
+ * In shadow mode a score-derived state is not a state at all: it is an observation, so the
+ * stored state stays NORMAL while the computed one is kept beside it for review.
+ */
+export function enforcedRewardState(
+  computed: RewardState,
+  config: RiskOpsConfig = RISK_OPS,
+): { state: RewardState; shadowed: boolean } {
+  if (config.enforcement.mode === "enforce") return { state: computed, shadowed: false };
+  return { state: "NORMAL", shadowed: computed !== "NORMAL" };
+}
+
+/**
+ * Canonical JSON: object keys sorted, undefined-valued keys dropped. An admin step-up signature
+ * binds this exact string, so the same payload signed by the client always hashes to the same
+ * value on the server, whatever order the fields arrived in.
+ */
+export function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return "[" + value.map((entry) => canonicalJson(entry)).join(",") + "]";
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  return (
+    "{" +
+    entries.map(([key, entry]) => JSON.stringify(key) + ":" + canonicalJson(entry)).join(",") +
+    "}"
+  );
+}
 
 /**
  * Raw cluster/behaviour counts read from account_signals (worker/signals.ts) for one wallet.

@@ -10,6 +10,7 @@ import {
   rewardStateFor,
   riskLevel,
   riskResponse,
+  scoreRefusal,
   type RiskSignals,
 } from "./risk";
 
@@ -18,6 +19,24 @@ function signals(name: RiskSignalName, raw: number): RiskSignals {
   value[name] = raw;
   return value;
 }
+
+describe("score-derived refusals", () => {
+  it("names what the score asks for, separately from what an operator decided", () => {
+    expect(scoreRefusal("NORMAL")).toBe("none");
+    expect(scoreRefusal("UNDER_REVIEW")).toBe("challenge");
+    expect(scoreRefusal("HELD")).toBe("hold");
+    expect(scoreRefusal("BLOCKED")).toBe("block");
+  });
+
+  it("escalates in the same order the reward states do", () => {
+    // "none" < "challenge" < "hold" < "block": the gate relies on this being the state order.
+    const order = ["none", "challenge", "hold", "block"];
+    expect(order.indexOf(scoreRefusal("NORMAL"))).toBeLessThan(order.indexOf(scoreRefusal("UNDER_REVIEW")));
+    expect(order.indexOf(scoreRefusal("UNDER_REVIEW"))).toBeLessThan(order.indexOf(scoreRefusal("HELD")));
+    expect(order.indexOf(scoreRefusal("HELD"))).toBeLessThan(order.indexOf(scoreRefusal("BLOCKED")));
+  });
+});
+
 
 const ALL_SIGNALS = Object.keys(DIGGO_CONFIG.risk.signals) as RiskSignalName[];
 
