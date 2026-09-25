@@ -74,10 +74,11 @@ export const LAMPORTS_PER_SOL = 1_000_000_000;
 
 export interface ChainEnv {
   SOLANA_CLUSTER?: string;
+  CHAIN_MODE?: string;
   DIGGO_RPC_URL?: string;
   /** Comma-separated fallback RPC endpoints, tried after DIGGO_RPC_URL. */
   DIGGO_RPC_URLS?: string;
-  DIGGO_PROGRAM_ID: string;
+  DIGGO_PROGRAM_ID?: string;
   /** Present in deployed and local Wrangler runtimes when the version_metadata binding exists. */
   CF_VERSION_METADATA?: { id: string; tag: string; timestamp: string };
 }
@@ -93,7 +94,7 @@ export class ChainConfigurationError extends Error {
 
 export interface ResolvedChainConfig {
   cluster: SolanaCluster;
-  programId: Address;
+  programId: Address | null;
   rpcUrl: string;
   rpcUrls: string[];
 }
@@ -194,14 +195,18 @@ export function resolveChainConfig(env: ChainEnv, options: { deployed?: boolean 
     throw new ChainConfigurationError("SOLANA_CLUSTER must be explicitly set to devnet or mainnet-beta");
   }
 
-  const programId = env.DIGGO_PROGRAM_ID?.trim();
-  if (!programId || !isValidBase58Address(programId)) {
-    throw new ChainConfigurationError("DIGGO_PROGRAM_ID must be a valid 32-byte base58 address");
+  const chainMode = env.CHAIN_MODE?.trim().toLowerCase() === "meteora" ? "meteora" : "native";
+  const programIdValue = env.DIGGO_PROGRAM_ID?.trim() ?? "";
+  if (chainMode === "native" && !isValidBase58Address(programIdValue)) {
+    throw new ChainConfigurationError("DIGGO_PROGRAM_ID must be a valid 32-byte base58 address in native mode");
   }
-  if (cluster === "devnet" && programId !== DEVNET_PROGRAM_ID) {
+  if (programIdValue && !isValidBase58Address(programIdValue)) {
+    throw new ChainConfigurationError("DIGGO_PROGRAM_ID must be a valid 32-byte base58 address when configured");
+  }
+  if (chainMode === "native" && cluster === "devnet" && programIdValue !== DEVNET_PROGRAM_ID) {
     throw new ChainConfigurationError("SOLANA_CLUSTER devnet does not match the configured Diggo program");
   }
-  if (cluster === "mainnet-beta" && programId === DEVNET_PROGRAM_ID) {
+  if (chainMode === "native" && cluster === "mainnet-beta" && programIdValue === DEVNET_PROGRAM_ID) {
     throw new ChainConfigurationError("SOLANA_CLUSTER mainnet-beta cannot use the Diggo devnet program");
   }
 
@@ -217,7 +222,7 @@ export function resolveChainConfig(env: ChainEnv, options: { deployed?: boolean 
   const rpcUrls = configuredRpcUrls.length > 0 ? configuredRpcUrls : [DEFAULT_DEVNET_RPC];
   return {
     cluster,
-    programId: address(programId),
+    programId: programIdValue ? address(programIdValue) : null,
     rpcUrl: rpcUrls[0]!,
     rpcUrls,
   };
@@ -238,7 +243,9 @@ export function getChainRpc(env: ChainEnv): Rpc<SolanaRpcApi> {
 }
 
 export function getProgramAddress(env: ChainEnv): Address {
-  return resolveChainConfig(env).programId;
+  const programId = resolveChainConfig(env).programId;
+  if (!programId) throw new ChainConfigurationError("The native Diggo program is not configured in Meteora mode");
+  return programId;
 }
 
 /**

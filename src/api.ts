@@ -37,6 +37,7 @@ import { startAnalytics } from "./analytics";
 import bs58 from "bs58";
 import { DEVICE_HEADER, deviceId } from "./device";
 import type { ChainMode } from "../shared/meteora";
+import { normalizeMeteoraConfigPubkey } from "../shared/meteora";
 import type { AdminDashboardPayload } from "../shared/adminDashboard";
 
 /** An HTTP failure carrying the Worker's status and machine-readable code. */
@@ -153,6 +154,8 @@ interface BootstrapPayload {
   cluster?: string;
   chainMode?: ChainMode;
   meteoraConfigPubkey?: string;
+  meteoraConfig?: string | null;
+  meteoraDbcConfig?: string | null;
   programId?: string;
   posthogApiKey?: string;
   posthogHost?: string;
@@ -164,9 +167,11 @@ export async function getBootstrap(): Promise<Bootstrap> {
   try {
     const data = await getJson<BootstrapPayload>("/api/bootstrap?limit=1000");
     const config: DiggoConfig = {
-      cluster: data.cluster ?? "devnet",
+      cluster: data.cluster === "devnet" ? "devnet" : "mainnet-beta",
       chainMode: data.chainMode === "native" ? "native" : "meteora",
-      meteoraConfigPubkey: data.meteoraConfigPubkey ?? "",
+      meteoraConfigPubkey: normalizeMeteoraConfigPubkey(
+        data.meteoraConfigPubkey ?? data.meteoraDbcConfig ?? data.meteoraConfig,
+      ),
       posthogApiKey: data.posthogApiKey,
       posthogHost: data.posthogHost,
       turnstileSiteKey: data.turnstileSiteKey ?? "",
@@ -179,7 +184,7 @@ export async function getBootstrap(): Promise<Bootstrap> {
     return {
       tokens: [],
       config: {
-        cluster: "devnet",
+        cluster: "mainnet-beta",
         chainMode: "meteora",
         meteoraConfigPubkey: "",
         turnstileSiteKey: "",
@@ -746,6 +751,8 @@ export interface GameClaim {
   status: "PENDING" | "PAID";
   signature: string | null;
   createdAt: number;
+  name?: string | null;
+  symbol?: string | null;
 }
 
 export interface GameState {
@@ -772,6 +779,8 @@ export interface GameState {
   discovery: { eligible: boolean; epoch: number; portfolioUsd: number | null };
   crew: Record<GameCrewComponent, number>;
   claims: GameClaim[];
+  balances?: Array<{ mint: string; name: string | null; symbol: string | null; claimable?: string; amount?: string; amountWhole: number | string }>;
+  claimAll?: { supported: boolean; count: number; signatures: 1; maxItems: number };
 }
 
 export interface MeteoraPortfolio {
@@ -780,6 +789,38 @@ export interface MeteoraPortfolio {
   claimable: string;
   pendingUntilGraduation: string;
   graduated: boolean;
+}
+
+export interface PreparedClaimBatch {
+  id: string;
+  /** Base64 legacy transaction already signed in the vault authority's slot. */
+  transaction: string;
+  /** Unix seconds; the wallet should not sign after this deadline. */
+  expiresAt: string;
+}
+
+export interface PreparedClaimAllItem {
+  /** Mining and discovery rewards for this mint are aggregated into one transfer. */
+  claimIds: string[];
+  mint: string;
+  name: string | null;
+  symbol: string | null;
+  amount: string;
+  amountWhole: string;
+}
+
+export interface SettledClaimAllItem {
+  id: string;
+  claimId: string;
+  kind: string;
+  mint: string;
+  name: string | null;
+  symbol: string | null;
+  amount: string;
+  amountWhole: number;
+  status: "PAID";
+  signature: string;
+  createdAt: number;
 }
 
 export async function getGameState(wallet: string): Promise<GameState> {
@@ -798,7 +839,10 @@ export async function requestGameActivationChallenge(wallet: string): Promise<{ 
   return postJson("/api/game/activation-challenge", { wallet });
 }
 
-export async function activateGame(nonce: string, signature: string): Promise<{ player: GameState; ore: number }> {
+export async function activateGame(nonce: string, signature: string): Promise<{
+  player: { streak: number; activeUntil: number; activeMine: string | null; oreBalance: number };
+  ore: number;
+}> {
   return postJson("/api/game/activate", { nonce, signature });
 }
 
@@ -806,17 +850,31 @@ export async function upgradeGameCrew(component: GameCrewComponent): Promise<{ p
   return postJson("/api/game/upgrade", { component });
 }
 
-export async function claimGameMining(mint: string): Promise<{ claim: GameClaim; status: "PENDING" | "PAID" }> {
-  return postJson("/api/game/claim", { mint });
+export async function prepareGameClaimAll(): Promise<{
+  batch: PreparedClaimBatch;
+  items: PreparedClaimAllItem[];
+  signatureCount: 1;
+  totalItems: number;
+  remainingItems: number;
+  complete: boolean;
+}> {
+  return postJson("/api/game/claim/all", {});
+}
+
+export async function confirmGameClaimAll(
+  batchId: string,
+  signature: string,
+): Promise<{
+  batch:
+    | { id: string; status: "PENDING" }
+    | { id: string; status: "SETTLED"; signature: string };
+  claims: SettledClaimAllItem[];
+}> {
+  return postJson("/api/game/claim/all/confirm", { batchId, signature });
 }
 
 export async function runGameDiscovery(): Promise<{ discovered: boolean; claim?: GameClaim; reason?: string }> {
   return postJson("/api/game/discovery", {});
-}
-
-export async function selectGameMine(mint: string): Promise<{ mine: GameState["activeMine"] }> {
-  const data = await postJson<{ mine: GameState["activeMine"] }>("/api/game/mine", { mint });
-  return data;
 }
 
 export async function getAdminDashboard(): Promise<AdminDashboardPayload> {

@@ -29,6 +29,7 @@ import { coinLimit, maxSignaturePages, signatureLimit, type RuntimeEnv } from ".
 import { address } from "@solana/kit";
 import {
   type ChainEnv,
+  getProgramAddress,
   listCoins,
   listGlobalBudgets,
   listPools,
@@ -258,7 +259,7 @@ export async function refreshPosition(
     return true;
   }
   const positionAddress = await derivePositionPda(
-    address(env.DIGGO_PROGRAM_ID),
+    env.DIGGO_PROGRAM_ID ? address(env.DIGGO_PROGRAM_ID) : getProgramAddress(env as ChainEnv),
     address(coin),
     address(owner),
   );

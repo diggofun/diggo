@@ -25,17 +25,62 @@ export interface GameCoinSource {
 }
 
 export interface MiningPayoutResult {
-  signature: string;
+  /** Legacy serialized transaction containing the vault signature and the player's empty signature slot. */
+  transaction: string;
+  /** Unix seconds after which the client should not ask the wallet to sign this transaction. */
+  expiresAt: number;
 }
+
+/** One transfer inside an aggregate payout; the order matches the signed transaction. */
+export interface ClaimBatchItem {
+  /** All claims this one transfer settles; a mint can carry both mined and discovery rewards. */
+  claimIds: string[];
+  mint: string;
+  amount: bigint;
+}
+
+export interface ClaimBatchResult {
+  id: string;
+  transaction: string;
+  expiresAt: number;
+  items: ClaimBatchItem[];
+}
+
+/**
+ * What the vault's real token account for one mint can provably pay right now.
+ *
+ * `null` means the chain could not be read, which is not the same as an empty balance: an unknown
+ * inventory must never be mistaken for sufficient funds, but it also must not be reported to the
+ * player as a shortfall. Only a positive `available` is a proven ability to pay.
+ */
+export type VaultInventory = { available: bigint; account: string | null } | null;
 
 /** The sole abstraction permitted to move real mine tokens. */
 export interface MiningPayout {
-  pay(
+  prepare(
     mint: string,
     wallet: string,
     amount: bigint,
     idempotencyKey: string,
   ): Promise<MiningPayoutResult>;
+  confirm(claimId: string, signature: string): Promise<boolean>;
+  /**
+   * Signs every listed claim in one transaction, or none. The batch is refused rather than trimmed:
+   * a payout that silently omitted an unfunded mint would be reported to the player as "all" while
+   * leaving rewards behind.
+   */
+  prepareBatch(wallet: string, items: ClaimBatchItem[], batchId: string): Promise<ClaimBatchResult>;
+  /** Returns the claims the verified signature settled, or an empty list while the chain is unconfirmed. */
+  /** The authenticated wallet is mandatory: a batch may never be inspected or mutated by another session. */
+  confirmBatch(wallet: string, batchId: string, signature: string): Promise<ClaimBatchItem[]>;
+  /**
+   * Reads the vault's real SPL balance for a mint without signing anything.
+   *
+   * Claim-all filters on this before it calls `prepareBatch`, because the vault refuses a batch
+   * containing a mint it cannot fund, and that refusal is all-or-nothing. Proving sufficiency here
+   * keeps one unfunded mint from cancelling an otherwise payable batch.
+   */
+  vaultInventory(mint: string): Promise<VaultInventory>;
 }
 
 /** Portfolio valuation is an integration input, not a value invented by the game engine. */

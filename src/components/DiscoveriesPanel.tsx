@@ -10,7 +10,7 @@
  */
 import type { DiscoveryOpportunity, DiscoveryRecord, TokenSummary } from "../../shared/types";
 import { tokenAmount } from "../format";
-import { IconDiscoveries, IconMine, IconSwap } from "../icons";
+import { IconDiscoveries, IconMine } from "../icons";
 import { useReducedMotion } from "../motion";
 import { requestWalletMenu } from "../wallet";
 import { DiscoveryArt } from "./MineScene";
@@ -23,24 +23,24 @@ export interface DiscoveriesPanelProps {
   tokens: TokenSummary[];
   loading: boolean;
   rolling: boolean;
-  claimingId: string | null;
   error: string;
   notice: string;
   onRequestOpportunity(): void;
   onRoll(): void;
-  onClaim(discovery: DiscoveryRecord): void;
   onOpenToken(mint: string): void;
   onTrade(mint: string): void;
-  onSwitchCrew(mint: string): void;
 }
 
 function symbolOf(tokens: TokenSummary[], mint: string): string {
   return tokens.find((token) => token.mint === mint)?.symbol ?? mint.slice(0, 4);
 }
 
+function isOnCurve(tokens: TokenSummary[], mint: string): boolean {
+  return tokens.find((token) => token.mint === mint)?.curveMining.onCurve === true;
+}
+
 export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
-  const { signedIn, discoveries, opportunity, tokens, loading, rolling, claimingId, error, notice } = props;
-  const claimable = discoveries.filter((discovery) => discovery.claimable);
+  const { signedIn, discoveries, opportunity, tokens, loading, rolling, error, notice } = props;
   const reducedMotion = useReducedMotion();
 
   const spent = opportunity !== null && opportunity.status !== "PENDING" && opportunity.status !== "ELIGIBLE";
@@ -61,9 +61,9 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
             <IconDiscoveries size={14} /> Discoveries
           </div>
           <h1>
-            WHAT THE CREW
+            YOUR MINING
             <br />
-            TURNED UP.
+            DISCOVERIES.
           </h1>
         </div>
         <div className="discovery-roll">
@@ -88,8 +88,9 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
           title="Hidden finds are waiting underground."
           action={<button className="btn btn-primary" onClick={requestWalletMenu}>Connect wallet</button>}
         >
-          An active crew gets one discovery opportunity per window. Sign in to see what yours has
-          turned up and claim it before it expires.
+          An eligible crew has one random discovery opportunity per window. Sign in to review the
+          memecoins it has mined. Rewards from a coin that has not graduated stay pending; mining
+          does not guarantee that a coin will graduate.
         </EmptyState>
       )}
       {signedIn && loading && (
@@ -101,68 +102,51 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
       )}
       {signedIn && !loading && discoveries.length === 0 && (
         <EmptyState icon={<IconDiscoveries size={26} />} title="No discoveries yet">
-          An active, eligible crew has a chance each window, and the mine's own
-          liquidity, volume and reserve decide how good that chance can be.
+          An eligible crew has one random opportunity each window. The mine's liquidity, volume and
+          reserve shape what can be found. Any mined memecoin appears here automatically; collection
+          is a separate wallet-approved action after graduation. Mining does not guarantee that a coin
+          will graduate.
         </EmptyState>
-      )}
-
-      {claimable.length > 0 && (
-        <div className="discovery-claimable">
-          <span className="claim-block-head-label">READY TO CLAIM</span>
-          <ul>
-            {claimable.map((discovery) => (
-              <li key={discovery.id}>
-                <div>
-                  <strong>
-                    {tokenAmount(discovery.tokenAmount)} {symbolOf(tokens, discovery.mint)}
-                  </strong>
-                  <small>
-                    {discovery.rarity} / {discovery.visualEvent}
-                  </small>
-                </div>
-                <div className="discovery-row-actions">
-                  <button className="badge ledger-token" onClick={() => props.onOpenToken(discovery.mint)}>
-                    View token
-                  </button>
-                  <button disabled={claimingId === discovery.id} onClick={() => props.onClaim(discovery)}>
-                    {claimingId === discovery.id ? "Claiming…" : "Claim"}
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
       )}
 
       <div className="discovery-grid">
         {discoveries.map((discovery) => (
-          <article
-            className={"discovery-card rarity-" + discovery.rarity + (reducedMotion ? " is-quiet" : "")}
-            key={discovery.id}
-          >
-            <header>
-              <span className={"rarity-tag rarity-" + discovery.rarity}>{discovery.rarity.toUpperCase()}</span>
-              <em className={"reward-status status-" + discovery.status.toLowerCase()}>{discovery.status}</em>
-            </header>
-            {/* Generated art for the rarity; a rarity without art keeps the drawn rarity tag. */}
-            <DiscoveryArt rarity={discovery.rarity} className="discovery-card-art" />
-            <h4>{discovery.visualEvent}</h4>
-            <strong>
-              {tokenAmount(discovery.tokenAmount)} {symbolOf(tokens, discovery.mint)}
-            </strong>
-            <small>{new Date(discovery.createdAt * 1_000).toLocaleString()}</small>
-            <div className="discovery-card-actions">
-              <button className="badge ledger-token" onClick={() => props.onOpenToken(discovery.mint)}>
-                Token page
-              </button>
-              <button className="badge ledger-token" onClick={() => props.onTrade(discovery.mint)}>
-                Trade
-              </button>
-              <button className="badge ledger-token" onClick={() => props.onSwitchCrew(discovery.mint)}>
-                <IconSwap size={12} /> Switch crew to this mine
-              </button>
-            </div>
-          </article>
+          (() => {
+            const pendingUntilGraduation =
+              (discovery.status === "PENDING" || discovery.status === "ELIGIBLE") &&
+              isOnCurve(tokens, discovery.mint);
+            const status = pendingUntilGraduation ? "PENDING" : discovery.status;
+            return (
+              <article
+                className={"discovery-card rarity-" + discovery.rarity + (reducedMotion ? " is-quiet" : "")}
+                key={discovery.id}
+              >
+                <header>
+                  <span className={"rarity-tag rarity-" + discovery.rarity}>{discovery.rarity.toUpperCase()}</span>
+                  <em className={"reward-status status-" + status.toLowerCase()}>{status}</em>
+                </header>
+                {/* Generated art for the rarity; a rarity without art keeps the drawn rarity tag. */}
+                <DiscoveryArt rarity={discovery.rarity} className="discovery-card-art" />
+                <h4>{tokens.find((token) => token.mint === discovery.mint)?.name ?? "Mined memecoin"}</h4>
+                <strong>
+                  {tokenAmount(discovery.tokenAmount)} {symbolOf(tokens, discovery.mint)}
+                </strong>
+                <small>
+                  {pendingUntilGraduation
+                    ? "Pending until this coin graduates · not claimable yet"
+                    : `${discovery.rarity} · ${discovery.visualEvent} · accrued automatically`}
+                </small>
+                <div className="discovery-card-actions">
+                  <button className="badge ledger-token" onClick={() => props.onOpenToken(discovery.mint)}>
+                    Token page
+                  </button>
+                  <button className="badge ledger-token" onClick={() => props.onTrade(discovery.mint)}>
+                    Trade
+                  </button>
+                </div>
+              </article>
+            );
+          })()
         ))}
       </div>
     </section>

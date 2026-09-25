@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DAMM_V2_PROGRAM_ID,
   PARAMS,
+  PLATFORM_FEE_WALLET,
   buildDiggoConfig,
   buildDiggoCurveBase,
   solString,
@@ -54,5 +55,11 @@ describe("Diggo Meteora configuration", () => {
     expect(PARAMS.poolCreationFeeSol).toBe(0.01);
     expect(solString(1_000_005_000n)).toBe("1.000005000 SOL");
     expect(solString(-9_456_965n)).toBe("-0.009456965 SOL");
+  });
+
+  it("uses the canonical platform fee wallet", () => {
+    expect(PLATFORM_FEE_WALLET).toBe(
+      "6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ",
+    );
   });
 });

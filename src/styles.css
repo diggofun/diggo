@@ -250,7 +250,7 @@ a { color: inherit; text-decoration: none; }
 
 /* Meteora game surfaces */
 .meteora-dashboard, .meteora-portfolio, .meteora-crew, .meteora-discoveries { padding-block: var(--space-6) var(--space-8); }
-.meteora-dashboard h1, .meteora-portfolio h1, .meteora-discoveries h1 { margin: 14px 0 0; font: 950 clamp(44px, 5.5vw, 78px)/.86 var(--font-display); letter-spacing: -.07em; text-transform: uppercase; }
+.meteora-dashboard h1, .meteora-portfolio h1, .meteora-discoveries h1 { max-width: 100%; margin: 14px 0 0; font: 950 clamp(44px, 5.5vw, 78px)/.86 var(--font-display); letter-spacing: -.07em; text-transform: uppercase; text-wrap: balance; }
 .meteora-dashboard h1 span, .meteora-portfolio h1 span, .meteora-discoveries h1 span { color: var(--orange); }
 .meteora-status { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: var(--space-5); margin-top: var(--space-6); padding: var(--space-5); border: 1px solid var(--ink); border-radius: var(--radius-md); background: var(--paper-2); }
 .meteora-status.is-active { background: linear-gradient(100deg, #eef9d4 0%, var(--paper-2) 64%); }
@@ -292,7 +292,7 @@ a { color: inherit; text-decoration: none; }
 
 @media (max-width: 680px) {
   .meteora-dashboard, .meteora-portfolio, .meteora-crew, .meteora-discoveries { padding-block: var(--space-5) calc(var(--tabbar-h) + var(--space-8)); }
-  .meteora-dashboard h1, .meteora-portfolio h1, .meteora-discoveries h1 { font-size: clamp(40px, 13vw, 58px); }
+  .meteora-dashboard h1, .meteora-portfolio h1, .meteora-discoveries h1 { font-size: clamp(32px, 10vw, 48px); }
   .meteora-status, .meteora-portfolio-grid { grid-template-columns: 1fr; }
   .meteora-status { padding: var(--space-4); }
   .meteora-status-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1430,6 +1430,8 @@ body.has-modal { overflow: hidden; }
   .account-summary > span { min-width: 58px; padding-inline: 7px; }
   .site-header .launch-button { display: none; }
   .sidebar-toggle { width: 40px; height: 40px; }
+  /* The orange crew line deliberately stays on one line; scale the display type to the phone gutter. */
+  .page-home .hero h1 { font-size: clamp(44px, 14vw, 54px); }
   /*
    * One 64px row has to hold the drawer button, the brand, the wallet readout and three controls
    * here, and the word "Alerts" was the widest thing in it that a player does not click. The button
@@ -1453,6 +1455,16 @@ body.has-modal { overflow: hidden; }
  */
 @media (max-width: 480px) {
   .site-header .brand strong { display: none; }
+}
+
+/*
+ * At 320px the signed-in header still has the drawer, identity, alerts, wallet, disconnect and
+ * public-profile controls to place beside each other. The wallet summary is the only non-action in
+ * that cluster, and its values remain available in the page, so it is the one item that yields.
+ * The primary controls keep their 40-42px targets and the header still lays out at its true width.
+ */
+@media (max-width: 359px) {
+  .site-header .account-summary { display: none; }
 }
 
 /*

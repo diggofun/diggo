@@ -1,23 +1,36 @@
 # Diggo.fun — Architecture
 
 > Diggo.fun is a Solana memecoin launchpad/DEX with an idle mining game on top. A player builds a
-> **Mining Crew**, activates it manually once a day for 24 hours, picks a memecoin to mine, and the
-> crew works — including while the browser is closed.
+> **Mining Crew**, activates it manually once a day for 24 hours, and receives a server-assigned
+> eligible mine. The crew works automatically — including while the browser is closed.
 
-This document describes the **currently implemented** design. It supersedes the earlier
-"equipment bought with real tokens" model entirely: nothing in this codebase lets real money,
-real memecoins or SOL buy Mining Power.
+## Current deployment boundary
+
+Diggo is currently configured for `CHAIN_MODE=meteora` on `mainnet-beta`. The public player
+journey is **activation -> random mining -> Discoveries with accrued memecoins -> Claim all ->
+return or referral**. Creators use the same ecosystem to launch projects and memecoins through
+Meteora.
+
+The rest of this document preserves the native-program architecture that shaped the product. Its
+program-controlled reserves, keeper instructions, reward-index and account-migration details are
+historical or future design unless a document explicitly says that native mode is active. The
+native program is not used by the current Meteora path. Current readiness is tracked in
+`DEPLOYMENT.md`; public mainnet access remains gated on the verified Meteora config, production
+infrastructure and funding, an end-to-end real payout rehearsal, and the required security review.
+
+The design supersedes the earlier "equipment bought with real tokens" model entirely: real money,
+real memecoins and SOL do not buy Mining Power.
 
 ## 1. Core loop
 
 1. Connect a wallet and sign in (Ed25519 challenge; no on-chain transaction).
 2. Collect the **Mining Report** for the window that just ended.
 3. Click **Activate Mine** — a second, purpose-built signed challenge, once per 24h.
-4. Pick a memecoin; the crew mines it automatically, online or not.
+4. Mine automatically in the eligible mine assigned by the server; the assignment is retained
+   while it remains eligible, and otherwise the server randomly assigns another eligible mine.
 5. Spend ORE on the five Crew components to raise Mining Power.
 6. Occasionally the crew finds a random real-memecoin **Discovery**.
-7. Switch mines at any time without losing activation or streak.
-8. Come back the next day and activate again to keep the streak alive.
+7. Come back the next day and activate again to keep the streak alive.
 
 ## 2. Two separate economies
 
@@ -124,7 +137,7 @@ and `programs/diggo-protocol/src/lib.rs` is the authority for it.
   default allocation has 0% creator and platform premine.
 - Block rewards are capped at the remaining reserve — or, before graduation, at the curve-mining cap
   the launch set (see section 5). When the source runs out the mine is `FULLY_MINED`:
-  mining stops, trading continues, and the crew can move to another coin.
+  mining stops, trading continues, and the server can assign the crew another eligible mine.
 - Rewards reduce on a configured epoch schedule (e.g. 10,000 → 7,500 → 5,625 → 4,219). The
   configured minimum is a floor on how far one step may travel and can never raise a reward, so the
   schedule is non-increasing. Unreduced tokens stay in the reserve; they are never burned.
@@ -317,21 +330,19 @@ authoritative for a player's token balance. See `docs/SECURITY.md` and `docs/CUS
 14. Mining works offline only while the 24h activation is valid.
 15. Security-sensitive and economic parameters are configurable and testable.
 
-## 13. Not yet mainnet-ready
+## 13. Current mainnet readiness
 
-Stated plainly, because the difference matters:
+The production environment selects Meteora and `mainnet-beta`, but the deployment is not ready for
+an unqualified public-launch claim. The remaining gates are:
 
-- The keeper runs inside the Worker — queue-triggered from `worker/indexing.ts`, never on the request
-  path — and signs with `DIGGO_KEEPER_SECRET_KEY`, a Cloudflare secret (`docs/CUSTODY.md`). That is a
-  lower bar than a dedicated signer service: a leaked secret or a Worker compromise exposes
-  `sync_crew_power`, `claim_discovery` and `graduate_market` up to their on-chain bounds, which are
-  what limit the damage rather than the key's isolation.
-- There is no AMM integration, and the price oracle is a Worker-side policy rather than an on-chain
-  one: the program does not re-check a price it is handed, so a compromised Worker could still
-  value a discovery wrongly. The oracle's own refusals are what bound that today.
-- Discovery RNG is commit-reveal in the Worker. A revealed seed can be checked against its published
-  commitment, but a player still has to trust that the Worker committed before it knew the outcome;
-  it is verifiable today, not trustless.
-- The vanity-mint worker pool is not implemented.
+- independently verify the configured mainnet DBC config
+  `5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF` and its fee claimer and mining vault;
+- configure a production RPC, apply production D1 migrations, and fund and verify the payer and
+  mining vault;
+- rehearse a real mainnet launch, activation, random mining, Discoveries and wallet-approved
+  Claim all payout through final settlement;
+- complete the required security review and document unresolved findings;
+- keep the native rent-reclaim action disabled because Meteora mode does not support it.
 
-The website therefore labels itself as a devnet MVP.
+The keeper, on-chain price policy and native AMM gaps listed in earlier versions remain relevant to
+the preserved native architecture. They are not descriptions of the active Meteora deployment.

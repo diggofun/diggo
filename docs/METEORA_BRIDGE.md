@@ -2,6 +2,14 @@
 
 Research snapshot: 2026-09-24. Official references: [DBC docs](https://docs.meteora.ag/core-products/dbc/), [SDK](https://github.com/MeteoraAg/dynamic-bonding-curve-sdk), [npm](https://www.npmjs.com/package/@meteora-ag/dynamic-bonding-curve-sdk).
 
+This is a research and implementation reference, not a public readiness statement. Production is
+configured for Meteora on `mainnet-beta` with the approved DBC config
+`5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF`. Its fee claimer is
+`6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ`, and its mining vault / leftover receiver is
+`H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT`. Public launch remains gated on production
+RPC/migrations/funding, a funded end-to-end payout rehearsal, and the required security review.
+Native-program rent reclaim is unavailable in Meteora mode.
+
 ## 1. Programs and devnet
 - DBC: `dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN`; DAMM v2 (`cp_amm`): `cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG`. The same IDs are used on mainnet and devnet ([DBC addresses](https://docs.meteora.ag/developer-guides/dbc/), [DAMM v2 addresses](https://docs.meteora.ag/developer-guides/damm-v2/)).
 - Yes, DBC and its DAMM v2 migration path are usable on devnet. Use low-value test mints; devnet SOL has no monetary value and the test token/mint lifecycle still has to be exercised ([SDK devnet support](https://github.com/MeteoraAg/dynamic-bonding-curve-sdk)).
@@ -24,7 +32,7 @@ Research snapshot: 2026-09-24. Official references: [DBC docs](https://docs.mete
 - Migration creates DAMM v2 position NFTs and distributes liquidity by partner/creator percentages. At least 10% must be locked at day one; vesting can be disabled or run up to two years ([migration and liquidity](https://docs.meteora.ag/core-products/dbc/migration-and-liquidity/)).
 - A configurable migration fee is taken from the threshold and split by the configured creator percentage. Presets exist at 25/30/100/200/400/600 bps; `Customizable` allows up to 99% and up to 100% creator share. Separately, a fixed 0.2% protocol liquidity-migration fee reduces liquidity deposited into DAMM ([migration and liquidity](https://docs.meteora.ag/core-products/dbc/migration-and-liquidity/)).
 - After migration, DBC trading fees stop accruing. DAMM v2 LP/trading fees belong to the partner/creator LP position holders and are claimed under the DAMM v2 configuration; partner/creator migration-fee withdrawals become available after curve completion ([migration and liquidity](https://docs.meteora.ag/core-products/dbc/migration-and-liquidity/)).
-- Diggo mainnet proposal: threshold **85 SOL**; devnet threshold **2 SOL** for fast testing. Migration fee: custom **0.5%**, `creatorFeePercentage = 0` so the configurable fee stays with Diggo. Post-migration DAMM pool fee: **1%**. These are product recommendations, not Meteora constants.
+- The approved mainnet configuration uses a threshold of **85 SOL**, a **1%** migration fee, a **25%** `percentageSupplyOnMigration` curve split, and a **1%** post-migration DAMM pool fee. The pinned SDK used by the scripts cannot represent the researched 0.5% migration fee. These are Diggo configuration values, not Meteora constants; the mainnet readiness gates still apply.
 
 ## 5. SDK 1.5.13 integration shape
 - Create config: build nested `BuildCurveBaseParams` (`token`, `fee`, `migration`, `liquidityDistribution`, `lockedVesting`, `activationType`), then use `buildCurveWithMarketCap` or `buildCurve`. Call `client.partner.createConfig({...params, config, feeClaimer, leftoverReceiver: miningVault, quoteMint, payer})` ([TypeScript reference](https://docs.meteora.ag/developer-guides/dbc/typescript-sdk/reference)).
@@ -38,8 +46,8 @@ Research snapshot: 2026-09-24. Official references: [DBC docs](https://docs.mete
 - Let DBC create/initialize the mint where possible; the standard launch path mints supply and revokes mint authority. A vanity mint keypair is optional marketing polish, not a DBC requirement; if the creator pre-creates a mint, manage the mint authority deliberately.
 - Name, symbol, and URI are supplied at pool creation; use immutable metadata URI if the launchpad controls the metadata document.
 
-## Concrete Diggo baseline
-- 1,000,000,000 SPL; 9 decimals; `leftover = 200,000,000` to `miningVault`; `lockedVesting` base allocation 0; quote mint wrapped SOL; `MET_DAMM_V2`.
-- Mainnet threshold 85 SOL, devnet 2 SOL; pool creation fee 0.01 SOL; creator trading fee 0%; protocol 20%, partner 80% of the non-protocol share; anti-sniper linear 3%→1% over 60 minutes; dynamic fee enabled; custom migration fee 0.5% with creator share 0%; DAMM v2 pool fee 1%.
-- Simplest post-migration ownership: `partnerLiquidityPercentage = 100`, `partnerPermanentLockedLiquidityPercentage = 10`, creator liquidity 0, vesting disabled. Confirm this product/legal allocation before mainnet.
-- Rent, transaction fees, curve checkpoints, and DAMM outcomes must be simulated with the pinned SDK before signing. The 0.01 SOL creation fee/split is configured protocol behavior, while 85 SOL and the fee schedule above are Diggo recommendations.
+## Concrete Diggo baseline: approved mainnet configuration
+- 1,000,000,000 SPL; 9 decimals; `leftover = 200,000,000` to the mining vault; `lockedVesting` base allocation 0; quote mint wrapped SOL; `MET_DAMM_V2`.
+- Mainnet threshold 85 SOL and devnet threshold 2 SOL; pool creation fee 0.01 SOL; creator trading fee 0%; protocol 20%, partner 80% of the non-protocol share; anti-sniper linear 3%→1% over 60 minutes; dynamic fee enabled. The approved migration fee is 1% because the pinned SDK cannot represent the researched 0.5% value; DAMM v2 pool fee is 1%.
+- Post-migration ownership: `partnerLiquidityPercentage = 90`, `partnerPermanentLockedLiquidityPercentage = 10`, creator liquidity 0, vesting disabled.
+- Rent, transaction fees, curve checkpoints, mining/Discoveries/Claim all payouts, and DAMM outcomes must be simulated with the pinned SDK and funded wallets. The 0.01 SOL creation fee/split, 85 SOL threshold, fee schedule, 25% curve split, and liquidity allocation are the approved Diggo configuration values.

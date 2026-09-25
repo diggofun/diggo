@@ -131,3 +131,32 @@ export interface MeteoraVaultOperation {
   amount: string | null;
   error: string | null;
 }
+
+export interface PreparedMiningClaim {
+  id: string;
+  mint: string;
+  wallet: string;
+  amount: string;
+  source: string;
+  destination: string;
+  transaction: string;
+  /** Unix seconds after which the client should not sign this transaction. */
+  expiresAt: number;
+}
+
+/** One transfer inside a claim-all batch. The order here is the order in the signed transaction. */
+export interface MeteoraClaimBatchItem {
+  /** All claims this one transfer settles; a mint can carry both mined and discovery rewards. */
+  claimIds: string[];
+  mint: string;
+  amount: bigint;
+}
+
+export interface PreparedClaimBatch {
+  id: string;
+  wallet: string;
+  items: MeteoraClaimBatchItem[];
+  /** Base64 legacy transaction carrying the vault signature and the player's empty slot. */
+  transaction: string;
+  expiresAt: number;
+}

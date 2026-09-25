@@ -12,6 +12,7 @@ import { DynamicBondingCurveClient, getCurrentPoint, ActivationType } from "@met
 import { Connection, PublicKey, Transaction } from "@solana/web3.js";
 import type { DiggoWallet } from "../onchain/tx";
 import { awaitConfirmation, isWalletConnectHandle, RPC_ENDPOINT, type SubmissionResult } from "../onchain/tx";
+import { isMeteoraConfigPubkey } from "../../shared/meteora";
 
 export const METEORA_RPC_ENDPOINT = RPC_ENDPOINT;
 
@@ -24,10 +25,10 @@ export function createMeteoraClient(connection = createMeteoraConnection()): Dyn
 }
 
 export function assertMeteoraConfig(configPubkey: string): PublicKey {
-  if (!configPubkey.trim()) {
-    throw new Error("Meteora is enabled, but no Meteora config pubkey is configured.");
+  if (!isMeteoraConfigPubkey(configPubkey)) {
+    throw new Error("Launching soon: the Meteora mainnet config is not ready yet.");
   }
-  return new PublicKey(configPubkey);
+  return new PublicKey(configPubkey.trim());
 }
 
 export async function sendMeteoraTransaction(

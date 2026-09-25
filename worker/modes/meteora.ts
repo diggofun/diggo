@@ -6,26 +6,28 @@ import {
   handleActivate,
   handleActivationChallenge,
   handleClaim,
+  handleClaimAll,
+  handleClaimAllConfirm,
+  handleClaimConfirmation,
   handleDiscovery,
   handleUpgrade,
+  settlePlayerMining,
   type GameHandlerContext,
   type PlayerGameState,
 } from "../game/service";
 import { gameChainMode, type GameCoin, type GameCoinSource, type GameEnv, type GamePlayerState, type GamePortfolioSource, type GameServices, type GameWalletSource, type MiningPayout } from "../game/contracts";
-import { accrueMining, playerCrewPower, releasedMiningAllocation } from "../game/rules";
 import { getSolUsd } from "../oracle";
 import { apiError, checkRateLimit, checkWalletRateLimit, isBase58Address, json } from "../http";
 import { getChainRpc, LAMPORTS_PER_SOL } from "../chainV2";
-import { payMiningClaim, runMeteoraIndexer, runVaultSweep } from "../meteora";
-import { readSignatures } from "../meteora/rpc";
+import { confirmClaimBatch, confirmMiningClaim, prepareClaimBatch, prepareMiningClaim, runMeteoraIndexer, runVaultSweep } from "../meteora";
+import { decodeTokenAccountAmount, deriveAssociatedTokenAddress, readAccount, readSignatures } from "../meteora/rpc";
 import { recordJobRun } from "../indexStore";
 
-const METEORA_RPC_FALLBACK = "https://api.devnet.solana.com";
 type RuntimeEnvLike = GameEnv;
 const lastGoodStates = new Map<string, PlayerGameState>();
 
 function stateCacheKey(env: RuntimeEnvLike, wallet: string): string {
-  return [String(env.SOLANA_CLUSTER || "devnet"), String(env.METEORA_DBC_CONFIG || ""), wallet].join(":");
+  return [String(env.SOLANA_CLUSTER || "mainnet-beta"), String(env.METEORA_DBC_CONFIG || ""), wallet].join(":");
 }
 
 function offlineContext(env: RuntimeEnvLike): GameHandlerContext {
@@ -66,6 +68,8 @@ function emptyPlayerState(env: RuntimeEnvLike, wallet: string): PlayerGameState 
     discovery: { eligible: false, epoch: 0, portfolioUsd: 0 },
     activeMine: null,
     claims: [],
+    balances: [],
+  claimAll: { supported: true, count: 0, signatures: 1, maxItems: 12 },
   };
 }
 
@@ -107,8 +111,7 @@ function nowSeconds(): number {
 }
 
 function rpcEnv(env: RuntimeEnvLike) {
-  const cluster = String(env.SOLANA_CLUSTER || "devnet");
-  return { ...env, DIGGO_RPC_URL: String(env.DIGGO_RPC_URL || (cluster === "mainnet-beta" ? "" : METEORA_RPC_FALLBACK)) };
+  return { ...env, DIGGO_RPC_URL: String(env.DIGGO_RPC_URL || "") };
 }
 
 function poolRow(row: Record<string, unknown>): GameCoin {
@@ -146,10 +149,48 @@ export function meteoraCoinSource(env: GameEnv): GameCoinSource {
 
 export function meteoraPayout(env: GameEnv): MiningPayout {
   return {
-    async pay(mint, wallet, amount, idempotencyKey) {
-      const result = await payMiningClaim({ env: rpcEnv(env), mint, wallet, amount, idempotencyKey });
-      if (!result.signature) throw new Error(result.error || "Meteora payout has no signature");
-      return { signature: result.signature };
+    async prepare(mint, wallet, amount, idempotencyKey) {
+      const result = await prepareMiningClaim({ env: rpcEnv(env), mint, wallet, amount, idempotencyKey });
+      return { transaction: result.transaction, expiresAt: result.expiresAt };
+    },
+    async confirm(claimId, signature) {
+      return confirmMiningClaim(rpcEnv(env), claimId, signature);
+    },
+    async prepareBatch(wallet, items, batchId) {
+      return prepareClaimBatch({ env: rpcEnv(env), wallet, items, batchId });
+    },
+    async confirmBatch(wallet, batchId, signature) {
+      return confirmClaimBatch(rpcEnv(env), wallet, batchId, signature);
+    },
+    async vaultInventory(mint) {
+      // A read needs no signing key, so the configured vault address is enough. This is the same
+      // associated token account `prepareClaimBatch` funds from, and the same token-account layout
+      // it decodes, so a positive result here is a real proof that the batch can be paid. A missing
+      // account is reported as zero rather than unknown: the vault demonstrably holds nothing, which
+      // is exactly the case `prepareClaimBatch` refuses. Only a failed read is unknown.
+      const vault = String(env.MINING_VAULT_PUBLIC_KEY || "").trim();
+      if (!vault) return null;
+      let account: string;
+      try {
+        account = deriveAssociatedTokenAddress(mint, vault);
+      } catch {
+        return null;
+      }
+      let data: Uint8Array;
+      try {
+        const found = await readAccount(rpcEnv(env), account);
+        if (!found) return { available: 0n, account };
+        data = found.data;
+      } catch (error) {
+        console.warn("Vault inventory read failed; treating the mint as unproven", { mint, error });
+        return null;
+      }
+      try {
+        return { available: decodeTokenAccountAmount(data), account };
+      } catch (error) {
+        console.warn("Vault token account could not be decoded; treating the mint as unproven", { mint, error });
+        return null;
+      }
     },
   };
 }
@@ -243,7 +284,7 @@ export async function runMeteoraScheduled(env: RuntimeEnvLike) {
 export function meteoraConfig(env: RuntimeEnvLike) {
   return {
     chainMode: gameChainMode(env),
-    cluster: String(env.SOLANA_CLUSTER || "devnet"),
+    cluster: String(env.SOLANA_CLUSTER || "mainnet-beta"),
     meteoraConfig: String(env.METEORA_DBC_CONFIG || "") || null,
     meteoraDbcConfig: String(env.METEORA_DBC_CONFIG || "") || null,
     miningVault: String(env.MINING_VAULT_PUBLIC_KEY || "") || null,
@@ -310,31 +351,17 @@ export async function meteoraSwitchMine(request: Request, env: RuntimeEnvLike) {
     !(await checkWalletRateLimit(env, wallet, "game-mine", 30, 60))) {
     return apiError("Too many requests", 429);
   }
-  const body = await request.json().catch(() => ({})) as { mint?: string };
   const context = meteoraGameContext(env);
   const store = d1GameStore(env.DB);
-  const player = await store.ensurePlayer(wallet, nowSeconds(), { miners: 1, drills: 1, carts: 1, foreman: 1, storage: 1 });
-  const requested = body.mint && isBase58Address(body.mint) ? body.mint : null;
-  if (body.mint && !requested) return apiError("Invalid mint");
-  const row = requested
-    ? await env.DB.prepare("SELECT base_mint FROM meteora_pools WHERE config=?1 AND base_mint=?2").bind(String(env.METEORA_DBC_CONFIG || ""), requested).first<{ base_mint: string }>()
-    : await env.DB.prepare("SELECT s.mint AS base_mint FROM meteora_swaps s JOIN meteora_pools p ON p.pool=s.pool WHERE s.trader_wallet=?1 AND p.config=?2 ORDER BY s.created_at DESC LIMIT 1").bind(wallet, String(env.METEORA_DBC_CONFIG || "")).first<{ base_mint: string }>();
-  const mine = row?.base_mint ? await context.services.coins.getMine(row.base_mint) : null;
-  if (!mine) return apiError("Mine not found", 404);
-  if (player.activeMine && player.activeMine !== mine.mint) {
-    const oldCoin = await context.services.coins.getMine(player.activeMine);
-    if (oldCoin) {
-      const balance = await store.getBalance(wallet, oldCoin.mint);
-      const ledger = await store.ensureMine(oldCoin.mint, oldCoin.miningStartsAt, 1, nowSeconds());
-      const now = nowSeconds();
-      const next = accrueMining({ mine: oldCoin, wallet, now, lastSettledAt: balance.lastSettledAt || oldCoin.miningStartsAt, assignedPower: player.activeMiningPower || playerCrewPower(player), totalEligiblePower: ledger.totalEligiblePower, releasedBefore: releasedMiningAllocation(balance.lastSettledAt || oldCoin.miningStartsAt, oldCoin.miningStartsAt), releasedNow: releasedMiningAllocation(now, oldCoin.miningStartsAt), claimableBefore: balance.claimable, reserveRemainingBefore: ledger.remaining, committedBefore: ledger.committed });
-      if (next.claimable !== balance.claimable) await store.settleMining({ ...ledger, released: releasedMiningAllocation(now, oldCoin.miningStartsAt), remaining: next.reserveRemaining, committed: next.committed }, { ...balance, claimable: next.claimable, lastSettledAt: now }, ledger.version, balance.claimable, now);
-    }
-  }
-  const version = await store.playerVersion(wallet);
-  const updated = { ...player, activeMine: mine.mint, activeMiningPower: player.activeUntil > nowSeconds() ? playerCrewPower(player) : 0 };
-  if (!(await store.savePlayer(updated, version))) return apiError("Game state changed; retry", 409);
-  return json({ player: await store.getPlayer(wallet), mine });
+  const now = nowSeconds();
+  const player = await store.ensurePlayer(wallet, now, { miners: 1, drills: 1, carts: 1, foreman: 1, storage: 1 });
+  const settled = await settlePlayerMining(context, player);
+  const mine = settled.activeMine ? await context.services.coins.getMine(settled.activeMine) : null;
+  return json({
+    player: settled,
+    mine,
+    changed: settled.activeMine !== player.activeMine || settled.activeMiningPower !== player.activeMiningPower,
+  });
 }
 
 export async function handleMeteoraGameRoute(request: Request, env: RuntimeEnvLike, pathname: string): Promise<Response | null> {
@@ -343,6 +370,9 @@ export async function handleMeteoraGameRoute(request: Request, env: RuntimeEnvLi
   if (request.method === "POST" && pathname === "/api/game/activate") return mutationResponse(() => handleActivate(context, request));
   if (request.method === "POST" && pathname === "/api/game/upgrade") return mutationResponse(() => handleUpgrade(context, request));
   if (request.method === "POST" && pathname === "/api/game/claim") return mutationResponse(() => handleClaim(context, request));
+  if (request.method === "POST" && pathname === "/api/game/claim/all") return mutationResponse(() => handleClaimAll(context, request));
+  if (request.method === "POST" && pathname === "/api/game/claim/all/confirm") return mutationResponse(() => handleClaimAllConfirm(context, request));
+  if (request.method === "POST" && pathname === "/api/game/claim/confirm") return mutationResponse(() => handleClaimConfirmation(context, request));
   if (request.method === "POST" && pathname === "/api/game/discovery") return mutationResponse(() => handleDiscovery(context, request));
   if (request.method === "POST" && pathname === "/api/game/mine") return mutationResponse(() => meteoraSwitchMine(request, env));
   if (request.method === "GET" && pathname.startsWith("/api/game/player/")) return meteoraPlayerProfile(env, pathname.slice("/api/game/player/".length));

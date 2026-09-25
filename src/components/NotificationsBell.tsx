@@ -117,6 +117,14 @@ function readListing(view: unknown): { notifications: NotificationRecord[]; unre
 function payloadLines(notification: NotificationRecord): string[] {
   const payload = notification.payload;
   if (payload === null || typeof payload !== "object") return [];
+  if (notification.kind === "RARE_DISCOVERY_FOUND") {
+    const name = typeof payload.name === "string" && payload.name.trim() ? payload.name.trim() : null;
+    const symbol = typeof payload.symbol === "string" && payload.symbol.trim() ? payload.symbol.trim() : null;
+    const rarity = typeof payload.rarity === "string" && payload.rarity.trim() ? payload.rarity.trim().toLowerCase() : "rare";
+    if (name) return [symbol ? `${name} ($${symbol})` : name];
+    // The Worker uses this display-safe fallback when indexed token metadata is unavailable.
+    return [`Memecoin ($${symbol ?? "MEME"}) · ${rarity} · accrued in Discoveries`];
+  }
   return Object.entries(payload).map(([key, value]) => key.replaceAll("_", " ") + ": " + String(value));
 }
 
@@ -214,8 +222,13 @@ export function NotificationsBell({ signedIn }: NotificationsBellProps) {
 
   if (!signedIn) {
     return (
-      <span className="notifications-bell is-disabled" title="Sign in to receive crew notifications">
-        Alerts
+      <span
+        className="notifications-bell is-disabled"
+        role="img"
+        aria-label="Alerts, sign in to receive crew notifications"
+        title="Sign in to receive crew notifications"
+      >
+        <span className="notifications-bell-label">Alerts</span>
       </span>
     );
   }

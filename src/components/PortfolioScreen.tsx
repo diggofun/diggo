@@ -260,9 +260,9 @@ export function PortfolioScreen({
             <IconProfile size={14} /> Your profile
           </div>
           <h1 id="portfolio-title">
-            YOUR COINS,
+            MINE, LAUNCH,
             <br />
-            YOUR CREW, YOUR FEES.
+            AND KEEP CONTROL.
           </h1>
         </div>
         <div className="dash-actions-inline">

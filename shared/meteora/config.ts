@@ -4,7 +4,8 @@ export type MeteoraCluster = "devnet" | "mainnet-beta";
 export const METEORA_DBC_PROGRAM_ID = "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN";
 export const METEORA_DAMM_V2_PROGRAM_ID = "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG";
 export const METEORA_WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
-export const METEORA_FEE_CLAIMER = "GyGjx2nsgG2wDbUESGTw8aHndXh6b8d2znhZPqWSdwcH";
+export const METEORA_FEE_CLAIMER = "6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ";
+export const METEORA_DBC_CONFIG_PLACEHOLDER = "SET_AFTER_CREATE";
 
 export const METEORA_TOKEN = {
   totalSupply: 1_000_000_000n,
@@ -38,8 +39,8 @@ export const METEORA_MIGRATION_THRESHOLD_SOL: Readonly<Record<MeteoraCluster, nu
 
 export function normalizeMeteoraCluster(cluster: string | null | undefined): MeteoraCluster {
   const normalized = cluster?.trim().toLowerCase();
-  if (normalized === "mainnet" || normalized === "mainnet-beta") return "mainnet-beta";
-  return "devnet";
+  if (normalized === "devnet") return "devnet";
+  return "mainnet-beta";
 }
 
 export function normalizeChainMode(value: string | null | undefined): ChainMode {
@@ -50,6 +51,16 @@ export function requireMeteoraConfigPubkey(value: string | null | undefined): st
   const pubkey = value?.trim() ?? "";
   if (pubkey && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(pubkey)) return pubkey;
   throw new Error("Meteora is enabled, but no valid Meteora config pubkey was published by bootstrap.");
+}
+
+export function isMeteoraConfigPubkey(value: string | null | undefined): value is string {
+  const pubkey = value?.trim() ?? "";
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(pubkey);
+}
+
+/** Publishes no placeholder to clients that expect a real Solana address. */
+export function normalizeMeteoraConfigPubkey(value: string | null | undefined): string {
+  return isMeteoraConfigPubkey(value) ? value.trim() : "";
 }
 
 export function migrationThresholdLamports(cluster: string | null | undefined): bigint {

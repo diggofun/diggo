@@ -10,6 +10,7 @@ import {
   IconArrowDownRight,
   IconArrowUpRight,
   IconChevronRight,
+  IconDiscoveries,
   IconHammer,
   IconMine,
   IconOre,
@@ -39,7 +40,6 @@ export function HomeHero({
   onManageCrew,
   onLaunch,
   onClaimRewards,
-  claimCopy = "Claim on-chain rewards",
 }: {
   featured: TokenSummary | null;
   player: PlayerProfile | null;
@@ -50,8 +50,7 @@ export function HomeHero({
   onActivate(): void;
   onManageCrew(): void;
   onLaunch(): void;
-  onClaimRewards(): void;
-  claimCopy?: string;
+  onClaimRewards?(): void;
 }) {
   const isMiningActive = player?.activationState === "ACTIVE";
   const reservePercent = featured ? (featured.reserveRemaining / featured.reserveTotal) * 100 : 0;
@@ -60,29 +59,30 @@ export function HomeHero({
       <div className="hero-copy">
         <div className="eyebrow">
           <span className={"live-dot " + (featured ? "" : "idle-dot")} />
-          {featured ? "Live on Solana devnet" : "Solana devnet · no mines launched yet"}
+          {featured ? "A memecoin mine is available" : "No memecoins launched yet"}
         </div>
         <h1>
-          BUILD YOUR
+          LAUNCH MEMECOINS.
           <br />
-          MEMECOIN <span>MINING CREW.</span>
+          RUN A <span>MINING CREW.</span>
         </h1>
         <p>
-          Pick a mine, activate your crew once a day and let it dig while you are away. Upgrade
-          Miners, Drills and Carts with the ORE they bring back, and turn up rare discoveries.
+          Creators launch fixed-supply memecoins with the trading and mining rules set on chain.
+          Players activate a crew, mine eligible launches, review random discoveries and claim
+          what reaches their wallet.
         </p>
         <div className="hero-actions">
           <a className="btn btn-primary btn-lg" href="/mine">
             Start mining <IconMine size={20} />
           </a>
-          <a className="btn btn-link" href="/explore">
-            Explore mines <IconArrowUpRight size={19} />
+          <a className="btn btn-link" href="/create">
+            Launch a coin <IconArrowUpRight size={19} />
           </a>
         </div>
         <div className="trust-row">
           <span>Mint revoked</span>
-          <span>Reserve locked</span>
-          <span><IconWallet size={17} /> Funds stay in your wallet</span>
+          <span>Mining vault funded</span>
+          <span><IconWallet size={17} /> Wallet-approved payouts</span>
         </div>
       </div>
 
@@ -98,7 +98,7 @@ export function HomeHero({
           <div className="empty-body">
             <p>
               No token has been launched on this protocol yet, so there is nothing to mine. Block
-              rewards, network power and prices will appear here once a real coin is launched on devnet.
+              rewards, network power and prices will appear here once a real coin is launched.
             </p>
             <button className="btn btn-primary" onClick={onLaunch}>
               Launch the first coin <IconPlus size={19} />
@@ -110,7 +110,7 @@ export function HomeHero({
           <div className="console-top">
             <div className="featured-token">
               <TokenOrb symbol={featured.symbol} imageUrl={featured.imageUrl} large />
-              <div><span>{isMiningActive ? "NOW MINING" : "SELECTED MINE"}</span><h2>{featured.name}</h2></div>
+              <div><span>{isMiningActive ? "NOW MINING" : "FEATURED MINE"}</span><h2>{featured.name}</h2></div>
             </div>
             <span className={"active-pill " + (isMiningActive ? "" : "idle")}>
               <i /> {isMiningActive ? "CREW ACTIVE" : player ? "CREW PAUSED" : "NOT ACTIVATED"}
@@ -136,9 +136,9 @@ export function HomeHero({
               {isMiningActive && (
                 <span><IconTimer size={13} /> resets in {countdown(Math.floor(player.activationExpiresAt ?? 0), now)}</span>
               )}
-              {connected && (
+              {connected && onClaimRewards && (
                 <button type="button" className="claim-rewards-button" onClick={onClaimRewards}>
-                  <IconOre size={12} /> {claimCopy}
+                  <IconOre size={12} /> Claim on-chain rewards
                 </button>
               )}
             </div>
@@ -325,8 +325,6 @@ export function SelectedMine({
   token,
   mineInfo,
   now,
-  canSwitch,
-  onSwitch,
 }: {
   token: TokenSummary;
   /**
@@ -336,8 +334,6 @@ export function SelectedMine({
    */
   mineInfo: MineInfo | null;
   now: number;
-  canSwitch: boolean;
-  onSwitch(): void;
 }) {
   const [copied, setCopied] = useState(false);
   const reservePercent = token.reserveTotal > 0 ? (token.reserveRemaining / token.reserveTotal) * 100 : 0;
@@ -368,11 +364,6 @@ export function SelectedMine({
           <h1 className="selected-title">{token.name}</h1>
         </div>
         <div className="selected-heading-actions">
-          {canSwitch && (
-            <button className="btn btn-ghost btn-sm switch-mine-button" onClick={onSwitch}>
-              Switch crew here <IconMine size={14} />
-            </button>
-          )}
           <a className="btn btn-ghost btn-sm" href={"/trade?mint=" + encodeURIComponent(token.mint)}>
             Trade ${token.symbol}
           </a>
@@ -407,7 +398,7 @@ export function SelectedMine({
           <IconWallet />
           <span>Wallet custody</span>
           <strong>YOU KEEP CONTROL</strong>
-          <small>Your wallet signs; Diggo never holds funds. Trading liquidity is program-controlled.</small>
+          <small>Your wallet authorizes trades and mining payouts. Leftover launch supply is held in the Diggo-signed mining vault.</small>
         </div>
       </div>
       {hasCurveBudget && (
@@ -448,14 +439,14 @@ export function HowItWorks() {
       <div className="page-shell">
         <div className="section-heading light">
           <div>
-            <h2>ACTIVATE. DIG.<br />UPGRADE.</h2>
+            <h2>TWO WAYS IN.<br />ONE GAME.</h2>
           </div>
-          <p>No guaranteed yield. Each mine has a finite, transparent reserve shared by crew Mining Power.</p>
+          <p>Mining rewards and yield are not guaranteed. Wallet signatures authorize account, claim and launch actions.</p>
         </div>
         <div className="steps">
-          <article><b>01</b><span className="step-icon"><IconMine /></span><h3>Activate your crew</h3><p>One signature opens a 24h shift. Your crew keeps digging while you are offline.</p></article>
-          <article><b>02</b><span className="step-icon"><IconOre /></span><h3>Collect the report</h3><p>Come back to ORE for upgrades, settled block rewards and the occasional discovery.</p></article>
-          <article><b>03</b><span className="step-icon"><IconHammer /></span><h3>Grow the operation</h3><p>Spend ORE on Miners, Drills, Carts, Foreman and Storage. The mine grows with your tier.</p></article>
+          <article><b>01</b><span className="step-icon"><IconPlus /></span><h3>Launch a coin</h3><p>Set its fixed supply and launch with a wallet-signed transaction. Leftovers go to the Diggo-signed mining vault.</p></article>
+          <article><b>02</b><span className="step-icon"><IconMine /></span><h3>Activate a crew</h3><p>Open a 24-hour shift. The server randomly assigns an eligible mine and your crew keeps mining it while the shift is valid.</p></article>
+          <article><b>03</b><span className="step-icon"><IconDiscoveries /></span><h3>Review discoveries</h3><p>Each eligible window has one random opportunity. Mined memecoins accrue in Discoveries until you approve a claim.</p></article>
         </div>
       </div>
     </section>
@@ -467,8 +458,11 @@ export function FinalCta({ onLaunch }: { onLaunch(): void }) {
     <section className="final-cta">
       <div className="page-shell">
         <span className="huge-pick" aria-hidden="true"><IconMine /></span>
-        <div><h2>START DIGGING.</h2></div>
-        <button className="btn btn-dark btn-lg" onClick={onLaunch}>Launch your coin <IconArrowUpRight size={20} /></button>
+        <div><h2>MINE OR LAUNCH.</h2></div>
+        <div className="hero-actions">
+          <a className="btn btn-dark btn-lg" href="/mine">Start mining <IconMine size={20} /></a>
+          <button className="btn btn-dark btn-lg" onClick={onLaunch}>Launch a coin <IconArrowUpRight size={20} /></button>
+        </div>
       </div>
     </section>
   );

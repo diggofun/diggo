@@ -81,6 +81,23 @@ describe("D1 game store", () => {
     expect(await store.getMine(MINT)).toMatchObject({ released: 100n, committed: 96n, remaining: MINING_RESERVE - 96n });
   });
 
+  it("counts only active, already-activated players with positive power", async () => {
+    const store = harness();
+    const now = 200;
+    const base = await store.ensurePlayer(WALLET, 0, starterCrew());
+    const players = [
+      { ...base, activeMine: MINT, activatedAt: 100, activeUntil: 300, activeMiningPower: 3 },
+      { ...base, wallet: "22222222222222222222222222222222", activeMine: MINT, activatedAt: 100, activeUntil: 199, activeMiningPower: 100 },
+      { ...base, wallet: "33333333333333333333333333333333", activeMine: MINT, activatedAt: 201, activeUntil: 300, activeMiningPower: 100 },
+      { ...base, wallet: "44444444444444444444444444444444", activeMine: MINT, activatedAt: 100, activeUntil: 300, activeMiningPower: 0 },
+    ];
+    for (const player of players) {
+      await store.ensurePlayer(player.wallet, 0, starterCrew());
+      await store.savePlayer(player, 0);
+    }
+    expect(await store.getEligiblePower(MINT, now)).toBe(3);
+  });
+
   it("debits a claim once and keeps it pending until marked paid", async () => {
     const store = harness();
     const mine = await store.ensureMine(MINT, 0, 1, 1);

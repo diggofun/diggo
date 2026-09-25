@@ -347,7 +347,13 @@ describe("notifications", () => {
   });
 
   it("reports rare discoveries only, within a day, once per discovery", () => {
-    const discovery = (id: string, rarity: string, createdAt: number) => ({ id, rarity, createdAt });
+    const discovery = (id: string, rarity: string, createdAt: number, name = "Diggoloid") => ({
+      id,
+      name,
+      symbol: "DIG",
+      rarity,
+      createdAt,
+    });
     const input = notificationInput({
       discoveries: [
         discovery("d1", "common", NOW - 60),
@@ -359,6 +365,7 @@ describe("notifications", () => {
     });
     const rare = computeNotifications(input).filter((entry) => entry.kind === "RARE_DISCOVERY_FOUND");
     expect(rare.map((entry) => entry.payload.discoveryId).sort()).toEqual(["d2", "d3"]);
+    expect(rare[0].payload).toMatchObject({ name: "Diggoloid", symbol: "DIG" });
     expect(rare[0].dedupeKey).toBe("RARE_DISCOVERY_FOUND:d2");
   });
 
@@ -396,7 +403,7 @@ describe("notifications", () => {
     const input = notificationInput({
       player: { wallet: "w", streak: 7, longestStreak: 7, lastActivationAt: NOW - 60, activationExpiresAt: NOW + 3_600 },
       mine: { mint: "m", symbol: "MOLE", status: "MINING_ACTIVE", reserveRemaining: 7_500, reserveTotal: 10_000 },
-      discoveries: [{ id: "dx", rarity: "rare", createdAt: NOW }],
+      discoveries: [{ id: "dx", name: "Diggoloid", symbol: "DIG", rarity: "rare", createdAt: NOW }],
     });
     const first = computeNotifications(input);
     const second = computeNotifications(input);

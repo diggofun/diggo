@@ -3,6 +3,7 @@
  * parsing, session cookie formatting and the two rate-limit dimensions (per-IP and per-wallet).
  */
 import { rateLimiterBinding, type RuntimeEnv } from "./env";
+import bs58 from "bs58";
 
 interface CloudflareSubtleCrypto extends SubtleCrypto {
   timingSafeEqual(a: ArrayBufferView, b: ArrayBufferView): boolean;
@@ -26,12 +27,22 @@ export function json(data: unknown, init: ResponseInit = {}): Response {
   });
 }
 
-export function apiError(message: string, status = 400): Response {
-  return json({ error: message }, { status });
+export function apiError(message: string, status = 400, code?: string): Response {
+  return json({ error: message, ...(code ? { code } : {}) }, { status });
 }
 
 export function isBase58Address(value: unknown): value is string {
   return typeof value === "string" && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value);
+}
+
+/** A Solana transaction signature is exactly 64 bytes, unlike a 32-byte wallet address. */
+export function isBase58Signature(value: unknown): value is string {
+  if (typeof value !== "string" || !/^[1-9A-HJ-NP-Za-km-z]{80,90}$/.test(value)) return false;
+  try {
+    return bs58.decode(value).length === 64;
+  } catch {
+    return false;
+  }
 }
 
 export function sameSecret(received: string | null, expected: string | undefined): boolean {

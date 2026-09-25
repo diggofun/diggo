@@ -15,6 +15,7 @@ import { sessionWallet } from "./auth";
 import { isLocalChainRequest, isLocalChainRuntime, resolveChainConfig } from "./chainV2";
 import type { RuntimeEnv } from "./env";
 import { apiError, checkRateLimit, checkWalletRateLimit } from "./http";
+import { METEORA_DAMM_V2_PROGRAM_ID, METEORA_DBC_PROGRAM_ID } from "../shared/meteora";
 
 const RPC_READ_METHOD_ALLOWLIST = new Set([
   "getAccountInfo",
@@ -321,7 +322,8 @@ function validateReadParams(method: string, params: unknown[] | undefined): void
 export function validateSignedTransaction(
   encoded: string,
   sessionAddress: string,
-  diggoProgramId: string,
+  diggoProgramId: string | null,
+  allowMeteora = false,
 ): { bytes: Uint8Array; version: "legacy" | 0 } {
   const bytes = strictBase64(encoded);
   if (!bytes || bytes.length > MAX_TRANSACTION_BYTES) throw new Error("Invalid or oversized transaction");
@@ -349,7 +351,8 @@ export function validateSignedTransaction(
   }
 
   const allowed = new Set([
-    diggoProgramId,
+    ...(diggoProgramId ? [diggoProgramId] : []),
+    ...(allowMeteora ? [METEORA_DBC_PROGRAM_ID, METEORA_DAMM_V2_PROGRAM_ID] : []),
     SYSTEM_PROGRAM_ADDRESS,
     TOKEN_PROGRAM_ADDRESS,
     TOKEN_2022_PROGRAM_ADDRESS,
@@ -401,7 +404,7 @@ export async function proxyRpc(request: Request, env: RuntimeEnv): Promise<Respo
         if (call.method === "simulateTransaction" && params.length > 3) return apiError("Too many RPC parameters");
         const encoded = transactionParam(params[0]);
         if (!encoded || !wallet) return apiError("Invalid base64 transaction");
-        validateSignedTransaction(encoded, wallet, chain.programId);
+        validateSignedTransaction(encoded, wallet, chain.programId, String(env.CHAIN_MODE || "").trim().toLowerCase() === "meteora");
         if (call.method === "sendTransaction") validateSendOptions(params[1]);
         else {
           validateSimulateOptions(params[1]);

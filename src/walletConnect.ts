@@ -93,7 +93,7 @@ export async function disconnectWalletConnect(): Promise<void> {
 }
 
 async function createWalletConnect(): Promise<AppKit> {
-  const [{ createAppKit }, { SolanaAdapter }, { solanaDevnet }] = await Promise.all([
+  const [{ createAppKit }, { SolanaAdapter }, { solanaMainnet }] = await Promise.all([
     import("@reown/appkit/react"),
     import("@reown/appkit-adapter-solana/react"),
     // Not "@reown/appkit/networks" directly: that barrel carries every chain Reown knows about, and
@@ -104,8 +104,8 @@ async function createWalletConnect(): Promise<AppKit> {
 
   const appKit = createAppKit({
     adapters: [new SolanaAdapter()],
-    networks: [solanaDevnet],
-    defaultNetwork: solanaDevnet,
+    networks: [solanaMainnet],
+    defaultNetwork: solanaMainnet,
     projectId: WALLETCONNECT_PROJECT_ID,
     metadata: {
       name: "Diggo.fun",

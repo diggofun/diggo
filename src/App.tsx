@@ -16,6 +16,7 @@ import {
   getPlayerProfile,
   getPortfolio,
   getPlayerRewards,
+  getReferrals,
   getRewardClaimChallenge,
   getWalletSession,
   getToken,
@@ -27,15 +28,15 @@ import {
   type GameState,
   type MeteoraPortfolio,
   activateGame,
-  claimGameMining,
+  prepareGameClaimAll,
+  confirmGameClaimAll,
   getGameState,
   getMeteoraPortfolio,
   requestGameActivationChallenge,
   runGameDiscovery,
-  selectGameMine,
   upgradeGameCrew,
 } from "./api";
-import { track } from "./analytics";
+import { track, trackOnce } from "./analytics";
 import { TURNSTILE_SITE_KEY } from "./constants";
 import { NEUTRAL_VERIFICATION_TEXT, runGated, VerificationRequiredError } from "./verification";
 import { CREW_COMPONENT_LABELS, CREW_COMPONENTS } from "./crewLabels";
@@ -50,6 +51,9 @@ import { PushToggle } from "./components/PushToggle";
 import { WatchlistPanel } from "./components/WatchlistPanel";
 import { isLegalPath } from "./components/legal/routes";
 import { usePendingTransaction } from "./onchain";
+import { signPreparedClaim } from "./onchain/preparedClaim";
+import { settledClaimAllNotice } from "./claimAll";
+import { startMeteoraMining } from "./meteoraGameFlow";
 import { crewPower } from "../shared/economics";
 import { MeteoraCrewScreen, MeteoraDiscoveriesScreen, MeteoraMineDashboard, MeteoraPortfolioScreen } from "./components/MeteoraGameScreens";
 import { RouteErrorBoundary } from "./components/RouteErrorBoundary";
@@ -79,7 +83,7 @@ const LeaderboardsScreen = lazy(() => import("./components/LeaderboardsScreen").
 const MineInfoPanel = lazy(() => import("./components/MineInfoPanel").then((module) => ({ default: module.MineInfoPanel })));
 const MiningReportModal = lazy(() => import("./components/MiningReportModal").then((module) => ({ default: module.MiningReportModal })));
 const SwapPanel = lazy(() => import("./components/SwapPanel").then((module) => ({ default: module.SwapPanel })));
-const SwitchMineModal = lazy(() => import("./components/SwitchMineModal").then((module) => ({ default: module.SwitchMineModal })));
+const RentReclaimPanel = lazy(() => import("./components/RentReclaimPanel").then((module) => ({ default: module.RentReclaimPanel })));
 /** Terms, Privacy, Risk and Cookies: their own chunk, because most visits never open one. */
 const LegalRoute = lazy(() => import("./components/legal/LegalPage").then((module) => ({ default: module.LegalRoute })));
 /** Design review gallery; only exists in the Vite dev server and is dropped from production builds. */
@@ -138,7 +142,6 @@ export default function App() {
   const [player, setPlayer] = useState<PlayerProfile | null>(null);
   const [miningReport, setMiningReport] = useState<MiningReport | null>(null);
   const [crewOpen, setCrewOpen] = useState(false);
-  const [switchOpen, setSwitchOpen] = useState(false);
   const [activating, setActivating] = useState(false);
   const [activateError, setActivateError] = useState("");
   const [launchOpen, setLaunchOpen] = useState(false);
@@ -150,7 +153,7 @@ export default function App() {
   const [loadingTokens, setLoadingTokens] = useState(true);
   const [bootstrapFailed, setBootstrapFailed] = useState(false);
   const [config, setConfig] = useState<DiggoConfig>({
-    cluster: "devnet",
+    cluster: "mainnet-beta",
     chainMode: "meteora",
     meteoraConfigPubkey: "",
     turnstileSiteKey: "",
@@ -167,7 +170,6 @@ export default function App() {
   const [mineInfo, setMineInfo] = useState<MineInfo | null>(null);
   const [mineInfoLoading, setMineInfoLoading] = useState(false);
   const [mineInfoError, setMineInfoError] = useState("");
-  const [switching, setSwitching] = useState(false);
   const [collecting, setCollecting] = useState(false);
   const [reportCollected, setReportCollected] = useState(false);
   const [reportError, setReportError] = useState("");
@@ -178,11 +180,13 @@ export default function App() {
   const [claimsLoading, setClaimsLoading] = useState(false);
   const [claimingId, setClaimingId] = useState<string | null>(null);
   const [claimError, setClaimError] = useState("");
+  const [claimAllPending, setClaimAllPending] = useState(false);
+  const [claimAllError, setClaimAllError] = useState("");
+  const [claimAllNotice, setClaimAllNotice] = useState("");
   const [discoveries, setDiscoveries] = useState<DiscoveryRecord[]>([]);
   const [opportunity, setOpportunity] = useState<DiscoveryOpportunity | null>(null);
   const [discoveriesLoading, setDiscoveriesLoading] = useState(false);
   const [rolling, setRolling] = useState(false);
-  const [claimingDiscoveryId, setClaimingDiscoveryId] = useState<string | null>(null);
   const [discoveryError, setDiscoveryError] = useState("");
   const [discoveryNotice, setDiscoveryNotice] = useState("");
   const verification = useVerificationGate(config.turnstileSiteKey || TURNSTILE_SITE_KEY);
@@ -211,6 +215,7 @@ export default function App() {
   );
 
   const page: PageId = useMemo(() => ROUTES[window.location.pathname] ?? "home", []);
+  const analyticsConfigured = Boolean(config.posthogApiKey && config.posthogHost);
   /**
    * The legal documents render in place of the home page at their own paths. They get no PageId on
    * purpose: that union is AppHeader.tsx's, and a legal notice belongs nowhere in the game nav.
@@ -221,6 +226,17 @@ export default function App() {
     const title = PAGE_TITLES[page];
     document.title = title ? title + " · Diggo.fun" : "Diggo.fun — Build and manage your memecoin mining crew";
   }, [page]);
+
+  useEffect(() => {
+    if (!analyticsConfigured) return;
+    const referralCode = new URLSearchParams(window.location.search).get("ref");
+    if (referralCode?.trim()) return trackOnce("referral_landed");
+  }, [analyticsConfigured]);
+
+  useEffect(() => {
+    if (page !== "discoveries" || !analyticsConfigured) return;
+    return trackOnce("discoveries_viewed", { network: config.cluster });
+  }, [analyticsConfigured, config.cluster, page]);
 
   const fetchBootstrap = useCallback(async (): Promise<void> => {
     try {
@@ -308,8 +324,26 @@ export default function App() {
   const isMiningActive = player?.activationState === "ACTIVE";
   const signedIn = Boolean(session && walletAddress && session === walletAddress);
 
+  useEffect(() => {
+    if (page !== "referrals" || !signedIn || !analyticsConfigured) return;
+    let current = true;
+    let cancelTrackedOnce: (() => void) | undefined;
+    void getReferrals()
+      .then((panel) => {
+        if (current && panel.totals.qualified > 0) cancelTrackedOnce = trackOnce("referral_qualified");
+      })
+      .catch(() => {
+        // The referral dashboard owns its own error state; absence of this observation is not a
+        // qualification event.
+      });
+    return () => {
+      current = false;
+      cancelTrackedOnce?.();
+    };
+  }, [analyticsConfigured, page, signedIn]);
+
   const refreshGame = useCallback(async (): Promise<void> => {
-    if (!walletAddress || !signedIn || config.chainMode !== "meteora") return;
+    if (!walletAddress || config.chainMode !== "meteora") return;
     try {
       const next = await getGameState(walletAddress);
       setGame(next);
@@ -318,12 +352,21 @@ export default function App() {
     } catch (error) {
       setActivateError(messageOf(error));
     }
-  }, [config.chainMode, signedIn, walletAddress]);
+  }, [config.chainMode, walletAddress]);
 
   useEffect(() => {
     if (config.chainMode === "meteora") void refreshGame();
     else { setGame(null); setMeteoraPortfolio(null); }
   }, [config.chainMode, refreshGame]);
+
+  // The Worker settles mining lazily when the player state is read. Polling keeps the dashboard's
+  // accrued balance current while the browser is open, so activation does not require a reload or
+  // a second mine-selection request.
+  useEffect(() => {
+    if (config.chainMode !== "meteora" || !signedIn) return;
+    const timer = window.setInterval(() => void refreshGame(), 15_000);
+    return () => window.clearInterval(timer);
+  }, [config.chainMode, refreshGame, signedIn]);
 
   const loadMineInfo = useCallback(async (mint: string): Promise<void> => {
     setMineInfoLoading(true);
@@ -424,7 +467,7 @@ export default function App() {
       if (result.report) setMiningReport(result.report);
       if (result.mine) setMineInfo(result.mine);
       setReportCollected(true);
-      track("mining_report_viewed", { network: "solana-devnet" });
+      track("mining_report_viewed", { network: config.cluster });
       await refreshClaims();
     } catch (error) {
       setReportError(messageOf(error));
@@ -485,15 +528,6 @@ export default function App() {
   }
 
   async function handleClaimReward(claim: RewardClaimView): Promise<void> {
-    if (config.chainMode === "meteora") {
-      if (!signedIn || !game?.activeMine) return;
-      if (!game.activeMine.coin.graduated) { setClaimError("This mine must graduate before tokens can be claimed."); return; }
-      setClaimingId(claim.id); setClaimError("");
-      try { await claimGameMining(claim.mint); await refreshGame(); }
-      catch (error) { setClaimError(messageOf(error)); }
-      finally { setClaimingId(null); }
-      return;
-    }
     if (!pendingTransaction.canSubmit()) return;
     if (!connected || !config.programId) {
       setClaimError("Connect the wallet that owns this reward to collect it.");
@@ -517,13 +551,54 @@ export default function App() {
       }
       await ensureSession();
       await confirmRewardClaimPayout(claim.id, result.signature);
-      track("reward_claimed", { mint: claim.mint, network: "solana-devnet" });
+      track("reward_claimed", { network: config.cluster });
       await refreshClaims();
     } catch (error) {
       if (!pendingTransaction.record(error, "Reward claim")) setClaimError(messageOf(error));
       else setClaimError("");
     } finally {
       setClaimingId(null);
+    }
+  }
+
+  async function handleClaimAll(): Promise<void> {
+    if (config.chainMode !== "meteora" || !connected) {
+      setClaimAllError("Connect the wallet that owns these mined rewards.");
+      return;
+    }
+    setClaimAllPending(true);
+    setClaimAllError("");
+    setClaimAllNotice("");
+    try {
+      const prepared = await prepareGameClaimAll();
+      if (prepared.signatureCount !== 1) {
+        throw new Error("The backend did not prepare the required one-signature collection. No rewards were claimed.");
+      }
+      const submission = await signPreparedClaim({
+        wallet: connected.wallet,
+        payout: prepared.batch,
+        nowSeconds: Math.floor(Date.now() / 1_000),
+      });
+      track("claim_all_submitted", { network: config.cluster });
+
+      // Confirmation is idempotent. Poll this exact batch/signature pair after submission instead
+      // of ever sending the transaction again or asking the player for another signature.
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const result = await confirmGameClaimAll(prepared.batch.id, submission.signature);
+        if (result.batch.status === "SETTLED") {
+          await refreshGame();
+          setClaimAllNotice(settledClaimAllNotice(prepared));
+          track("claim_all_settled", { network: config.cluster });
+          return;
+        }
+        if (attempt < 5) await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+      }
+      await refreshGame();
+      setClaimAllNotice("Collection is submitted and still confirming. Do not sign or submit it again.");
+    } catch (error) {
+      setClaimAllError(messageOf(error));
+    } finally {
+      setClaimAllPending(false);
     }
   }
 
@@ -574,7 +649,14 @@ export default function App() {
       setRolling(true); setDiscoveryError(""); setDiscoveryNotice("");
       try {
         const result = await runGameDiscovery();
-        setDiscoveryNotice(result.discovered ? "Your crew found a discovery." : result.reason ?? "No discovery this time.");
+        const discoveredName = result.claim?.name ?? result.claim?.symbol;
+        setDiscoveryNotice(
+          result.discovered
+            ? discoveredName
+              ? `Your crew found ${discoveredName}. Its reward is accrued in Discoveries.`
+              : "Your crew found a new memecoin. Its reward is accrued in Discoveries."
+            : result.reason ?? "No discovery this time.",
+        );
         await refreshGame();
       } catch (error) { setDiscoveryError(messageOf(error)); }
       finally { setRolling(false); }
@@ -624,40 +706,6 @@ export default function App() {
     }
   }
 
-  async function handleClaimDiscovery(_discovery: DiscoveryRecord): Promise<void> {
-    if (!pendingTransaction.canSubmit()) return;
-    if (!connected || !config.programId) {
-      setDiscoveryError("Connect a wallet to settle this discovery.");
-      return;
-    }
-    const mint = player?.activeMint ?? featured?.mint;
-    if (!mint) {
-      setDiscoveryError("Join the mine this discovery came from before settling it.");
-      return;
-    }
-    setClaimingDiscoveryId(_discovery.id);
-    setDiscoveryError("");
-    setDiscoveryNotice("");
-    try {
-      // v2 has no claim step to wait for: `settle_discovery` is the payout, it is
-      // permissionless, and it closes the opportunity PDA so a second settle is impossible.
-      const { address, settleDiscovery } = await import("./solanaProgram");
-      await settleDiscovery({
-        programAddress: address(config.programId),
-        wallet: connected.wallet,
-        mint: address(mint),
-      });
-      setDiscoveryNotice("Settled on chain. The payout left the coin's Discovery Reserve.");
-      await refreshDiscoveries();
-      await refreshClaims();
-    } catch (error) {
-      if (!pendingTransaction.record(error, "Discovery settlement")) setDiscoveryError(messageOf(error));
-      else setDiscoveryError("");
-    } finally {
-      setClaimingDiscoveryId(null);
-    }
-  }
-
   async function ensureSession(): Promise<void> {
     if (!connected || session === connected.address) return;
     const challenge = await getChallenge(connected.address);
@@ -665,7 +713,7 @@ export default function App() {
     const referralCode = new URLSearchParams(window.location.search).get("ref");
     const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature), referralCode);
     setSession(verified.wallet);
-    track("wallet_signed_in", { network: "solana-devnet" });
+    track("wallet_signed_in", { network: config.cluster });
   }
 
   async function handleActivate() {
@@ -676,9 +724,11 @@ export default function App() {
         if (!signedIn) await ensureSession();
         const challenge = await requestGameActivationChallenge(connected.address);
         const signature = await connected.signMessage(new TextEncoder().encode(challenge.message));
-        await activateGame(challenge.nonce, bs58.encode(signature));
-        await refreshGame();
-        track("mine_activated", { streak: game?.streak ?? 0, network: "solana-devnet" });
+        const streak = await startMeteoraMining({
+          activate: () => activateGame(challenge.nonce, bs58.encode(signature)),
+          refresh: refreshGame,
+        });
+        track("mine_activated", { streak, network: config.cluster });
       } catch (error) { setActivateError(messageOf(error)); }
       finally { setActivating(false); }
       return;
@@ -707,7 +757,7 @@ export default function App() {
       const state = await getMiningState(connected.address);
       if (state.report) setMiningReport(state.report);
       await refreshClaims();
-      track("mine_activated", { streak: profile.streak, network: "solana-devnet" });
+        track("mine_activated", { streak: profile.streak, network: config.cluster });
     } catch (error) {
       if (!pendingTransaction.record(error, "Player activation")) setActivateError(messageOf(error));
       else setActivateError("");
@@ -716,59 +766,8 @@ export default function App() {
     }
   }
 
-  async function handleSwitchMine(mint: string) {
-    if (config.chainMode === "meteora") {
-      if (!signedIn) { setActivateError("Sign in to switch mines."); return; }
-      setSwitching(true); setActivateError("");
-      try {
-        await selectGameMine(mint);
-        await refreshGame();
-        setSwitchOpen(false);
-      } catch (error) { setActivateError(messageOf(error)); }
-      finally { setSwitching(false); }
-      return;
-    }
-    if (!pendingTransaction.canSubmit()) return;
-    if (!connected || !config.programId) {
-      setActivateError("Sign in with your wallet to switch mines.");
-      return;
-    }
-    setSwitching(true);
-    setActivateError("");
-    try {
-      // The move itself is on chain. `joinMine` picks assign_power or switch_mine from the
-      // position that exists, so a player joining their first mine and a player moving between
-      // mines both get the one instruction the program will accept.
-      const { address, joinMine } = await import("./solanaProgram");
-      await joinMine({
-        programAddress: address(config.programId),
-        wallet: connected.wallet,
-        mint: address(mint),
-      });
-      await ensureSession();
-      const profile = await getPlayerProfile(connected.address);
-      setPlayer(profile);
-      setSwitchOpen(false);
-      track("mine_switched", { network: "solana-devnet" });
-      await loadMineInfo(mint);
-    } catch (error) {
-      if (!pendingTransaction.record(error, "Mine switch")) setActivateError(messageOf(error));
-      else setActivateError("");
-    } finally {
-      setSwitching(false);
-    }
-  }
-
   async function handleClaimRewards() {
-    if (config.chainMode === "meteora") {
-      if (!game?.activeMine || !game.activeMine.coin.graduated) return;
-      setClaimingId(game.activeMine.coin.mint);
-      setActivateError("");
-      try { await claimGameMining(game.activeMine.coin.mint); await refreshGame(); }
-      catch (error) { setActivateError(messageOf(error)); }
-      finally { setClaimingId(null); }
-      return;
-    }
+    if (config.chainMode === "meteora") return;
     if (!connected || !config.programId || !featured) return;
     if (!pendingTransaction.canSubmit()) return;
     setActivateError("");
@@ -783,27 +782,12 @@ export default function App() {
         pendingTransaction.recordSubmission(submission.signature, "Reward claim");
         return;
       }
-      track("rewards_claimed", { network: "solana-devnet" });
+      track("rewards_claimed", { network: config.cluster });
       await refreshFeaturedToken();
     } catch (error) {
       if (!pendingTransaction.record(error, "Reward claim")) {
         setActivateError(error instanceof Error ? error.message : "Nothing to claim yet");
       } else setActivateError("");
-    }
-  }
-
-  async function handleClaimRewardsForMint(mint: string): Promise<void> {
-    if (config.chainMode !== "meteora" || !signedIn) return;
-    if (!game?.activeMine || game.activeMine.coin.mint !== mint || !game.activeMine.coin.graduated) return;
-    setClaimingId(mint);
-    setClaimError("");
-    try {
-      await claimGameMining(mint);
-      await refreshGame();
-    } catch (error) {
-      setClaimError(messageOf(error));
-    } finally {
-      setClaimingId(null);
     }
   }
 
@@ -826,9 +810,13 @@ export default function App() {
     if (mint) void loadMineInfo(mint);
   }, [page, config.chainMode, game?.activeMine?.coin.mint, player?.activeMint, featured?.mint, loadMineInfo, session]);
 
-  const activeMineToken = (config.chainMode === "meteora" ? game?.activeMine?.coin.mint : player?.activeMint)
-    ? (tokens.find((token) => token.mint === (config.chainMode === "meteora" ? game?.activeMine?.coin.mint : player?.activeMint)) ?? featured ?? null)
-    : (featured ?? null);
+  const activeMineToken = config.chainMode === "meteora"
+    ? (game?.activeMine?.coin.mint
+      ? (tokens.find((token) => token.mint === game.activeMine?.coin.mint) ?? null)
+      : null)
+    : (player?.activeMint
+      ? (tokens.find((token) => token.mint === player.activeMint) ?? featured ?? null)
+      : (featured ?? null));
 
   /**
    * Navigation into a mine page or the trade panel for one mint. Both are plain URL loads, which
@@ -859,7 +847,7 @@ export default function App() {
       onCollected={handleCollected}
     />
   );
-  const mineInfoPanel = (token: TokenSummary | null, canSwitch: boolean) =>
+  const mineInfoPanel = (token: TokenSummary | null) =>
     token && (
       <MineInfoPanel
         mine={mineInfo}
@@ -867,12 +855,8 @@ export default function App() {
         now={now}
         loading={mineInfoLoading}
         error={mineInfoError}
-        canSwitch={canSwitch}
-        switching={switching}
-        onSwitchHere={() => void handleSwitchMine(token.mint)}
       />
     );
-  const canSwitchToFeatured = Boolean(signedIn && isMiningActive && featured && player?.activeMint !== featured.mint);
 
   return (
     <div className={"app page-" + page}>
@@ -919,8 +903,7 @@ export default function App() {
                 onActivate={() => void handleActivate()}
                 onManageCrew={() => setCrewOpen(true)}
                 onLaunch={openLaunch}
-                onClaimRewards={() => void handleClaimRewards()}
-                claimCopy={config.chainMode === "meteora" ? "Claim mined tokens" : "Claim on-chain rewards"}
+                onClaimRewards={config.chainMode === "meteora" ? undefined : () => void handleClaimRewards()}
               />
               <Ticker tokens={tokens} />
               <ExploreBoard tokens={tokens} limit={3} onLaunch={openLaunch} />
@@ -936,7 +919,7 @@ export default function App() {
           )}
 
           {page === "mine" && config.chainMode === "meteora" && (
-            <MeteoraMineDashboard game={game} mine={activeMineToken} now={now} connected={Boolean(connected)} activating={activating} error={activateError} onActivate={() => void handleActivate()} onSwitchMine={() => setSwitchOpen(true)} />
+            <MeteoraMineDashboard game={game} mine={activeMineToken} now={now} connected={Boolean(connected)} activating={activating} error={activateError} onActivate={() => void handleActivate()} />
           )}
 
           {page === "mine" && config.chainMode !== "meteora" && (
@@ -952,7 +935,6 @@ export default function App() {
                 error={activateError}
                 onActivate={() => void handleActivate()}
                 onManageCrew={() => setCrewOpen(true)}
-                onSwitchMine={() => setSwitchOpen(true)}
                 onCollect={() => void handleCollectReport()}
               />
               {config.programId && (
@@ -972,7 +954,7 @@ export default function App() {
                   />
                 </Suspense>
               )}
-              {mineInfoPanel(activeMineToken, false)}
+              {mineInfoPanel(activeMineToken)}
             </>
           )}
 
@@ -1006,7 +988,19 @@ export default function App() {
           )}
 
           {page === "discoveries" && config.chainMode === "meteora" && (
-            <MeteoraDiscoveriesScreen game={game} connected={signedIn} busy={rolling} error={discoveryError} notice={discoveryNotice} onDiscover={() => void handleRollDiscovery()} />
+            <MeteoraDiscoveriesScreen
+              game={game}
+              tokens={tokens}
+              connected={signedIn}
+              busy={rolling}
+              error={discoveryError}
+              notice={discoveryNotice}
+              onDiscover={() => void handleRollDiscovery()}
+              claimAllPending={claimAllPending}
+              claimAllError={claimAllError}
+              claimAllNotice={claimAllNotice}
+              onClaimAll={() => void handleClaimAll()}
+            />
           )}
 
           {page === "discoveries" && config.chainMode !== "meteora" && (
@@ -1017,15 +1011,12 @@ export default function App() {
               tokens={tokens}
               loading={discoveriesLoading}
               rolling={rolling}
-              claimingId={claimingDiscoveryId}
               error={discoveryError}
               notice={discoveryNotice}
               onRequestOpportunity={() => void handleRequestOpportunity()}
               onRoll={() => void handleRollDiscovery()}
-              onClaim={(discovery) => void handleClaimDiscovery(discovery)}
               onOpenToken={openTokenPage}
               onTrade={openTradePage}
-              onSwitchCrew={(mint) => void handleSwitchMine(mint)}
             />
           )}
 
@@ -1044,10 +1035,8 @@ export default function App() {
                 token={featured}
                 mineInfo={mineInfo}
                 now={now}
-                canSwitch={canSwitchToFeatured}
-                onSwitch={() => void handleSwitchMine(featured.mint)}
               />
-              {mineInfoPanel(featured, canSwitchToFeatured)}
+              {mineInfoPanel(featured)}
               {(config.chainMode === "meteora" || config.programId) && (
                 <SwapPanel token={featured} programAddress={config.programId} cluster={config.cluster} chainMode={config.chainMode} meteoraConfigPubkey={config.meteoraConfigPubkey} signer={connected?.wallet ?? null} onTraded={() => void refreshFeaturedToken()} />
               )}
@@ -1060,7 +1049,7 @@ export default function App() {
             <SwapPanel token={featured} programAddress={config.programId} cluster={config.cluster} chainMode={config.chainMode} meteoraConfigPubkey={config.meteoraConfigPubkey} signer={connected?.wallet ?? null} onTraded={() => void refreshFeaturedToken()} />
           ) : (
             <section className="page-shell">
-              <EmptyState title="Nothing to trade yet">Trading opens once a mine is live on devnet.</EmptyState>
+              <EmptyState title="Nothing to trade yet">Trading opens once a mine is live.</EmptyState>
             </section>
           ))}
 
@@ -1068,10 +1057,10 @@ export default function App() {
             <section className="create-coin-page page-shell">
               <div>
                 <h1>START A<br /><span>NEW MINE.</span></h1>
-                <p>Create a fixed-supply Solana devnet coin, allocate its mining reserve, and optionally make the first real buy into its bonding curve.</p>
+                <p>Create a fixed-supply Solana coin, allocate its mining reserve, and optionally make the first real buy into its bonding curve.</p>
               </div>
               <div className="create-coin-card">
-                <span>DEVNET LAUNCH</span>
+                <span>MAINNET LAUNCH</span>
                 <h2>{config.chainMode === "meteora" ? "Launch the next mine." : "Everything settles on-chain."}</h2>
                 <p>{config.chainMode === "meteora" ? "Create a coin, then send your crew to work in its market." : "Your creator wallet signs the launch and, if selected, the initial liquidity buy in one transaction."}</p>
                 <button className="btn btn-primary" onClick={openLaunch}>Open launch builder <IconArrowUpRight size={17} /></button>
@@ -1081,10 +1070,25 @@ export default function App() {
 
           {page === "cosmetics" && <CosmeticsScreen signedIn={signedIn} />}
           {page === "profile" && connected && config.chainMode === "meteora" && (
-            <MeteoraPortfolioScreen game={game} portfolio={meteoraPortfolio} tokens={tokens} busyMint={claimingId} onClaim={(mint) => void handleClaimRewardsForMint(mint)} />
+            <>
+              <MeteoraPortfolioScreen game={game} portfolio={meteoraPortfolio} tokens={tokens} />
+              <section className="page-shell" aria-label="Rent reclaim status">
+                <p className="form-message">
+                  Rent reclaim is unavailable in Meteora mode. The native-program account authority
+                  does not support this action, so no reclaim transaction can be started here.
+                </p>
+              </section>
+            </>
           )}
           {page === "profile" && connected && config.chainMode !== "meteora" && (
-            <PortfolioScreen wallet={connected.address} programAddress={config.programId} signer={connected.wallet} />
+            <>
+              <PortfolioScreen wallet={connected.address} programAddress={config.programId} signer={connected.wallet} />
+              {config.programId && (
+                <Suspense fallback={<RouteFallback />}>
+                  <RentReclaimPanel programAddress={config.programId} signer={connected.wallet} />
+                </Suspense>
+              )}
+            </>
           )}
           {page === "profile" && !connected && (
             <section className="page-shell">
@@ -1114,6 +1118,7 @@ export default function App() {
             onLaunched={(token) => {
               setTokens((current) => [token, ...current.filter((existing) => existing.mint !== token.mint)]);
               setSelected(token);
+              track("launch_succeeded", { chain_mode: config.chainMode, network: config.cluster });
             }}
           />
         )}
@@ -1127,17 +1132,6 @@ export default function App() {
             onCollect={() => void handleCollectReport()}
             onClose={() => setMiningReport(null)}
             onManageCrew={() => { setMiningReport(null); setCrewOpen(true); }}
-            onSwitchMine={() => { setMiningReport(null); setSwitchOpen(true); }}
-          />
-        )}
-          {switchOpen && (
-          <SwitchMineModal
-            tokens={tokens}
-            activeMint={config.chainMode === "meteora" ? game?.activeMine?.coin.mint ?? null : player?.activeMint ?? null}
-            switching={switching}
-            error={activateError}
-            onSwitch={(mint) => void handleSwitchMine(mint)}
-            onClose={() => setSwitchOpen(false)}
           />
         )}
         {crewOpen && player && (

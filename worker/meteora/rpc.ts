@@ -42,10 +42,24 @@ export interface MeteoraTransaction {
   blockTime: number | null;
   failed: boolean;
   accountKeys: string[];
+  signatures: string[];
   instructions: { programId: string; accounts: string[]; data: string }[];
+  /** Top-level message instructions, before inner CPI instructions are appended. */
+  topLevelInstructions?: { programId: string; accounts: string[]; data: string }[];
   logs: string[];
   preTokenBalances: { accountIndex: number; mint: string; owner: string | null; amount: string }[];
   postTokenBalances: { accountIndex: number; mint: string; owner: string | null; amount: string }[];
+}
+
+export interface MeteoraFinalizedTransactionProof {
+  wire: string;
+  transaction: MeteoraTransaction;
+}
+
+function wireBase64(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value) && typeof value[0] === "string") return value[0];
+  return null;
 }
 
 function requireString(value: unknown, name: string): string {
@@ -215,9 +229,13 @@ export async function readSignatures(
   });
 }
 
-export async function readTransaction(env: MeteoraRpcEnv, signature: string): Promise<MeteoraTransaction | null> {
+async function readTransactionAtCommitment(
+  env: MeteoraRpcEnv,
+  signature: string,
+  commitment: "confirmed" | "finalized",
+): Promise<MeteoraTransaction | null> {
   const response = await getChainRpc(meteoraRpcEnv(env)).getTransaction(signature as never, {
-    commitment: "confirmed",
+    commitment,
     encoding: "json",
     maxSupportedTransactionVersion: 0,
   } as never).send();
@@ -231,7 +249,7 @@ export async function readTransaction(env: MeteoraRpcEnv, signature: string): Pr
       preTokenBalances?: Array<{ accountIndex?: unknown; mint?: unknown; owner?: unknown; uiTokenAmount?: { amount?: unknown } }> | null;
       postTokenBalances?: Array<{ accountIndex?: unknown; mint?: unknown; owner?: unknown; uiTokenAmount?: { amount?: unknown } }> | null;
     } | null;
-    transaction?: { message?: { accountKeys?: Array<string | { pubkey: string }>; instructions?: unknown[] } };
+    transaction?: { signatures?: string[]; message?: { accountKeys?: Array<string | { pubkey: string }>; instructions?: unknown[] } };
   } | null;
   if (!value) return null;
   const keys = value.transaction?.message?.accountKeys ?? [];
@@ -274,11 +292,57 @@ export async function readTransaction(env: MeteoraRpcEnv, signature: string): Pr
     blockTime: rpcNumber(value.blockTime),
     failed: Boolean(value.meta?.err),
     accountKeys: keys.map((key) => typeof key === "string" ? key : key.pubkey),
+    signatures: value.transaction?.signatures ?? [],
     instructions,
+    topLevelInstructions: instructions.slice(0, topLevel.length),
     logs: value.meta?.logMessages ?? [],
     preTokenBalances: tokenBalances(value.meta?.preTokenBalances),
     postTokenBalances: tokenBalances(value.meta?.postTokenBalances),
   };
+}
+
+export async function readTransaction(env: MeteoraRpcEnv, signature: string): Promise<MeteoraTransaction | null> {
+  return readTransactionAtCommitment(env, signature, "confirmed");
+}
+
+/** Reads the canonical wire bytes used to prove a reported signature came from our prepared transaction. */
+async function readTransactionWireAtCommitment(
+  env: MeteoraRpcEnv,
+  signature: string,
+  commitment: "confirmed" | "finalized",
+): Promise<string | null> {
+  const response = await getChainRpc(meteoraRpcEnv(env)).getTransaction(signature as never, {
+    commitment,
+    encoding: "base64",
+    maxSupportedTransactionVersion: 0,
+  } as never).send();
+  const value = response as unknown as { transaction?: unknown } | null;
+  return value ? wireBase64(value.transaction) : null;
+}
+
+export async function readTransactionWire(env: MeteoraRpcEnv, signature: string): Promise<string | null> {
+  return readTransactionWireAtCommitment(env, signature, "confirmed");
+}
+
+/**
+ * Proves that a signature is finalized and returns both the exact wire bytes and decoded effects.
+ * A missing, confirmed-only, failed, or inconsistent response is deliberately not proof of payment.
+ */
+export async function readFinalizedTransactionProof(
+  env: MeteoraRpcEnv,
+  signature: string,
+): Promise<MeteoraFinalizedTransactionProof | null> {
+  const rpc = getChainRpc(meteoraRpcEnv(env));
+  const response = await rpc.getSignatureStatuses([signature as never], {
+    searchTransactionHistory: true,
+  }).send();
+  const status = response.value[0];
+  if (!status || status.confirmationStatus !== "finalized" || status.err) return null;
+
+  const wire = await readTransactionWireAtCommitment(env, signature, "finalized");
+  const transaction = await readTransactionAtCommitment(env, signature, "finalized");
+  if (!wire || !transaction || transaction.failed || transaction.slot !== BigInt(status.slot)) return null;
+  return { wire, transaction };
 }
 
 export function decodePoolConfig(data: Uint8Array): { quoteMint: string; feeClaimer: string; leftoverReceiver: string; tokenDecimal: number; migrationQuoteThreshold: bigint } {

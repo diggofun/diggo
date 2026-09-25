@@ -19,7 +19,6 @@ import {
   IconOre,
   IconSnowflake,
   IconStreak,
-  IconSwap,
   IconTimer,
   IconWallet,
 } from "../icons";
@@ -38,7 +37,6 @@ export interface DashboardPanelProps {
   error: string;
   onActivate(): void;
   onManageCrew(): void;
-  onSwitchMine(): void;
   onCollect(): void;
 }
 
@@ -57,7 +55,6 @@ export function DashboardPanel({
   error,
   onActivate,
   onManageCrew,
-  onSwitchMine,
   onCollect,
 }: DashboardPanelProps) {
   const active = player?.activationState === "ACTIVE";
@@ -243,9 +240,6 @@ export function DashboardPanel({
             <button className="btn btn-ghost" onClick={onManageCrew}>
               Manage crew <IconHammer size={14} />
             </button>
-            <button className="btn btn-ghost" onClick={onSwitchMine}>
-              Switch mine <IconSwap size={14} />
-            </button>
           </div>
           <p className="dash-note">
             {player.activatedAt
@@ -273,9 +267,6 @@ export function DashboardPanel({
             <div className="dash-actions dash-actions-inline">
               <button className="btn btn-ghost btn-sm" onClick={onManageCrew}>
                 Manage crew <IconHammer size={14} />
-              </button>
-              <button className="btn btn-ghost btn-sm" onClick={onSwitchMine}>
-                Switch mine <IconSwap size={14} />
               </button>
             </div>
           </div>

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  METEORA_FEE_CLAIMER,
   estimatedMeteoraLaunchCostLamports,
+  isMeteoraConfigPubkey,
   migrationThresholdLamports,
   normalizeChainMode,
   normalizeMeteoraCluster,
@@ -8,10 +10,15 @@ import {
 } from "./config";
 
 describe("Meteora configuration", () => {
-  it("defaults to the temporary Meteora mode and devnet", () => {
+  it("pins the canonical platform fee destination", () => {
+    expect(METEORA_FEE_CLAIMER).toBe("6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ");
+  });
+
+  it("defaults to the temporary Meteora mode and mainnet", () => {
     expect(normalizeChainMode(undefined)).toBe("meteora");
     expect(normalizeChainMode("native")).toBe("native");
-    expect(normalizeMeteoraCluster(undefined)).toBe("devnet");
+    expect(normalizeMeteoraCluster(undefined)).toBe("mainnet-beta");
+    expect(normalizeMeteoraCluster("devnet")).toBe("devnet");
     expect(normalizeMeteoraCluster("mainnet-beta")).toBe("mainnet-beta");
   });
 
@@ -34,5 +41,10 @@ describe("Meteora configuration", () => {
     expect(requireMeteoraConfigPubkey("11111111111111111111111111111111")).toBe(
       "11111111111111111111111111111111",
     );
+  });
+
+  it("rejects the launch placeholder as a pubkey", () => {
+    expect(isMeteoraConfigPubkey("SET_AFTER_CREATE")).toBe(false);
+    expect(() => requireMeteoraConfigPubkey("SET_AFTER_CREATE")).toThrow(/config pubkey/i);
   });
 });

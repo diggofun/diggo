@@ -46,7 +46,7 @@ test("the tab bar carries the five game shortcuts and they navigate", async ({ p
 
   await tabBar.getByRole("link", { name: "Mine", exact: true }).click();
   await expect(page).toHaveURL(/\/mine$/);
-  await expect(page.getByRole("heading", { level: 1, name: /YOUR CREW IS/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /YOUR CREW/ })).toBeVisible();
   // With the drawer shut, the bar is the only thing that can say where the player landed.
   await expect(tabBar.getByRole("link", { name: "Mine", exact: true })).toHaveAttribute("aria-current", "page");
 });
@@ -62,7 +62,7 @@ test("the drawer holds the destinations the tab bar leaves out, and they navigat
 
   await drawer.getByRole("link", { name: "Discoveries", exact: true }).click();
   await expect(page).toHaveURL(/\/discoveries$/);
-  await expect(page.getByRole("heading", { level: 1, name: /WHAT THE CREW/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /YOUR MINING LEDGER/ })).toBeVisible();
   // Following a drawer link is a real page load, so the panel is shut again on arrival.
   await expect(page.locator(".app-sidebar.is-open")).toHaveCount(0);
 

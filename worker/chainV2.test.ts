@@ -47,9 +47,24 @@ describe("resolveChainConfig", () => {
   });
 
   it("does not allow the devnet program on mainnet", () => {
-    expect(() => resolveChainConfig(env({ SOLANA_CLUSTER: "mainnet-beta", DIGGO_RPC_URL: "https://mainnet.example/rpc" }))).toThrow(
+    expect(() => resolveChainConfig(env({ CHAIN_MODE: "native", SOLANA_CLUSTER: "mainnet-beta", DIGGO_RPC_URL: "https://mainnet.example/rpc" }))).toThrow(
       ChainConfigurationError,
     );
+  });
+
+  it("allows mainnet Meteora mode without a native program id", () => {
+    const config = resolveChainConfig(env({
+      CHAIN_MODE: "meteora",
+      SOLANA_CLUSTER: "mainnet-beta",
+      DIGGO_PROGRAM_ID: undefined,
+      DIGGO_RPC_URL: "https://mainnet.example/rpc",
+    }));
+    expect(config).toMatchObject({ cluster: "mainnet-beta", programId: null, rpcUrl: "https://mainnet.example/rpc" });
+  });
+
+  it("still requires a valid native program id in native mode", () => {
+    expect(() => resolveChainConfig(env({ CHAIN_MODE: "native", DIGGO_PROGRAM_ID: undefined }))).toThrow(ChainConfigurationError);
+    expect(() => resolveChainConfig(env({ CHAIN_MODE: undefined, DIGGO_PROGRAM_ID: undefined }))).toThrow(ChainConfigurationError);
   });
 
   it("fails over to the next RPC on 403 and keeps the ordered URL list", async () => {

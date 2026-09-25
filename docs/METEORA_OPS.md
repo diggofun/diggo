@@ -1,5 +1,17 @@
 # Meteora DBC operations
 
+## Current readiness status
+
+Production is configured for `CHAIN_MODE=meteora` on `mainnet-beta` with the approved DBC config
+`5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF`. Its fee claimer is
+`6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ`, and its mining vault / leftover receiver is
+`H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT`. Public mainnet launch is not ready: production
+RPC, migrations, required funding, a funded end-to-end launch/mining/Discoveries/Claim all
+rehearsal, and the required security review must still be complete before public access is opened.
+
+Native-program rent reclaim is unavailable in Meteora mode. The historical native reclaim action
+must not be represented as available in the current product.
+
 This runbook covers the temporary Meteora Dynamic Bonding Curve (DBC) launch path. The native
 Anchor program in `programs/diggo-protocol` is not used by these scripts. The pinned SDK is
 `@meteora-ag/dynamic-bonding-curve-sdk@1.5.13`.
@@ -11,21 +23,32 @@ Anchor program in `programs/diggo-protocol` is not used by these scripts. The pi
 - Quote mint: wrapped SOL, `So11111111111111111111111111111111111111112`
 - Supply: 1,000,000,000 SPL tokens with 9 decimals
 - Leftover reserve: 200,000,000 tokens (20%) to the mining vault
-- Fee claimer / partner: `GyGjx2nsgG2wDbUESGTw8aHndXh6b8d2znhZPqWSdwcH`
+- Diggo partner fee claimer: `6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ`
+- Diggo Worker treasury (`DIGGO_TREASURY`): `6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ`
 - Pool creation fee: 0.01 SOL; the SDK/program split applies at pool creation
 - Creator trading fee: 0%
 - Anti-sniper schedule: 3% to 1% over 60 minutes, with dynamic fees enabled
 - Migration threshold: 2 SOL on devnet, 85 SOL on mainnet
 - Partner liquidity: 90%, including 10% permanently locked; creator liquidity: 0%
 - DAMM v2 migrated pool fee: 1% (100 bps)
+- Approved migration fee: 1% (the pinned SDK cannot represent the researched 0.5% value)
+- Approved `percentageSupplyOnMigration`: 25%
 
-The SDK's `Customizable` migration fee accepts whole percentage points. The current config
-therefore uses 1% with a 0% creator share. The requested 0.5% cannot be represented by SDK
-1.5.13; do not sign a mainnet config until the owner accepts 1% or the SDK is upgraded to a
-release that supports fractional percentages.
+The SDK's `Customizable` migration fee accepts whole percentage points. The approved config uses 1%
+with a 0% creator share. The requested 0.5% cannot be represented by SDK 1.5.13; this limitation is
+part of the approved configuration and must be kept in any future SDK upgrade review.
 
-The SDK also requires a curve split. The scripts currently use `percentageSupplyOnMigration: 25`,
-which is a temporary operational default and needs owner confirmation before mainnet launch.
+The SDK also requires a curve split. The approved configuration uses
+`percentageSupplyOnMigration: 25`.
+
+`feeClaimer`, the leftover receiver, and the partner/creator split are fixed when `createConfig`
+creates the config account. The pinned SDK and program IDL expose no instruction to change those
+config destinations. `DIGGO_TREASURY` is a Worker setting for Diggo-controlled flows; it does not
+change the config or redirect fees from an existing pool. Meteora's pool-creation protocol fee also
+has a separate program-controlled treasury, so `DIGGO_TREASURY` cannot redirect that protocol-level
+fee. Separately, the program does expose `updatePoolFees` for an authorized pool operator, so a
+pool's cliff, dynamic, and compounding fee parameters are mutable even though the config's fee
+destinations and partner/creator split are fixed.
 
 ## Key handling
 
@@ -33,11 +56,11 @@ Never put a keypair JSON file in the repository. The scripts reject paths under 
 `create-mining-vault-keypair.ts` refuses to overwrite an existing file. The keypair is written with
 owner-only permissions where the host supports them.
 
-Generate a mining-vault keypair outside the checkout:
+Generate a mining-vault keypair outside the checkout (mainnet paths shown here):
 
 ```powershell
 npx tsx scripts/meteora/create-mining-vault-keypair.ts `
-  --output C:\Users\Jurek\.diggo-devnet\mining-vault.json
+  --output C:\Users\Jurek\.diggo-mainnet\mining-vault.json
 ```
 
 Store the secret as `MINING_VAULT_SECRET` in the actual `.dev.vars` for local Worker use, or as a
@@ -47,33 +70,85 @@ not receive the 200M tokens until the curve has completed and `withdrawLeftover`
 
 ## Creating a config
 
-The payer and mining-vault paths must be outside the repository:
+The payer path must be outside the repository. `create-config.ts` takes the mining-vault public
+key, not the keypair file path:
 
 ```powershell
 npx tsx scripts/meteora/create-config.ts `
-  --cluster devnet `
-  --payer C:\Users\Jurek\.diggo-devnet\payer.json `
-  --mining-vault C:\Users\Jurek\.diggo-devnet\mining-vault.json
+  --cluster mainnet `
+  --payer C:\Users\Jurek\.diggo-mainnet\payer.json `
+  --mining-vault H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT `
+  --rpc-url $mainnetRpc
 ```
 
-For mainnet, the script first builds and simulates the transaction, prints the rent estimate, and
-then refuses to submit unless `--allow-mainnet` is explicitly supplied. Review the simulation and
-cost before using that flag. A config keypair is generated in memory and is not printed or written
-to disk; only its public key is printed. The config has no post-creation authority in this flow.
+Read the keyed RPC into a process-local variable without printing it:
+
+```powershell
+$mainnetRpc = (Get-Content -Raw C:\Users\Jurek\.diggo-mainnet\helius-mainnet-rpc-url.txt).Trim()
+```
+
+For mainnet, the script first builds and simulates the transaction, itemizes rent and fees, then
+refuses to submit unless `--allow-mainnet` is explicitly supplied. Review the simulation and cost
+immediately before using that flag. A config keypair is generated in memory and is not written to
+disk; only its public key is printed. The config has no post-creation authority in this flow.
+
+## Historical mainnet preparation record
+
+This section preserves the preparation state observed on 2026-09-25, before the approved config was
+created. It is not the current configuration status.
+
+- Payer: `GkCYyWzSjhSFEjKNx1ebWThtVLzQj7L84ktAHe31MBSx`
+- Mining vault / leftover receiver: `H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT`
+- Fee claimer: `6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ`
+- Mainnet Helius endpoint file: `C:\Users\Jurek\.diggo-mainnet\helius-mainnet-rpc-url.txt`; `getHealth` returned `ok`
+- Payer and vault balances at verification time: 0 lamports
+
+The unsigned mainnet transaction has one DBC instruction, two required signatures, and no attached
+priority fee. The exact verified cost is:
+
+- New payer account rent exemption: 650,240 lamports
+- Config account rent exemption (1,048 bytes): 5,974,080 lamports
+- Transaction base fee: 10,000 lamports
+- Priority fee: 0 lamports
+- One-time config cost: 5,984,080 lamports (`0.005984080 SOL`)
+- Exact first-funding minimum, including keeping the payer rent-exempt: 6,634,320 lamports (`0.006634320 SOL`)
+
+Fund the payer with **0.010000000 SOL (10,000,000 lamports)**. That leaves 3,365,680 lamports of
+headroom over the exact minimum for fee changes or a retry. Fund the mining vault with **0.1 SOL**.
+Ordinary prepared mining claims are player-authorized, while the vault is an operational signer
+for mining payouts and the one-time leftover withdrawal, including an ATA when needed. The funded
+mainnet rehearsal must verify both paths, their actual authorizations, and their balance
+requirements. Refill the vault before it can no longer cover those operations; do not treat it as a
+SOL trading reserve.
+
+The dedicated-payer dry-run correctly refused submission but returned `AccountNotFound` because the
+new payer had no mainnet account yet. A separate no-send program simulation used a disposable,
+already-funded fee payer so the DBC instruction could execute. It succeeded with no error and used
+39,193 compute units; the dedicated payer and in-memory config keypair were not funded or signed.
+After funding, run the same command without `--allow-mainnet` and require a successful simulation
+before any signing. `--allow-mainnet` is intentionally absent from this runbook's commands.
 
 ## Fees and leftover tokens
 
-Claim partner trading fees to the owner wallet (or another explicitly selected receiver):
+Claim partner trading fees to the canonical platform fee wallet:
 
 ```powershell
 npx tsx scripts/meteora/claim-partner-fees.ts `
-  --cluster devnet `
-  --payer C:\Users\Jurek\.diggo-devnet\payer.json `
+  --cluster mainnet `
+  --fee-claimer C:\Users\Jurek\.diggo-mainnet\platform-fee-wallet.json `
+  --payer C:\Users\Jurek\.diggo-mainnet\payer.json `
   --pool <POOL_ADDRESS>
 ```
 
-The optional `--receiver` defaults to the owner fee-claimer wallet. The transaction signs locally;
-the script prints the pool, receiver, signature, and exact payer balance change.
+The keypair path must resolve to the canonical fee-claimer wallet and must remain outside the
+repository. The script reads the pool's config and rejects any pool configured for another fee
+claimer. The optional `--receiver` is also restricted to the canonical wallet. The transaction is
+signed by the fee-claimer key and the payer, and the script prints the pool, config, receiver,
+signature, and exact payer balance change.
+
+The devnet config listed below was created before the canonical-wallet update and retains its
+original immutable fee claimer. The current claim script intentionally rejects that legacy config;
+do not represent a config change as a way to redirect already-accrued fees.
 
 After graduation, the mining reserve can be withdrawn with the manual fallback:
 
@@ -127,7 +202,7 @@ The smoke test therefore exercised config reuse, pool creation, first buy, token
 quote generation, and a sell back to the curve. The disposable mint and pool are not production
 launch records.
 
-## Mainnet one-time config cost
+## Mainnet config creation cost reference
 
 The pinned SDK's config account is 1,048 bytes including the Anchor discriminator. Solana rent
 exemption for that size is 5,974,080 lamports. With two required signatures (payer and config),
@@ -135,10 +210,27 @@ the estimated one-time cost is:
 
 `5,974,080 + 10,000 = 5,984,080 lamports = 0.005984080 SOL`
 
-This excludes priority fees and any future protocol change to account size/rent. The mainnet
-dry-run was executed without `--allow-mainnet`; the public RPC returned `AccountNotFound` for the
-throwaway devnet payer because that address has no mainnet account. No mainnet transaction was
-submitted. Re-run the dry-run with a funded mainnet payer before signing.
+This excludes the new payer account's own 650,240-lamport rent exemption, priority fees, and any
+future protocol change to account size/rent. See **Historical mainnet preparation record** for the
+first-funding calculation used during preparation.
+
+## Purging devnet Meteora data
+
+Before the mainnet cutover, back up D1 and test `scripts/meteora/purge-devnet-data.sql` against a
+local copy. The script removes only the two known devnet pools, their mints, the devnet config scan
+cursor, Meteora swaps/vault rows, game rows for those mints, and matching public token/price/trade
+rows. It preserves wallet-wide players and referral records, clearing only an active devnet mine
+selection.
+
+```powershell
+npm run db:local
+npx wrangler d1 execute diggo-db --local --file=scripts/meteora/purge-devnet-data.sql
+```
+
+Do not run the file against production until the mainnet config and vault public keys have been
+created and independently verified. Production application of the purge is a separate, explicit
+operator step. The file deliberately has no `BEGIN`/`COMMIT` statements: D1 rejects explicit SQL
+transactions when a file is executed with `wrangler d1 execute --file`.
 
 ## RPC endpoints and failover
 
@@ -200,10 +292,12 @@ git diff --check
 The repository's default Vitest configuration includes `src`, `shared`, and `worker` tests but
 excludes `scripts`, so the external config above is intentional for the focused script tests.
 
-## Open launch questions
+## Remaining launch gates
 
-1. Approve 1% migration fee (SDK limitation) or upgrade the SDK before mainnet signing.
-2. Approve the temporary 25% `percentageSupplyOnMigration` curve split.
-3. Confirm the owner wallet is the intended partner fee receiver and mining-vault custody policy.
-4. Run a funded mainnet simulation immediately before `--allow-mainnet`; rent and priority fees can
-   change with cluster state.
+1. Back up the mainnet keypairs offline and confirm the mining-vault custody policy.
+2. Run a funded mainnet simulation immediately before any operational transaction; rent and
+   priority fees can change with cluster state.
+3. Complete a funded mainnet rehearsal of launch, mining, Discoveries, and Claim all, including both
+   player-authorized claims and operations that require the mining vault. Pre-graduation rewards must
+   remain pending, and post-graduation payouts must wait until vault inventory is available.
+4. Complete the required security review before public mainnet access.
