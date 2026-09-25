@@ -23,6 +23,7 @@ import {
   type DiggoConfig,
 } from "../api";
 import { track } from "../analytics";
+import { clearRememberedReferral, readRememberedReferral } from "../referralLink";
 import {
   LAUNCH_DISCOVERY_RESERVE_BPS,
   LAUNCH_RESERVE_BPS,
@@ -128,8 +129,9 @@ export function LaunchModal({
     if (!connected) throw new Error("Connect a wallet that supports message signing");
     const challenge = await getChallenge(connected.address);
     const signature = await connected.signMessage(new TextEncoder().encode(challenge.message));
-    const referralCode = new URLSearchParams(window.location.search).get("ref");
+    const referralCode = readRememberedReferral();
     const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature), referralCode);
+    clearRememberedReferral();
     onAuthenticated(verified.wallet);
     track("wallet_signed_in", { network: config.cluster });
   }

@@ -3,6 +3,7 @@ import { useConnect, useDisconnect, useWallets } from "@solana/kit-plugin-wallet
 import bs58 from "bs58";
 import { fetchSolUsd, getChallenge, verifyWallet, type PortfolioSummary } from "../api";
 import { track } from "../analytics";
+import { clearRememberedReferral, readRememberedReferral } from "../referralLink";
 import { oreAmount, shortAddress, solAmount, usdApprox } from "../format";
 import type { GameState } from "../api";
 import {
@@ -350,8 +351,9 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
     try {
       const challenge = await getChallenge(connected.address);
       const signature = await connected.signMessage(new TextEncoder().encode(challenge.message));
-      const referralCode = new URLSearchParams(window.location.search).get("ref");
+      const referralCode = readRememberedReferral();
       const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature), referralCode);
+      clearRememberedReferral();
       onAuthenticated(verified.wallet);
       track("wallet_signed_in", { network: "solana-mainnet" });
     } catch {

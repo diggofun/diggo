@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { checkReferralCode, getReferrals, saveReferralCode, type ReferralPanel, type ReferralView } from "../api";
 import { shortAddress } from "../format";
 import { IconCopy, IconUserGroup } from "../icons";
+import { referralLink } from "../referralLink";
 
 function solFromLamports(value: string): number {
   try { return Number(BigInt(value)) / 1_000_000_000; } catch { return 0; }
@@ -54,7 +55,7 @@ export function ReferralsScreen({ signedIn }: { signedIn: boolean }) {
 
   async function copyLink(): Promise<void> {
     if (!panel) return;
-    try { await navigator.clipboard.writeText(`https://diggo.fun/?ref=${encodeURIComponent(code)}`); setMessage("Referral link copied."); }
+    try { await navigator.clipboard.writeText(referralLink(code)); setMessage("Referral link copied."); }
     catch { setMessage("Copy is unavailable in this browser."); }
   }
 
@@ -76,7 +77,7 @@ export function ReferralsScreen({ signedIn }: { signedIn: boolean }) {
 
   const threshold = panel ? solFromLamports(panel.thresholdLamports) : 0;
   const cooldown = panel?.cooldownSeconds ?? 0;
-  const referralLink = `https://diggo.fun/?ref=${encodeURIComponent(code)}`;
+  const shareLink = referralLink(code);
   return (
     <section className="page-shell referrals-page" aria-labelledby="referrals-title">
       <div className="section-heading">
@@ -87,8 +88,8 @@ export function ReferralsScreen({ signedIn }: { signedIn: boolean }) {
       {panel ? <>
         <div className="card referral-link-card">
           <label htmlFor="referral-code">Your custom link</label>
-          <div className="referral-link-row"><code>diggo.fun/?ref=</code><input id="referral-code" value={code} onChange={(event) => setCode(event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 20))} /><button type="button" className="btn btn-ghost" onClick={() => void copyLink()} aria-label="Copy referral link" title="Copy referral link"><IconCopy size={16} /> <span>Copy link</span></button></div>
-          <a className="referral-link-preview" href={referralLink} target="_blank" rel="noreferrer">{referralLink}</a>
+          <div className="referral-link-row"><code>diggo.fun/r/</code><input id="referral-code" value={code} onChange={(event) => setCode(event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 20))} /><button type="button" className="btn btn-ghost" onClick={() => void copyLink()} aria-label="Copy referral link" title="Copy referral link"><IconCopy size={16} /> <span>Copy link</span></button></div>
+          <a className="referral-link-preview" href={shareLink} target="_blank" rel="noreferrer">{shareLink}</a>
           <div className="referral-code-actions"><button type="button" className="btn btn-ghost btn-sm" onClick={() => void checkCode()} disabled={checking || !code}>{checking ? "Checking…" : "Check availability"}</button><button type="button" className="btn btn-sm" onClick={() => void saveCode()} disabled={saving || !code || cooldown > 0}>{saving ? "Saving…" : cooldown > 0 ? `Available in ${Math.ceil(cooldown / 86_400)}d` : "Save code"}</button><small>3–20 characters · lowercase letters, numbers, - and _ · changes every 7 days</small></div>
         </div>
         <div className="referral-totals"><Stat label="Invited" value={panel.totals.invited} /><Stat label="Pending" value={panel.totals.pending} /><Stat label="Qualified" value={panel.totals.qualified} /><Stat label="ORE earned" value={`${panel.totals.oreEarned}`} /><Stat label="Skin" value={panel.totals.skinUnlocked ? "Unlocked" : "Locked"} /></div>

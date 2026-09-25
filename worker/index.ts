@@ -53,7 +53,14 @@ import { proxyRpc } from "./rpc";
 import { ChainConfigurationError, isLocalChainRequest, isLocalChainRuntime, resolveChainConfig } from "./chainV2";
 import { reportError } from "./telemetry";
 import { watchlistRoute } from "./watchlist";
-import { changeReferralCode, referralAvailability, referralPanel, sweepMeteoraReferralOre, sweepReferralOre } from "./referrals";
+import {
+  captureReferralForSession,
+  changeReferralCode,
+  referralAvailability,
+  referralPanel,
+  sweepMeteoraReferralOre,
+  sweepReferralOre,
+} from "./referrals";
 import {
   bootstrap,
   coinTrades,
@@ -179,6 +186,9 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
     const referralCodeMatch = pathname.match(/^\/api\/referrals\/code\/([^/]+)$/);
     if (request.method === "GET" && referralCodeMatch) return referralAvailability(decodeURIComponent(referralCodeMatch[1]!), env);
     if (request.method === "POST" && pathname === "/api/referrals/code") return changeReferralCode(request, env);
+    // Referrals are mode-independent, so this sits below the Meteora block on purpose: the capture
+    // endpoint must answer in both modes.
+    if (request.method === "POST" && pathname === "/api/referrals/capture") return captureReferralForSession(request, env);
     const profileMatch = pathname.match(/^\/api\/profile\/([^/]+)$/);
     if (request.method === "GET" && profileMatch) return publicProfile(request, env, profileMatch[1]!);
     // The watchlist (session-scoped) and the portfolio (a projection of the index).

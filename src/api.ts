@@ -309,6 +309,11 @@ export async function saveReferralCode(code: string): Promise<{ code: string; ch
   return postJson("/api/referrals/code", { code });
 }
 
+/** Binds a remembered referral code to a wallet that already holds a session. */
+export async function captureReferral(code: string): Promise<{ code: string; captured: boolean; reason?: string }> {
+  return postJson("/api/referrals/capture", { code });
+}
+
 export async function getWalletSession(): Promise<{ wallet: string } | null> {
   const response = await request("/api/auth/session");
   if (response.status === 401) return null;
