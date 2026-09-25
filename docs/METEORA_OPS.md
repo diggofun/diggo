@@ -130,6 +130,66 @@ before any signing. `--allow-mainnet` is intentionally absent from this runbook'
 
 ## Fees and leftover tokens
 
+For the **official mainnet $DIGGO pool**, use the combined partner claim command. It pins the
+official mint `12cens35GKeZH8is6R1gdbJ1faktyLrXgHvHyBB6veb7`, DBC pool
+`4g7i7aWVvwnSn6K6VKyvzG5UFf2nFCXgYJ7uJUymhhMB`, config
+`5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF`, and fee destination
+`6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ`. It verifies the live program owners, pool
+derivation, mint, quote mint, config, and fee claimer. It includes partner trading and pool creation
+claims in one transaction when both are available, skipping either claim when its fees are zero or
+already claimed. The payer needs SOL for the network fee and any account creation needed by the SDK.
+
+Public-key-only dry run (no secret key needed, never broadcasts):
+
+```powershell
+npx tsx scripts/meteora/claim-official-partner-fees.ts `
+  --payer-pubkey GkCYyWzSjhSFEjKNx1ebWThtVLzQj7L84ktAHe31MBSx
+```
+
+The example payer was unfunded when checked on 2026-09-25, so its simulation will fail until it is
+funded. The command still shows the current claimable amounts and estimated network fee. Use
+`DIGGO_MAINNET_RPC_URL` in the process environment for a private endpoint, without putting the URL
+in the command history:
+
+```powershell
+$env:DIGGO_MAINNET_RPC_URL = (Get-Content -Raw C:\Users\Jurek\.diggo-mainnet\helius-mainnet-rpc-url.txt).Trim()
+```
+
+With external JSON keypair files, run the same command without `--send` to review its simulation:
+
+```powershell
+npx tsx scripts/meteora/claim-official-partner-fees.ts `
+  --payer-keypair C:\Users\Jurek\.diggo-mainnet\payer.json `
+  --fee-claimer-keypair C:\Users\Jurek\.diggo-mainnet\platform-fee-wallet.json
+```
+
+Only after funding and reviewing a successful dry run, explicitly send with:
+
+```powershell
+npx tsx scripts/meteora/claim-official-partner-fees.ts `
+  --payer-keypair C:\Users\Jurek\.diggo-mainnet\payer.json `
+  --fee-claimer-keypair C:\Users\Jurek\.diggo-mainnet\platform-fee-wallet.json `
+  --send
+```
+
+Both files must remain outside the repository and the fee-claimer keypair
+must resolve to the exact on-chain fee claimer. The CLI cannot sign through a browser wallet
+extension; an extension needs a separate wallet-connected transaction flow and cannot be passed as
+a keypair path to this command. Do not export an extension seed phrase for this CLI.
+
+That wallet-connected flow is the **Platform fees** card. Connect the config fee claimer
+(`6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ`) in Phantom and open `/profile` (or `/admin`); the
+card renders for no other wallet. It lists every DBC pool under the config with its fresh partner
+trading fee and unclaimed creation fee (90% of the configured pool creation fee). Each Claim builds
+one transaction with `claimPartnerTradingFeeToReceiver` (receiver = the claimer) and
+`claimPartnerPoolCreationFee` (receiver = the claimer), paid by the claimer. Before the wallet opens,
+the card checks the balance and simulates the unsigned transaction through `/api/rpc`. Keep about
+0.005 SOL in the claimer wallet: the claim needs roughly 0.003 SOL up front for the network fee and
+token-account rent, and the temporary wrapped-SOL rent is refunded in the same transaction.
+
+The older `claim-partner-fees.ts` below is a trading-only command and broadcasts immediately. Use
+the combined command for the official mainnet pool.
+
 Claim partner trading fees to the canonical platform fee wallet:
 
 ```powershell

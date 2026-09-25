@@ -15,7 +15,7 @@ import { sessionWallet } from "./auth";
 import { isLocalChainRequest, isLocalChainRuntime, resolveChainConfig } from "./chainV2";
 import type { RuntimeEnv } from "./env";
 import { apiError, checkRateLimit, checkWalletRateLimit } from "./http";
-import { METEORA_DAMM_V2_PROGRAM_ID, METEORA_DBC_PROGRAM_ID } from "../shared/meteora";
+import { METEORA_DAMM_V2_PROGRAM_ID, METEORA_DBC_PROGRAM_ID, normalizeMeteoraConfigPubkey } from "../shared/meteora";
 
 const RPC_READ_METHOD_ALLOWLIST = new Set([
   "getAccountInfo",
@@ -31,7 +31,16 @@ const RPC_READ_METHOD_ALLOWLIST = new Set([
   "getSlot",
   "getBlockTime",
   "getVersion",
+  // Needed by the platform-fee card to list Meteora DBC pools under the published config. Only
+  // the exact SDK query shape (pool discriminator + config memcmp) is accepted; see below.
+  "getProgramAccounts",
 ]);
+
+/** Anchor discriminators (base58) of the DBC VirtualPool and TransferHookPool accounts. */
+const DBC_POOL_ACCOUNT_DISCRIMINATORS = new Set(["cmrfVvtHrjd", "gnXMCshfb9U"]);
+/** Byte offset of PoolState::config inside both DBC pool accounts. */
+const DBC_POOL_CONFIG_OFFSET = 72;
+const MAX_PROGRAM_ACCOUNT_READS_PER_MINUTE = 20;
 
 const RPC_WRITE_METHOD_ALLOWLIST = new Set(["sendTransaction", "simulateTransaction"]);
 const COMMITMENTS = new Set(["processed", "confirmed", "finalized"]);
@@ -106,7 +115,13 @@ function validateSendOptions(options: unknown): void {
   }
 }
 
-function validateSimulateOptions(options: unknown): void {
+/**
+ * `unsigned` is the preflight path for a transaction the wallet has not signed yet. It must say
+ * `sigVerify: false` explicitly and may ask the node to use a fresh blockhash; a signed simulation
+ * keeps the strict defaults.
+ */
+function validateSimulateOptions(options: unknown, unsigned = false): void {
+  if (unsigned && !isRecord(options)) throw new Error("Unsigned simulation must set sigVerify to false");
   if (options === undefined) return;
   if (!isRecord(options)) throw new Error("simulateTransaction options must be an object");
   const keys = Object.keys(options);
@@ -123,9 +138,16 @@ function validateSimulateOptions(options: unknown): void {
   if (keys.some((key) => !allowed.has(key))) throw new Error("simulateTransaction option is not allowed");
   if (options.encoding !== undefined && options.encoding !== "base64") throw new Error("Only base64 encoding is allowed");
   if (options.commitment !== undefined && !COMMITMENTS.has(String(options.commitment))) throw new Error("Invalid commitment");
-  if (options.sigVerify !== undefined && options.sigVerify !== true) throw new Error("sigVerify must be true");
-  if (options.replaceRecentBlockhash !== undefined && options.replaceRecentBlockhash !== false) {
-    throw new Error("replaceRecentBlockhash must be false");
+  if (unsigned) {
+    if (options.sigVerify !== false) throw new Error("Unsigned simulation must set sigVerify to false");
+    if (options.replaceRecentBlockhash !== undefined && typeof options.replaceRecentBlockhash !== "boolean") {
+      throw new Error("replaceRecentBlockhash must be a boolean");
+    }
+  } else {
+    if (options.sigVerify !== undefined && options.sigVerify !== true) throw new Error("sigVerify must be true");
+    if (options.replaceRecentBlockhash !== undefined && options.replaceRecentBlockhash !== false) {
+      throw new Error("replaceRecentBlockhash must be false");
+    }
   }
   if (options.innerInstructions !== undefined && typeof options.innerInstructions !== "boolean") {
     throw new Error("innerInstructions must be a boolean");
@@ -244,7 +266,37 @@ function validateSignatureArray(value: unknown): void {
   }
 }
 
-function validateReadParams(method: string, params: unknown[] | undefined): void {
+function validateMemcmpFilter(value: unknown): { offset: number; bytes: string } {
+  if (!isRecord(value)) throw new Error("Invalid program account filter");
+  rejectUnknownKeys(value, new Set(["memcmp"]), "program account filter");
+  const memcmp = value.memcmp;
+  if (!isRecord(memcmp)) throw new Error("Invalid program account filter");
+  rejectUnknownKeys(memcmp, new Set(["offset", "bytes", "encoding"]), "memcmp filter");
+  if (memcmp.encoding !== undefined && memcmp.encoding !== "base58") throw new Error("memcmp encoding must be base58");
+  if (typeof memcmp.offset !== "number" || typeof memcmp.bytes !== "string") throw new Error("Invalid memcmp filter");
+  return { offset: memcmp.offset, bytes: memcmp.bytes };
+}
+
+/**
+ * The only program-account scan the proxy serves: every DBC pool (standard or transfer-hook)
+ * created under this deployment's published Meteora config. Anything broader is refused, so the
+ * scan stays bounded by that config's pool count.
+ */
+function validateProgramAccountsParams(args: unknown[], dbcConfig: string): void {
+  requireParamCount("getProgramAccounts", args, 2, 2);
+  if (args[0] !== METEORA_DBC_PROGRAM_ID) throw new Error("getProgramAccounts is limited to Meteora DBC pools");
+  if (!dbcConfig) throw new Error("No Meteora config is published for pool scans");
+  const config = readConfig(args[1], new Set(["commitment", "minContextSlot", "encoding", "filters"]), "getProgramAccounts config");
+  if (config.encoding !== "base64") throw new Error("getProgramAccounts must use base64 encoding");
+  if (!Array.isArray(config.filters) || config.filters.length !== 2) throw new Error("getProgramAccounts needs the pool and config filters");
+  const [kind, owner] = config.filters.map(validateMemcmpFilter);
+  if (kind.offset !== 0 || !DBC_POOL_ACCOUNT_DISCRIMINATORS.has(kind.bytes)) throw new Error("getProgramAccounts is limited to DBC pool accounts");
+  if (owner.offset !== DBC_POOL_CONFIG_OFFSET || owner.bytes !== dbcConfig) {
+    throw new Error("getProgramAccounts is limited to pools under the published Meteora config");
+  }
+}
+
+function validateReadParams(method: string, params: unknown[] | undefined, dbcConfig = ""): void {
   const args = params ?? [];
   const accountConfig = new Set(["commitment", "minContextSlot", "encoding", "dataSlice"]);
   const basicConfig = new Set(["commitment", "minContextSlot"]);
@@ -324,14 +376,23 @@ function validateReadParams(method: string, params: unknown[] | undefined): void
     case "getVersion":
       requireParamCount(method, args, 0, 0);
       return;
+    case "getProgramAccounts":
+      validateProgramAccountsParams(args, dbcConfig);
+      return;
   }
 }
 
+/**
+ * `signatures: "required"` (the default) demands a valid signature from every required signer.
+ * `"unsigned"` is only for simulations with `sigVerify: false`: every signature slot must be
+ * empty, so a signed transaction can never be pushed through the relaxed path.
+ */
 export function validateSignedTransaction(
   encoded: string,
   sessionAddress: string,
   diggoProgramId: string | null,
   allowMeteora = false,
+  signatures: "required" | "unsigned" = "required",
 ): { bytes: Uint8Array; version: "legacy" | 0 } {
   const bytes = strictBase64(encoded);
   if (!bytes || bytes.length > MAX_TRANSACTION_BYTES) throw new Error("Invalid or oversized transaction");
@@ -353,6 +414,10 @@ export function validateSignedTransaction(
   const messageBytes = message.serialize();
   for (let index = 0; index < message.header.numRequiredSignatures; index += 1) {
     const signature = transaction.signatures[index];
+    if (signatures === "unsigned") {
+      if (!signature || signature.some((byte) => byte !== 0)) throw new Error("Unsigned simulation must not carry signatures");
+      continue;
+    }
     if (!signature || signature.length !== 64 || signature.every((byte) => byte === 0) || !ed25519.verify(signature, messageBytes, staticKeys[index].toBytes())) {
       throw new Error("Transaction is unsigned or has an invalid signature");
     }
@@ -398,6 +463,12 @@ export async function proxyRpc(request: Request, env: RuntimeEnv): Promise<Respo
     return apiError(`RPC method not allowed: ${String(blocked?.method)}`, 403);
   }
   let wallet: string | null = null;
+  if (calls.some((call) => call.method === "getProgramAccounts")) {
+    if (!(await checkRateLimit(request, env, "rpc-program-accounts", MAX_PROGRAM_ACCOUNT_READS_PER_MINUTE))) {
+      return apiError("Too many requests", 429);
+    }
+  }
+  const dbcConfig = normalizeMeteoraConfigPubkey(env.METEORA_DBC_CONFIG);
   if (hasWrite) {
     wallet = await sessionWallet(request, env);
     if (!wallet) return apiError("Wallet authentication required for transaction RPC", 401);
@@ -412,15 +483,22 @@ export async function proxyRpc(request: Request, env: RuntimeEnv): Promise<Respo
         if (call.method === "simulateTransaction" && params.length > 3) return apiError("Too many RPC parameters");
         const encoded = transactionParam(params[0]);
         if (!encoded || !wallet) return apiError("Invalid base64 transaction");
-        validateSignedTransaction(encoded, wallet, chain.programId, String(env.CHAIN_MODE || "").trim().toLowerCase() === "meteora");
+        const unsignedSimulation = call.method === "simulateTransaction" && isRecord(params[1]) && params[1].sigVerify === false;
+        validateSignedTransaction(
+          encoded,
+          wallet,
+          chain.programId,
+          String(env.CHAIN_MODE || "").trim().toLowerCase() === "meteora",
+          unsignedSimulation ? "unsigned" : "required",
+        );
         if (call.method === "sendTransaction") validateSendOptions(params[1]);
         else {
-          validateSimulateOptions(params[1]);
+          validateSimulateOptions(params[1], unsignedSimulation);
           validateSimulationConfig(params[2]);
         }
         call.params = [encoded, ...params.slice(1)];
       } else {
-        validateReadParams(call.method, call.params);
+        validateReadParams(call.method, call.params, dbcConfig);
       }
     } catch (error) {
       return apiError(String(error instanceof Error ? error.message : "Invalid transaction RPC request"), 403);

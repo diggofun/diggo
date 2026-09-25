@@ -2,12 +2,15 @@ import { Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEVNET_PROGRAM_ID } from "./chainV2";
 import { proxyRpc } from "./rpc";
+import { METEORA_DBC_PROGRAM_ID } from "../shared/meteora";
 
 const PROGRAM = new PublicKey(DEVNET_PROGRAM_ID);
 const SESSION = "test-session";
 const ADDRESS = new PublicKey(new Uint8Array(32).fill(1)).toBase58();
 const TOKEN_PROGRAM = new PublicKey(new Uint8Array(32).fill(2)).toBase58();
 const SIGNATURE = "1".repeat(64);
+const DBC_CONFIG = "5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF";
+const VIRTUAL_POOL_DISCRIMINATOR = "cmrfVvtHrjd";
 
 function kv() {
   const values = new Map<string, string>();
@@ -60,6 +63,38 @@ function signedTransaction(wallet: Keypair): string {
   transaction.add(SystemProgram.transfer({ fromPubkey: wallet.publicKey, toPubkey: Keypair.generate().publicKey, lamports: 1 }));
   transaction.sign(wallet);
   return encode(transaction);
+}
+
+function unsignedTransaction(payer: PublicKey): string {
+  const transaction = new Transaction({ feePayer: payer, recentBlockhash: PublicKey.default.toBase58() });
+  transaction.add(SystemProgram.transfer({ fromPubkey: payer, toPubkey: payer, lamports: 1 }));
+  return Buffer.from(transaction.serialize({ requireAllSignatures: false, verifySignatures: false })).toString("base64");
+}
+
+function poolScan(overrides: { program?: string; filters?: unknown[]; config?: Record<string, unknown> } = {}) {
+  return {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "getProgramAccounts",
+    params: [
+      overrides.program ?? METEORA_DBC_PROGRAM_ID,
+      {
+        encoding: "base64",
+        commitment: "confirmed",
+        filters: overrides.filters ?? [
+          { memcmp: { offset: 0, bytes: VIRTUAL_POOL_DISCRIMINATOR, encoding: "base58" } },
+          { memcmp: { offset: 72, bytes: DBC_CONFIG, encoding: "base58" } },
+        ],
+        ...overrides.config,
+      },
+    ],
+  };
+}
+
+function meteoraRuntime(kvStore = kv(), wallet?: Keypair) {
+  const env = runtime(kvStore, wallet) as unknown as Record<string, unknown>;
+  env.METEORA_DBC_CONFIG = DBC_CONFIG;
+  return env as never;
 }
 
 describe("proxyRpc", () => {
@@ -193,6 +228,106 @@ describe("proxyRpc", () => {
     const env = runtime();
     delete (env as unknown as Record<string, unknown>).DIGGO_RPC_URL;
     await expect(proxyRpc(request({ jsonrpc: "2.0", id: 1, method: "getSlot" }), env)).rejects.toThrow();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("simulates an unsigned transaction paid by the session wallet when sigVerify is false", async () => {
+    const wallet = Keypair.generate();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { value: { err: null } } })));
+    const options = { encoding: "base64", commitment: "confirmed", sigVerify: false, replaceRecentBlockhash: true };
+    const response = await proxyRpc(
+      request({ jsonrpc: "2.0", id: 1, method: "simulateTransaction", params: [unsignedTransaction(wallet.publicKey), options] }),
+      runtime(kv(), wallet),
+    );
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["without sigVerify false", { encoding: "base64" }],
+    ["with sigVerify true", { encoding: "base64", sigVerify: true }],
+    ["with no options", undefined],
+  ])("rejects an unsigned simulation %s", async (_label, options) => {
+    const wallet = Keypair.generate();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const params = options ? [unsignedTransaction(wallet.publicKey), options] : [unsignedTransaction(wallet.publicKey)];
+    const response = await proxyRpc(request({ jsonrpc: "2.0", id: 1, method: "simulateTransaction", params }), runtime(kv(), wallet));
+    expect(response.status).toBe(403);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsigned simulations paid by another wallet, anonymous ones, and unsigned sends", async () => {
+    const wallet = Keypair.generate();
+    const other = Keypair.generate();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const options = { encoding: "base64", sigVerify: false };
+    const foreign = await proxyRpc(
+      request({ jsonrpc: "2.0", id: 1, method: "simulateTransaction", params: [unsignedTransaction(other.publicKey), options] }),
+      runtime(kv(), wallet),
+    );
+    expect(foreign.status).toBe(403);
+    const anonymous = await proxyRpc(
+      request({ jsonrpc: "2.0", id: 1, method: "simulateTransaction", params: [unsignedTransaction(wallet.publicKey), options] }),
+      runtime(),
+    );
+    expect(anonymous.status).toBe(401);
+    const send = await proxyRpc(
+      request({ jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [unsignedTransaction(wallet.publicKey), { encoding: "base64" }] }),
+      runtime(kv(), wallet),
+    );
+    expect(send.status).toBe(403);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not let a signed transaction use the relaxed sigVerify false path", async () => {
+    const wallet = Keypair.generate();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const response = await proxyRpc(
+      request({ jsonrpc: "2.0", id: 1, method: "simulateTransaction", params: [signedTransaction(wallet), { encoding: "base64", sigVerify: false }] }),
+      runtime(kv(), wallet),
+    );
+    expect(response.status).toBe(403);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("forwards the SDK scan of DBC pools under the published config", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [] })));
+    const payload = poolScan();
+    const response = await proxyRpc(request(payload), meteoraRuntime());
+    expect(response.status).toBe(200);
+    expect(JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))).toEqual(payload);
+  });
+
+  it.each([
+    ["another program", poolScan({ program: TOKEN_PROGRAM })],
+    ["another config", poolScan({ filters: [
+      { memcmp: { offset: 0, bytes: VIRTUAL_POOL_DISCRIMINATOR } },
+      { memcmp: { offset: 72, bytes: ADDRESS } },
+    ] })],
+    ["another account type", poolScan({ filters: [
+      { memcmp: { offset: 0, bytes: "11111111111" } },
+      { memcmp: { offset: 72, bytes: DBC_CONFIG } },
+    ] })],
+    ["a missing config filter", poolScan({ filters: [{ memcmp: { offset: 0, bytes: VIRTUAL_POOL_DISCRIMINATOR } }] })],
+    ["an extra filter", poolScan({ filters: [
+      { memcmp: { offset: 0, bytes: VIRTUAL_POOL_DISCRIMINATOR } },
+      { memcmp: { offset: 72, bytes: DBC_CONFIG } },
+      { dataSize: 424 },
+    ] })],
+    ["a dataSize filter", poolScan({ filters: [{ dataSize: 424 }, { memcmp: { offset: 72, bytes: DBC_CONFIG } }] })],
+    ["jsonParsed encoding", poolScan({ config: { encoding: "jsonParsed" } })],
+    ["a dataSlice", poolScan({ config: { dataSlice: { offset: 0, length: 8 } } })],
+  ])("rejects a program account scan with %s", async (_label, payload) => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const response = await proxyRpc(request(payload), meteoraRuntime());
+    expect(response.status).toBe(403);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects program account scans when no Meteora config is published", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const response = await proxyRpc(request(poolScan()), runtime());
+    expect(response.status).toBe(403);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
