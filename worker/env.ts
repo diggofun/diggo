@@ -17,6 +17,8 @@ export interface SecretBindings {
   SUPABASE_SERVICE_ROLE_KEY?: string;
   /** Devnet RPC URL, e.g. a Helius endpoint. Falls back to the public devnet RPC when unset. */
   DIGGO_RPC_URL?: string;
+  /** Comma-separated fallback RPC endpoints, tried after DIGGO_RPC_URL. */
+  DIGGO_RPC_URLS?: string;
   /**
    * The optional crank bot's fee payer, base58-encoded 64-byte secret key, JSON-array
    * stringified (see docs/CUSTODY.md).
@@ -92,11 +94,26 @@ export interface IndexerBindings {
   CRANK_ENABLED?: string;
 }
 
-export type RuntimeEnv = Env &
+/** Temporary Meteora bridge settings. The secret key itself is never declared here. */
+export interface MeteoraBindings {
+  CHAIN_MODE?: string;
+  METEORA_DBC_CONFIG?: string;
+  MINING_VAULT_PUBLIC_KEY?: string;
+  MINING_CLAIM_PER_CLAIM?: string;
+  MINING_CLAIM_PER_DAY?: string;
+  MINING_VAULT_SWEEP_LIMIT?: string;
+  /** Secret name only; never place the vault key in wrangler.jsonc. */
+  MINING_VAULT_SECRET?: string;
+}
+
+type RuntimeEnvBindingOverrides = "CHAIN_MODE" | "DIGGO_RPC_URL" | "DIGGO_RPC_URLS";
+
+export type RuntimeEnv = Omit<Env, RuntimeEnvBindingOverrides> &
   SecretBindings &
   OperationsBindings &
   OracleBindings &
-  IndexerBindings;
+  IndexerBindings &
+  MeteoraBindings;
 
 /**
  * Bindings that exist in the deployed Worker but are optional at runtime, so tests and local

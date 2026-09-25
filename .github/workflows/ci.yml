@@ -2,7 +2,7 @@ name: CI
 
 # Two independent gates:
 #   worker  - the Cloudflare Worker + React client (types, typecheck, lint, tests, build, dry-run deploy)
-#   anchor  - the Anchor program (cargo test, then a real SBF build)
+#   anchor  - the Anchor program (a real SBF build, then cargo test)
 #
 # The Rust job is the slow one, so both run in parallel and neither waits on the other.
 #
@@ -12,7 +12,6 @@ name: CI
 # neither belongs in a job that builds the program real funds settle against.
 on:
   pull_request:
-  push:
 
 permissions:
   contents: read
@@ -137,9 +136,6 @@ jobs:
           anchor --version
           cargo --version
 
-      - name: cargo test
-        run: cargo test --workspace --locked
-
       - name: anchor build
         run: |
           set -euo pipefail
@@ -148,3 +144,6 @@ jobs:
             solana-keygen new --no-bip39-passphrase --silent --force -o "$HOME/.config/solana/id.json"
           fi
           anchor build
+
+      - name: cargo test
+        run: cargo test --workspace --locked

@@ -24,6 +24,16 @@ import {
   type RewardClaimView,
   type DiggoConfig,
   type PortfolioSummary,
+  type GameState,
+  type MeteoraPortfolio,
+  activateGame,
+  claimGameMining,
+  getGameState,
+  getMeteoraPortfolio,
+  requestGameActivationChallenge,
+  runGameDiscovery,
+  selectGameMine,
+  upgradeGameCrew,
 } from "./api";
 import { track } from "./analytics";
 import { TURNSTILE_SITE_KEY } from "./constants";
@@ -40,6 +50,9 @@ import { PushToggle } from "./components/PushToggle";
 import { WatchlistPanel } from "./components/WatchlistPanel";
 import { isLegalPath } from "./components/legal/routes";
 import { usePendingTransaction } from "./onchain";
+import { crewPower } from "../shared/economics";
+import { MeteoraCrewScreen, MeteoraDiscoveriesScreen, MeteoraMineDashboard, MeteoraPortfolioScreen } from "./components/MeteoraGameScreens";
+import { RouteErrorBoundary } from "./components/RouteErrorBoundary";
 
 /*
  * Every screen below the landing page is its own chunk: the swap terminal (lightweight-charts and
@@ -86,6 +99,7 @@ const ROUTES: Record<string, PageId> = {
   "/discoveries": "discoveries",
   "/cosmetics": "cosmetics",
   "/profile": "profile",
+  "/portfolio": "profile",
   "/referrals": "referrals",
   "/admin": "admin",
   ...(import.meta.env.DEV ? { "/__ui": "ui" as const } : {}),
@@ -131,10 +145,14 @@ export default function App() {
   const [session, setSession] = useState<string | null>(null);
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
+  const [game, setGame] = useState<GameState | null>(null);
+  const [meteoraPortfolio, setMeteoraPortfolio] = useState<MeteoraPortfolio | null>(null);
   const [loadingTokens, setLoadingTokens] = useState(true);
   const [bootstrapFailed, setBootstrapFailed] = useState(false);
   const [config, setConfig] = useState<DiggoConfig>({
     cluster: "devnet",
+    chainMode: "meteora",
+    meteoraConfigPubkey: "",
     turnstileSiteKey: "",
     programId: "",
     vanitySuffix: "diggo",
@@ -241,14 +259,22 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (config.chainMode === "meteora") {
+      setPlayer(null);
+      return;
+    }
     if (!session || !walletAddress || session !== walletAddress) {
       setPlayer(null);
       return;
     }
     getPlayerProfile(walletAddress).then(setPlayer).catch(() => setPlayer(null));
-  }, [session, walletAddress]);
+  }, [config.chainMode, session, walletAddress]);
 
   useEffect(() => {
+    if (config.chainMode === "meteora") {
+      setSummary(null);
+      return;
+    }
     if (!session || !walletAddress || session !== walletAddress) {
       setSummary(null);
       return;
@@ -258,7 +284,7 @@ export default function App() {
       .then((value) => { if (current) setSummary(value); })
       .catch(() => { if (current) setSummary(null); });
     return () => { current = false; };
-  }, [session, walletAddress]);
+  }, [config.chainMode, session, walletAddress]);
 
   useEffect(() => {
     const connectedAddress = connected?.address ?? null;
@@ -282,6 +308,23 @@ export default function App() {
   const isMiningActive = player?.activationState === "ACTIVE";
   const signedIn = Boolean(session && walletAddress && session === walletAddress);
 
+  const refreshGame = useCallback(async (): Promise<void> => {
+    if (!walletAddress || !signedIn || config.chainMode !== "meteora") return;
+    try {
+      const next = await getGameState(walletAddress);
+      setGame(next);
+      setMeteoraPortfolio(await getMeteoraPortfolio(walletAddress));
+      setActivateError("");
+    } catch (error) {
+      setActivateError(messageOf(error));
+    }
+  }, [config.chainMode, signedIn, walletAddress]);
+
+  useEffect(() => {
+    if (config.chainMode === "meteora") void refreshGame();
+    else { setGame(null); setMeteoraPortfolio(null); }
+  }, [config.chainMode, refreshGame]);
+
   const loadMineInfo = useCallback(async (mint: string): Promise<void> => {
     setMineInfoLoading(true);
     try {
@@ -295,6 +338,10 @@ export default function App() {
   }, []);
 
   const refreshClaims = useCallback(async (): Promise<void> => {
+    if (config.chainMode === "meteora") {
+      setClaims([]);
+      return;
+    }
     if (!walletAddress || !signedIn) {
       setClaims([]);
       return;
@@ -308,9 +355,14 @@ export default function App() {
     } finally {
       setClaimsLoading(false);
     }
-  }, [walletAddress, signedIn]);
+  }, [config.chainMode, walletAddress, signedIn]);
 
   const refreshDiscoveries = useCallback(async (): Promise<void> => {
+    if (config.chainMode === "meteora") {
+      setDiscoveries([]);
+      setOpportunity(null);
+      return;
+    }
     if (!walletAddress || !signedIn) {
       setDiscoveries([]);
       setOpportunity(null);
@@ -327,7 +379,7 @@ export default function App() {
     } finally {
       setDiscoveriesLoading(false);
     }
-  }, [walletAddress, signedIn]);
+  }, [config.chainMode, walletAddress, signedIn]);
 
   useEffect(() => {
     void refreshClaims();
@@ -382,6 +434,19 @@ export default function App() {
   }
 
   async function handleUpgradeCrew(component: CrewComponentKey): Promise<void> {
+    if (config.chainMode === "meteora") {
+      if (!signedIn) { setCrewError("Sign in to upgrade your crew."); return; }
+      setCrewPending(component);
+      setCrewError("");
+      setCrewNotice("");
+      try {
+        await upgradeGameCrew(component);
+        await refreshGame();
+        setCrewNotice(CREW_COMPONENT_LABELS[component] + " upgraded.");
+      } catch (error) { setCrewError(messageOf(error)); }
+      finally { setCrewPending(null); }
+      return;
+    }
     if (!pendingTransaction.canSubmit()) return;
     if (!connected || !config.programId) {
       setCrewError("Connect a wallet that can sign transactions to upgrade your crew.");
@@ -420,6 +485,15 @@ export default function App() {
   }
 
   async function handleClaimReward(claim: RewardClaimView): Promise<void> {
+    if (config.chainMode === "meteora") {
+      if (!signedIn || !game?.activeMine) return;
+      if (!game.activeMine.coin.graduated) { setClaimError("This mine must graduate before tokens can be claimed."); return; }
+      setClaimingId(claim.id); setClaimError("");
+      try { await claimGameMining(claim.mint); await refreshGame(); }
+      catch (error) { setClaimError(messageOf(error)); }
+      finally { setClaimingId(null); }
+      return;
+    }
     if (!pendingTransaction.canSubmit()) return;
     if (!connected || !config.programId) {
       setClaimError("Connect the wallet that owns this reward to collect it.");
@@ -495,6 +569,17 @@ export default function App() {
   }
 
   async function handleRollDiscovery(): Promise<void> {
+    if (config.chainMode === "meteora") {
+      if (!signedIn) { setDiscoveryError("Sign in to run a discovery."); return; }
+      setRolling(true); setDiscoveryError(""); setDiscoveryNotice("");
+      try {
+        const result = await runGameDiscovery();
+        setDiscoveryNotice(result.discovered ? "Your crew found a discovery." : result.reason ?? "No discovery this time.");
+        await refreshGame();
+      } catch (error) { setDiscoveryError(messageOf(error)); }
+      finally { setRolling(false); }
+      return;
+    }
     if (!pendingTransaction.canSubmit()) return;
     if (!connected || !config.programId) {
       setDiscoveryError("Connect a wallet to roll for discoveries.");
@@ -584,6 +669,20 @@ export default function App() {
   }
 
   async function handleActivate() {
+    if (config.chainMode === "meteora") {
+      if (!connected) { setActivateError("Connect a wallet to activate your shift."); return; }
+      setActivating(true); setActivateError("");
+      try {
+        if (!signedIn) await ensureSession();
+        const challenge = await requestGameActivationChallenge(connected.address);
+        const signature = await connected.signMessage(new TextEncoder().encode(challenge.message));
+        await activateGame(challenge.nonce, bs58.encode(signature));
+        await refreshGame();
+        track("mine_activated", { streak: game?.streak ?? 0, network: "solana-devnet" });
+      } catch (error) { setActivateError(messageOf(error)); }
+      finally { setActivating(false); }
+      return;
+    }
     if (!pendingTransaction.canSubmit()) return;
     if (!connected || !config.programId) {
       setActivateError("Connect a wallet that can sign transactions to activate.");
@@ -618,6 +717,17 @@ export default function App() {
   }
 
   async function handleSwitchMine(mint: string) {
+    if (config.chainMode === "meteora") {
+      if (!signedIn) { setActivateError("Sign in to switch mines."); return; }
+      setSwitching(true); setActivateError("");
+      try {
+        await selectGameMine(mint);
+        await refreshGame();
+        setSwitchOpen(false);
+      } catch (error) { setActivateError(messageOf(error)); }
+      finally { setSwitching(false); }
+      return;
+    }
     if (!pendingTransaction.canSubmit()) return;
     if (!connected || !config.programId) {
       setActivateError("Sign in with your wallet to switch mines.");
@@ -650,6 +760,15 @@ export default function App() {
   }
 
   async function handleClaimRewards() {
+    if (config.chainMode === "meteora") {
+      if (!game?.activeMine || !game.activeMine.coin.graduated) return;
+      setClaimingId(game.activeMine.coin.mint);
+      setActivateError("");
+      try { await claimGameMining(game.activeMine.coin.mint); await refreshGame(); }
+      catch (error) { setActivateError(messageOf(error)); }
+      finally { setClaimingId(null); }
+      return;
+    }
     if (!connected || !config.programId || !featured) return;
     if (!pendingTransaction.canSubmit()) return;
     setActivateError("");
@@ -673,6 +792,21 @@ export default function App() {
     }
   }
 
+  async function handleClaimRewardsForMint(mint: string): Promise<void> {
+    if (config.chainMode !== "meteora" || !signedIn) return;
+    if (!game?.activeMine || game.activeMine.coin.mint !== mint || !game.activeMine.coin.graduated) return;
+    setClaimingId(mint);
+    setClaimError("");
+    try {
+      await claimGameMining(mint);
+      await refreshGame();
+    } catch (error) {
+      setClaimError(messageOf(error));
+    } finally {
+      setClaimingId(null);
+    }
+  }
+
   async function refreshFeaturedToken() {
     if (!featured) return;
     try {
@@ -688,12 +822,12 @@ export default function App() {
     // The dashboard's countdowns belong to the mine the crew is actually working; the market pages
     // describe the mine the player selected.
     const marketPage = page === "mines" || page === "trade" || page === "home";
-    const mint = marketPage ? featured?.mint : (player?.activeMint ?? featured?.mint);
+    const mint = marketPage ? featured?.mint : (config.chainMode === "meteora" ? game?.activeMine?.coin.mint : player?.activeMint) ?? featured?.mint;
     if (mint) void loadMineInfo(mint);
-  }, [page, player?.activeMint, featured?.mint, loadMineInfo, session]);
+  }, [page, config.chainMode, game?.activeMine?.coin.mint, player?.activeMint, featured?.mint, loadMineInfo, session]);
 
-  const activeMineToken = player?.activeMint
-    ? (tokens.find((token) => token.mint === player.activeMint) ?? featured ?? null)
+  const activeMineToken = (config.chainMode === "meteora" ? game?.activeMine?.coin.mint : player?.activeMint)
+    ? (tokens.find((token) => token.mint === (config.chainMode === "meteora" ? game?.activeMine?.coin.mint : player?.activeMint)) ?? featured ?? null)
     : (featured ?? null);
 
   /**
@@ -748,7 +882,9 @@ export default function App() {
         session={session}
         signedIn={signedIn}
         summary={summary}
+        game={config.chainMode === "meteora" ? game : null}
         solBalance={solBalance}
+        onLaunch={openLaunch}
         onAuthenticated={setSession}
       />
 
@@ -761,6 +897,7 @@ export default function App() {
           </div>
         )}
 
+        <RouteErrorBoundary>
         <Suspense fallback={<RouteFallback />}>
           {legal && <LegalRoute pathname={window.location.pathname} />}
 
@@ -768,7 +905,13 @@ export default function App() {
             <>
               <HomeHero
                 featured={featured}
-                player={player}
+                player={config.chainMode === "meteora" && game ? {
+                  wallet: game.wallet, createdAt: game.createdAt, crewLevels: game.crew, power: crewPower(game.crew),
+                  oreBalance: game.oreBalance, oreCapacity: 0, streak: game.streak, streakFreezes: game.streakFreezes,
+                  activationState: game.activation.active ? "ACTIVE" : "PAUSED", lastActivationAt: game.lastActivationAt,
+                  activationExpiresAt: game.activation.activeUntil || null, activeMint: game.activeMine?.coin.mint ?? null,
+                  accountAgeSeconds: 0, maturityBps: 0, discoveryEligible: game.discovery.eligible, riskState: "NORMAL",
+                } : player}
                 connected={Boolean(connected)}
                 now={now}
                 activating={activating}
@@ -777,6 +920,7 @@ export default function App() {
                 onManageCrew={() => setCrewOpen(true)}
                 onLaunch={openLaunch}
                 onClaimRewards={() => void handleClaimRewards()}
+                claimCopy={config.chainMode === "meteora" ? "Claim mined tokens" : "Claim on-chain rewards"}
               />
               <Ticker tokens={tokens} />
               <ExploreBoard tokens={tokens} limit={3} onLaunch={openLaunch} />
@@ -791,7 +935,11 @@ export default function App() {
             </>
           )}
 
-          {page === "mine" && (
+          {page === "mine" && config.chainMode === "meteora" && (
+            <MeteoraMineDashboard game={game} mine={activeMineToken} now={now} connected={Boolean(connected)} activating={activating} error={activateError} onActivate={() => void handleActivate()} onSwitchMine={() => setSwitchOpen(true)} />
+          )}
+
+          {page === "mine" && config.chainMode !== "meteora" && (
             <>
               <DashboardPanel
                 player={player}
@@ -828,7 +976,11 @@ export default function App() {
             </>
           )}
 
-          {page === "crew" && (
+          {page === "crew" && config.chainMode === "meteora" && (
+            <MeteoraCrewScreen game={game} pending={crewPending} error={crewError} notice={crewNotice} onUpgrade={(component) => void handleUpgradeCrew(component)} />
+          )}
+
+          {page === "crew" && config.chainMode !== "meteora" && (
             <>
               {player ? (
                 <CrewScreen
@@ -853,7 +1005,11 @@ export default function App() {
             </>
           )}
 
-          {page === "discoveries" && (
+          {page === "discoveries" && config.chainMode === "meteora" && (
+            <MeteoraDiscoveriesScreen game={game} connected={signedIn} busy={rolling} error={discoveryError} notice={discoveryNotice} onDiscover={() => void handleRollDiscovery()} />
+          )}
+
+          {page === "discoveries" && config.chainMode !== "meteora" && (
             <DiscoveriesPanel
               signedIn={signedIn}
               discoveries={discoveries}
@@ -892,16 +1048,16 @@ export default function App() {
                 onSwitch={() => void handleSwitchMine(featured.mint)}
               />
               {mineInfoPanel(featured, canSwitchToFeatured)}
-              {config.programId && (
-                <SwapPanel token={featured} programAddress={config.programId} signer={connected?.wallet ?? null} onTraded={() => void refreshFeaturedToken()} />
+              {(config.chainMode === "meteora" || config.programId) && (
+                <SwapPanel token={featured} programAddress={config.programId} cluster={config.cluster} chainMode={config.chainMode} meteoraConfigPubkey={config.meteoraConfigPubkey} signer={connected?.wallet ?? null} onTraded={() => void refreshFeaturedToken()} />
               )}
             </>
           ) : (
             <section className="page-shell"><EmptyState title="No mine selected">Pick a mine from the board to see its reserve, power and market.</EmptyState></section>
           ))}
 
-          {page === "trade" && (featured && config.programId ? (
-            <SwapPanel token={featured} programAddress={config.programId} signer={connected?.wallet ?? null} onTraded={() => void refreshFeaturedToken()} />
+          {page === "trade" && (featured && (config.chainMode === "meteora" || config.programId) ? (
+            <SwapPanel token={featured} programAddress={config.programId} cluster={config.cluster} chainMode={config.chainMode} meteoraConfigPubkey={config.meteoraConfigPubkey} signer={connected?.wallet ?? null} onTraded={() => void refreshFeaturedToken()} />
           ) : (
             <section className="page-shell">
               <EmptyState title="Nothing to trade yet">Trading opens once a mine is live on devnet.</EmptyState>
@@ -916,15 +1072,18 @@ export default function App() {
               </div>
               <div className="create-coin-card">
                 <span>DEVNET LAUNCH</span>
-                <h2>Everything settles on-chain.</h2>
-                <p>Your creator wallet signs the launch and, if selected, the initial liquidity buy in one transaction.</p>
+                <h2>{config.chainMode === "meteora" ? "Launch the next mine." : "Everything settles on-chain."}</h2>
+                <p>{config.chainMode === "meteora" ? "Create a coin, then send your crew to work in its market." : "Your creator wallet signs the launch and, if selected, the initial liquidity buy in one transaction."}</p>
                 <button className="btn btn-primary" onClick={openLaunch}>Open launch builder <IconArrowUpRight size={17} /></button>
               </div>
             </section>
           )}
 
           {page === "cosmetics" && <CosmeticsScreen signedIn={signedIn} />}
-          {page === "profile" && connected && (
+          {page === "profile" && connected && config.chainMode === "meteora" && (
+            <MeteoraPortfolioScreen game={game} portfolio={meteoraPortfolio} tokens={tokens} busyMint={claimingId} onClaim={(mint) => void handleClaimRewardsForMint(mint)} />
+          )}
+          {page === "profile" && connected && config.chainMode !== "meteora" && (
             <PortfolioScreen wallet={connected.address} programAddress={config.programId} signer={connected.wallet} />
           )}
           {page === "profile" && !connected && (
@@ -935,9 +1094,10 @@ export default function App() {
             </section>
           )}
           {page === "referrals" && <ReferralsScreen signedIn={signedIn} />}
-          {page === "admin" && <AdminScreen signedIn={signedIn} programId={config.programId || undefined} />}
+          {page === "admin" && <AdminScreen signedIn={signedIn} chainMode={config.chainMode} programId={config.programId || undefined} />}
           {page === "ui" && UiGallery && <UiGallery />}
         </Suspense>
+        </RouteErrorBoundary>
 
         <PushToggle />
       </main>
@@ -970,10 +1130,10 @@ export default function App() {
             onSwitchMine={() => { setMiningReport(null); setSwitchOpen(true); }}
           />
         )}
-        {switchOpen && (
+          {switchOpen && (
           <SwitchMineModal
             tokens={tokens}
-            activeMint={player?.activeMint ?? null}
+            activeMint={config.chainMode === "meteora" ? game?.activeMine?.coin.mint ?? null : player?.activeMint ?? null}
             switching={switching}
             error={activateError}
             onSwitch={(mint) => void handleSwitchMine(mint)}

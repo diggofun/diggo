@@ -1,11 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ChainConfigurationError,
   DEFAULT_DEVNET_RPC,
   DEVNET_PROGRAM_ID,
   isLocalChainRuntime,
+  getChainRpc,
   resolveChainConfig,
 } from "./chainV2";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function env(overrides: Partial<Parameters<typeof resolveChainConfig>[0]> = {}) {
   return {
@@ -45,5 +50,23 @@ describe("resolveChainConfig", () => {
     expect(() => resolveChainConfig(env({ SOLANA_CLUSTER: "mainnet-beta", DIGGO_RPC_URL: "https://mainnet.example/rpc" }))).toThrow(
       ChainConfigurationError,
     );
+  });
+
+  it("fails over to the next RPC on 403 and keeps the ordered URL list", async () => {
+    const primary = "https://primary.example/rpc";
+    const fallback = "https://fallback.example/rpc";
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("forbidden", { status: 403 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { context: { slot: 1 }, value: null } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+    const config = resolveChainConfig(env({ DIGGO_RPC_URL: primary, DIGGO_RPC_URLS: fallback }));
+    expect(config.rpcUrls).toEqual([primary, fallback]);
+    const result = await getChainRpc(env({ DIGGO_RPC_URL: primary, DIGGO_RPC_URLS: fallback }))
+      .getAccountInfo("So11111111111111111111111111111111111111112" as never, { commitment: "confirmed" } as never)
+      .send();
+    expect(result).toEqual({ context: { slot: 1n }, value: null });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

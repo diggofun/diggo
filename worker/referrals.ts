@@ -16,6 +16,9 @@ import { getProgramAddress, sendAndConfirmWithFeePayer } from "./chainV2";
 import { crankSigner } from "./crank";
 import { buildCreditReferralOreInstruction } from "../shared/program";
 import { address } from "@solana/kit";
+import { getWalletVolumeLamports } from "./meteora";
+import { creditReferralOre } from "./game/service";
+import { meteoraGameContext } from "./modes/meteora";
 
 export type ReferralStatus = "PENDING" | "QUALIFIED" | "REWARDED" | "REJECTED";
 
@@ -279,6 +282,49 @@ export async function sweepReferralOre(
     }
   }
   return { enabled: true, ...outcomes };
+}
+
+/**
+ * Settles referral entitlements in temporary Meteora mode. Qualification uses the indexed
+ * Meteora swap volume; the game store owns the idempotency and weekly-cap enforcement.
+ */
+export async function sweepMeteoraReferralOre(
+  env: RuntimeEnv,
+  options: { now?: number; max?: number } = {},
+): Promise<{ checked: number; qualified: number; credited: number; skipped: number }> {
+  const now = options.now ?? nowSeconds();
+  const max = Math.min(25, Math.max(1, options.max ?? 25));
+  const rows = await env.DB.prepare(
+    "SELECT id, referred_wallet, referrer_wallet, status FROM referral_attributions WHERE status IN ('PENDING', 'QUALIFIED') ORDER BY created_at ASC LIMIT ?1",
+  ).bind(max).all<{ id: string; referred_wallet: string; referrer_wallet: string; status: ReferralStatus }>();
+  let qualified = 0;
+  let credited = 0;
+  let skipped = 0;
+  for (const row of rows.results ?? []) {
+    const volume = await getWalletVolumeLamports({ ...env, DIGGO_RPC_URL: String(env.DIGGO_RPC_URL || "https://api.devnet.solana.com") }, row.referred_wallet);
+    if (volume < 500_000_000n) {
+      skipped += 1;
+      continue;
+    }
+    if (row.status === "PENDING") {
+      await env.DB.prepare("UPDATE referral_attributions SET status = 'QUALIFIED', qualified_at = ?1, updated_at = ?1 WHERE id = ?2 AND status = 'PENDING'")
+        .bind(now, row.id).run();
+      qualified += 1;
+    }
+    const result = await creditReferralOre(meteoraGameContext(env), row.referrer_wallet, row.referred_wallet, 250, now);
+    if (result.credited) {
+      credited += 1;
+      await env.DB.batch([
+        env.DB.prepare("UPDATE referral_attributions SET status = 'REWARDED', reward_ore = ?1, rewarded_at = ?2, updated_at = ?2 WHERE id = ?3")
+          .bind(String(result.amount), now, row.id),
+        env.DB.prepare("INSERT OR IGNORE INTO player_cosmetics (wallet, cosmetic_id, acquired_at) VALUES (?1, ?2, ?3)")
+          .bind(row.referrer_wallet, REFERRAL_SKIN_ID, now),
+      ]);
+    } else {
+      skipped += 1;
+    }
+  }
+  return { checked: (rows.results ?? []).length, qualified, credited, skipped };
 }
 
 function attemptsForRow(row: ReferralRewardRow): number {

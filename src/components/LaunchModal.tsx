@@ -16,8 +16,10 @@ import { IconBadge, IconClose, IconRocket } from "../icons";
 import type { TokenSummary } from "../../shared/types";
 import {
   getChallenge,
+  getBootstrap,
   getSponsorEvents,
   registerLaunchedToken,
+  registerMeteoraPool,
   uploadTokenImage,
   verifyWallet,
   type DiggoConfig,
@@ -51,6 +53,8 @@ import { useDiggoWallet } from "../wallet";
 import { TurnstileBox } from "./TurnstileBox";
 import { useDialog } from "./useDialog";
 import { usePendingTransaction } from "../onchain";
+import { launchMeteoraCoin } from "../meteora";
+import { estimatedMeteoraLaunchCostLamports, METEORA_POOL_CREATION_FEE_LAMPORTS } from "../../shared/meteora";
 
 export function LaunchModal({
   onClose,
@@ -88,7 +92,7 @@ export function LaunchModal({
   const onTurnstileToken = useCallback((token: string) => setTurnstileToken(token), []);
 
   useEffect(() => {
-    if (!config.programId) return;
+    if (config.chainMode === "meteora" || !config.programId) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -125,6 +129,7 @@ export function LaunchModal({
   }, [config.programId]);
 
   const cost = launchCostLamports({ sponsored: sponsor !== null });
+  const meteoraCost = estimatedMeteoraLaunchCostLamports();
 
   async function authenticate(): Promise<void> {
     if (!connected) throw new Error("Connect a wallet that supports message signing");
@@ -148,6 +153,28 @@ export function LaunchModal({
       if (session !== connected.address) await authenticate();
       setMessage(file ? "Uploading artwork…" : "Preparing your launch…");
       const imageUrl = file ? await uploadTokenImage(file) : undefined;
+
+      if (config.chainMode === "meteora") {
+        setMessage("Preparing the Meteora bonding-curve launch…");
+        const launch = await launchMeteoraCoin({
+          wallet: connected.wallet,
+          name,
+          symbol: symbol.toUpperCase(),
+          metadataUri: imageUrl ?? "",
+          configPubkey: config.meteoraConfigPubkey,
+          initialBuySol: Math.max(0, Number(initialBuy) || 0),
+        });
+        track("launch_submitted", { has_artwork: Boolean(file), sponsored: false, network: config.cluster });
+        const registration = await registerMeteoraPool(launch.pool);
+        setMessage("Registering your launch…");
+        const bootstrap = await getBootstrap();
+        const token = bootstrap.tokens.find((candidate) => candidate.mint === registration.mint);
+        if (!token) throw new Error("Meteora launch was verified but is not visible yet; retry in a moment");
+        onLaunched(token);
+        setMessage(`Live on ${config.cluster} at ${launch.mint.slice(0, 4)}…${launch.mint.slice(-4)}. Signature ${launch.signature.slice(0, 8)}…`);
+        setState("done");
+        return;
+      }
 
       setMessage("Reading protocol configuration from chain…");
       const programAddress = address(config.programId);
@@ -241,23 +268,25 @@ export function LaunchModal({
         <button className="modal-close" onClick={onClose} aria-label="Close"><IconClose size={20} /></button>
         <div className="eyebrow">Launch on Diggo</div>
         <h2 id="launch-title">Put your meme<br />on the map.</h2>
-        <p className="modal-intro">Every Diggo mint gets fixed supply and a program-locked 5% mining reserve plus 0.5% discovery reserve. This creates a real on-chain transaction from your wallet — Diggo never holds user funds.</p>
+        <p className="modal-intro">Every Diggo mint gets fixed supply and a program-locked mining allocation. This creates a real on-chain transaction from your wallet — Diggo never holds user funds.</p>
         <div className="launch-cost" aria-live="polite">
           <div className="launch-cost-head">
             <span className="launch-cost-label">You pay to launch</span>
-            <strong className="launch-cost-total">{cost.totalLamports === 0n ? "Network fee only" : LAUNCH_TOTAL_SOL.toFixed(6) + " SOL"}</strong>
+            <strong className="launch-cost-total">{config.chainMode === "meteora" ? (Number(meteoraCost.totalLamports) / 1_000_000_000).toFixed(6) + " SOL" : cost.totalLamports === 0n ? "Network fee only" : LAUNCH_TOTAL_SOL.toFixed(6) + " SOL"}</strong>
           </div>
           <dl className="launch-cost-breakdown">
             <div>
-              <dt>Mint, coin account and vault rent</dt>
-              <dd>{cost.rentLamports === 0n ? "Paid by the sponsor" : LAUNCH_RENT_SOL.toFixed(6) + " SOL"}</dd>
+              <dt>{config.chainMode === "meteora" ? "Meteora pool creation fee" : "Mint, coin account and vault rent"}</dt>
+              <dd>{config.chainMode === "meteora" ? (Number(METEORA_POOL_CREATION_FEE_LAMPORTS) / 1_000_000_000).toFixed(6) + " SOL" : cost.rentLamports === 0n ? "Paid by the sponsor" : LAUNCH_RENT_SOL.toFixed(6) + " SOL"}</dd>
             </div>
             <div>
               <dt>Network fee (estimated)</dt>
-              <dd>{LAUNCH_TX_FEE_SOL.toFixed(6)} SOL</dd>
+              <dd>{config.chainMode === "meteora" ? "Included in estimate" : LAUNCH_TX_FEE_SOL.toFixed(6) + " SOL"}</dd>
             </div>
           </dl>
-          {sponsor ? (
+          {config.chainMode === "meteora" ? (
+            <p className="launch-cost-note"><strong>Mining rewards unlock at graduation.</strong> Leftover supply is claimable by the mining vault only after the curve graduates.</p>
+          ) : sponsor ? (
             <p className="launch-sponsored">
               <IconBadge size={15} /> Sponsored — event #{sponsor.eventId} pays the rent from its vault, so you pay the network fee only. Sponsorship never changes your coin's power, rewards or discovery odds.
             </p>
@@ -289,7 +318,7 @@ export function LaunchModal({
               <i>{file ? file.name : "PNG, JPG or WEBP · max 2 MB"}</i>
             </label>
             <div className="launch-allocation">
-              <span>94.5% user-held launch supply</span><span>5% locked mining reserve</span><span>0.5% locked discovery reserve</span><span>0% platform custody</span>
+              <span>1B SPL supply · 9 decimals</span><span>20% mining-vault leftover</span><span>Creator trading fee 0%</span><span>Dynamic fee on · anti-sniper 3%→1% / 60 min</span>
             </div>
             <TurnstileBox siteKey={TURNSTILE_SITE_KEY} onToken={onTurnstileToken} />
             {message && <p className="form-message">{message}</p>}

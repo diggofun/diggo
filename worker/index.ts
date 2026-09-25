@@ -11,6 +11,7 @@
  * read metrics, and it has no code path to a balance, a reserve, a claim or a coin.
  */
 import { adminAbuse, adminMetrics, adminRestrictions, adminStepUp } from "./admin";
+import { adminDashboard } from "./adminDashboard";
 import { adminAppeals, adminResolveAppeal, submitAppeal } from "./appeals";
 import { createChallenge, verifyWallet, walletSession } from "./auth";
 import { equipCosmetic, getCosmetics, playerAchievements, syncSeasonalPoints, unequipCosmetic } from "./cosmetics";
@@ -51,7 +52,7 @@ import { proxyRpc } from "./rpc";
 import { ChainConfigurationError, isLocalChainRequest, isLocalChainRuntime, resolveChainConfig } from "./chainV2";
 import { reportError } from "./telemetry";
 import { watchlistRoute } from "./watchlist";
-import { changeReferralCode, referralAvailability, referralPanel, sweepReferralOre } from "./referrals";
+import { changeReferralCode, referralAvailability, referralPanel, sweepMeteoraReferralOre, sweepReferralOre } from "./referrals";
 import {
   bootstrap,
   coinTrades,
@@ -63,6 +64,8 @@ import {
   uploadMedia,
 } from "./tokens";
 import type { IndexerJob } from "./v2/types";
+import { handleMeteoraGameRoute, meteoraBootstrap, meteoraConfig, meteoraMineInfo, meteoraPlayerProfile, meteoraPortfolio, runMeteoraScheduled } from "./modes/meteora";
+import { registerMeteoraPool } from "./meteora/registration";
 
 // The TokenMarket Durable Object is exported from the entry module so the MARKETS binding in
 // wrangler.jsonc resolves; it is defined in ./market.
@@ -72,6 +75,22 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
   const url = new URL(request.url);
   const { pathname } = url;
   try {
+    // Temporary Meteora mode owns the off-chain game routes and the alternate indexed data. Keep
+    // this block separate from the native router so native behaviour remains unchanged.
+    if (String(env.CHAIN_MODE || "meteora") !== "native") {
+      const gameRoute = await handleMeteoraGameRoute(request, env, pathname);
+      if (gameRoute) return gameRoute;
+      if (request.method === "GET" && pathname === "/api/config") return json(meteoraConfig(env));
+      if (request.method === "GET" && pathname === "/api/bootstrap") return meteoraBootstrap(env, ctx);
+      if (request.method === "GET" && pathname === "/api/tokens") return meteoraBootstrap(env, ctx);
+      if (request.method === "POST" && pathname === "/api/meteora/pools/register") return registerMeteoraPool(request, env);
+      const meteoraPlayerMatch = pathname.match(/^\/api\/player\/([^/]+)$/);
+      if (request.method === "GET" && meteoraPlayerMatch) return meteoraPlayerProfile(env, meteoraPlayerMatch[1]!);
+      const meteoraPortfolioMatch = pathname.match(/^\/api\/portfolio\/([^/]+)$/);
+      if (request.method === "GET" && meteoraPortfolioMatch) return meteoraPortfolio(env, meteoraPortfolioMatch[1]!);
+      const meteoraMineMatch = pathname.match(/^\/api\/mines\/([^/]+)\/info$/);
+      if (request.method === "GET" && meteoraMineMatch) return meteoraMineInfo(env, meteoraMineMatch[1]!, url.searchParams.get("wallet"));
+    }
     if (request.method === "GET" && pathname === "/api/config") {
       const chain = resolveChainConfig(env, {
         deployed: !isLocalChainRequest(request) && !isLocalChainRuntime(env),
@@ -208,6 +227,7 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
       return adminRestrictions(request, env);
     }
     if (request.method === "GET" && pathname === "/api/admin/metrics") return adminMetrics(request, env);
+    if (request.method === "GET" && pathname === "/api/admin/dashboard") return adminDashboard(request, env);
     if (request.method === "POST" && pathname === "/api/admin/stepup") return adminStepUp(request, env);
     if (request.method === "POST" && pathname === "/api/appeals") return submitAppeal(request, env);
     if (pathname === "/api/admin/appeals") {
@@ -292,6 +312,22 @@ export default {
     env: RuntimeEnv,
     ctx: ExecutionContext,
   ): Promise<void> {
+    if (String(env.CHAIN_MODE || "meteora") !== "native") {
+      try {
+        const result = await runMeteoraScheduled(env);
+        console.log(JSON.stringify({ event: "meteora.cron", ...result }));
+      } catch (error) {
+        console.error(JSON.stringify({ event: "meteora.cron_failed", error: String(error) }));
+        ctx.waitUntil(reportError(env, error, { trigger: "scheduled", step: "meteora" }));
+      }
+      try {
+        const referrals = await sweepMeteoraReferralOre(env);
+        console.log(JSON.stringify({ event: "referrals.meteora", ...referrals }));
+      } catch (error) {
+        console.error(JSON.stringify({ event: "referrals.meteora_failed", error: String(error) }));
+      }
+      return;
+    }
     try {
       resolveChainConfig(env, { deployed: !isLocalChainRuntime(env) });
     } catch (error) {
