@@ -1,6 +1,12 @@
 # On-chain v2: moving the game's economic authority to Solana
 
-Status: design proposal, not implemented. Supersedes the authority split in
+Status: historical/native-program design proposal, not implemented and not the current production
+path. The live configuration is `CHAIN_MODE=meteora` on `mainnet-beta`; do not infer current
+Meteora custody, pool, fee, reserve, or migration behavior from this document. Native rent reclaim
+is unavailable in Meteora mode. Current readiness is documented in [DEPLOYMENT.md](./DEPLOYMENT.md)
+and [METEORA_OPS.md](./METEORA_OPS.md).
+
+Within the native design history, this proposal supersedes the authority split in
 `docs/ARCHITECTURE.md` sections 3-9, 13 and `docs/ONCHAIN.md` section 1. Program today:
 `H3Y8GgTnvwv5U1bajfzj386YSPC48vvwjFroXYyHZFj5` (Anchor 1.2.0, `ACCOUNT_VERSION = 4`).
 v2 deploys as a **new program id** with `ACCOUNT_VERSION = 5` and a wiped devnet (section 7);

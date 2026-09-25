@@ -2,7 +2,11 @@
 
 ## Trust boundary
 
-Cloudflare is an index, cache and coordination layer. It must never be authoritative for balances, rewards, burns, liquidity custody, upgrade power or creator fee ownership. The Solana programs are the source of truth.
+The current deployment uses `CHAIN_MODE=meteora` on `mainnet-beta`. Cloudflare remains an index,
+cache and coordination layer, while the relevant Meteora programs and signed wallet transactions
+determine on-chain token balances. The native Diggo program controls described in
+`ARCHITECTURE.md`, `ONCHAIN.md` and this document are preserved historical/future architecture, not
+the current production path.
 
 ## Implemented web controls
 
@@ -30,9 +34,10 @@ Cloudflare is an index, cache and coordination layer. It must never be authorita
 - Risk enforcement ships in **shadow** mode (`RISK_OPS.enforcement.mode`): a score-derived refusal is recorded — `risk.shadow_would_block`, and the `shadowed`/`computedState` pair on each admin account row — while the account keeps playing, so a score cannot stop a real player before an operator has reviewed what it would have done. Rate limits, circuit breakers and operator restrictions are enforced in either mode, and `enforcement.overrides` can move a single action in or out of enforcement.
 - A player can appeal a hold or restriction (`POST /api/appeals`), and only a person can decide one (`POST /api/admin/appeals`, step-up required). Filing an appeal changes nothing by itself, deciding one can only lift restrictions, and the endpoint answers identically whether or not the account is under anything, so it cannot be used to probe the risk layer.
 
-## Required on-chain invariants
+## Native-program invariants preserved for reference
 
-The web UI displays these claims, but they must be enforced by audited Solana programs before mainnet:
+These invariants describe the native-program design. They must not be presented as verified
+properties of the current Meteora deployment:
 
 1. distributed rewards never exceed the program-controlled mining reserve;
 2. mint and freeze authorities are permanently revoked after creation;
@@ -45,6 +50,18 @@ The web UI displays these claims, but they must be enforced by audited Solana pr
 9. unsafe or thin price sources cannot value a Discovery. Partly enforced today: the Worker's own oracle refuses to answer when its sources disagree or are stale, and a discovery that cannot be valued pays nothing — but the program does not yet re-check a price it is handed (see `docs/ARCHITECTURE.md` §13);
 10. fee routes match immutable or tightly governed configuration.
 
-## Not yet mainnet-ready
+## Current readiness and limitations
 
-The repository does not contain an integration with an external AMM, an audited keeper signer service, or the vanity-mint worker pool. Graduated markets trade on the program's own locked constant-product pool, which no key can withdraw from (`docs/ONCHAIN.md` §3), but that pool has not been audited. The Worker computes Crew Power and Discovery eligibility/RNG and does submit the keeper's `sync_crew_power`/`claim_discovery` transactions, but it holds no key material in the request path. The price oracle above is a Worker-side policy, not yet an on-chain one, and discovery RNG is server-authoritative rather than trustless. See `docs/ARCHITECTURE.md` §13 for the full list of known gaps. The website therefore labels itself as a devnet MVP.
+The repository is configured for Meteora on `mainnet-beta`, but the production
+`METEORA_DBC_CONFIG` is still `SET_AFTER_CREATE`. Public mainnet launch remains blocked until a
+verified config is installed, production RPC/D1/funding are confirmed, a real launch through
+Claim all final settlement is rehearsed, and the required security review is complete.
+
+The native rent-reclaim action is unavailable in Meteora mode. No Meteora equivalent is exposed by
+the current product. This is a product limitation, not a claim that third-party Solana tools cannot
+close user-owned accounts.
+
+The earlier native keeper, price-oracle, pool-custody and account-migration gaps remain recorded in
+the architecture documents for future or historical context. They are not evidence that the
+current Meteora integration has received an audit, and this document does not make a legal or
+security assurance about it.

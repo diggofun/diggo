@@ -128,4 +128,159 @@ describe("analytics consent", () => {
     track("never_sent");
     expect(posthog.capture).not.toHaveBeenCalled();
   });
+
+  it("flushes a consented startup event once the client finishes loading", async () => {
+    const consent = await loadConsent();
+    const { startAnalytics, track } = await loadAnalytics();
+    consent.recordConsent("all");
+
+    const started = startAnalytics(CONFIG);
+    track("startup_action");
+    expect(posthog.capture).not.toHaveBeenCalled();
+
+    await started;
+    expect(posthog.capture).toHaveBeenCalledWith("startup_action", {});
+  });
+
+  it("does not flush a queued event after consent is withdrawn during startup", async () => {
+    const consent = await loadConsent();
+    const { startAnalytics, track } = await loadAnalytics();
+    consent.recordConsent("all");
+
+    const started = startAnalytics(CONFIG);
+    track("withdrawn_startup_action");
+    consent.recordConsent("essential");
+
+    await started;
+    expect(posthog.capture).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates one-shot page observations across rerenders", async () => {
+    const consent = await loadConsent();
+    const { startAnalytics, trackOnce } = await loadAnalytics();
+    consent.recordConsent("all");
+    await startAnalytics(CONFIG);
+
+    trackOnce("discoveries_viewed", { network: "mainnet-beta" });
+    trackOnce("discoveries_viewed", { network: "mainnet-beta" });
+
+    expect(posthog.capture).toHaveBeenCalledTimes(1);
+    expect(posthog.capture).toHaveBeenCalledWith("discoveries_viewed", { network: "mainnet-beta" });
+  });
+
+  it("records a current-view one-shot once when consent is granted after it was observed", async () => {
+    const consent = await loadConsent();
+    const { startAnalytics, trackOnce } = await loadAnalytics();
+    await startAnalytics(CONFIG);
+
+    trackOnce("discoveries_viewed", { network: "mainnet-beta" });
+    expect(posthog.init).not.toHaveBeenCalled();
+    expect(posthog.capture).not.toHaveBeenCalled();
+
+    consent.recordConsent("all");
+    await vi.waitFor(() => expect(posthog.capture).toHaveBeenCalledTimes(1));
+    trackOnce("discoveries_viewed", { network: "mainnet-beta" });
+
+    expect(posthog.capture).toHaveBeenCalledTimes(1);
+    expect(posthog.capture).toHaveBeenCalledWith("discoveries_viewed", { network: "mainnet-beta" });
+  });
+
+  it("does not replay a one-shot from a view that ended before consent", async () => {
+    const consent = await loadConsent();
+    const { startAnalytics, trackOnce } = await loadAnalytics();
+    await startAnalytics(CONFIG);
+
+    const endView = trackOnce("discoveries_viewed", { network: "mainnet-beta" });
+    endView();
+    consent.recordConsent("all");
+    await vi.waitFor(() => expect(posthog.opt_in_capturing).toHaveBeenCalledTimes(1));
+
+    expect(posthog.capture).not.toHaveBeenCalled();
+  });
+
+  it("clears a held one-shot on denial so a later re-grant cannot replay it", async () => {
+    const consent = await loadConsent();
+    const { startAnalytics, trackOnce } = await loadAnalytics();
+    await startAnalytics(CONFIG);
+
+    trackOnce("referral_landed");
+    consent.recordConsent("essential");
+    consent.recordConsent("all");
+    await vi.waitFor(() => expect(posthog.opt_in_capturing).toHaveBeenCalledTimes(1));
+
+    expect(posthog.capture).not.toHaveBeenCalled();
+  });
+
+  it("can record a fresh current-view observation after a denial and later grant", async () => {
+    const consent = await loadConsent();
+    const { startAnalytics, trackOnce } = await loadAnalytics();
+    await startAnalytics(CONFIG);
+    consent.recordConsent("essential");
+
+    trackOnce("discoveries_viewed", { network: "mainnet-beta" });
+    consent.recordConsent("all");
+    await vi.waitFor(() => expect(posthog.capture).toHaveBeenCalledTimes(1));
+
+    expect(posthog.capture).toHaveBeenCalledWith("discoveries_viewed", { network: "mainnet-beta" });
+  });
+
+  it("never sends account, transaction, amount, referral-code, or name properties", async () => {
+    const consent = await loadConsent();
+    const { startAnalytics, track } = await loadAnalytics();
+    consent.recordConsent("all");
+    await startAnalytics(CONFIG);
+
+    track("privacy_boundary", {
+      network: "mainnet-beta",
+      wallet: "wallet-id",
+      mint: "mint-id",
+      signature: "signature",
+      amount: 12,
+      referralCode: "private-code",
+      name: "PII",
+    });
+
+    expect(posthog.capture).toHaveBeenCalledWith("privacy_boundary", { network: "mainnet-beta" });
+  });
+
+  it("does not retain sensitive properties while a one-shot waits for consent", async () => {
+    const consent = await loadConsent();
+    const { startAnalytics, trackOnce } = await loadAnalytics();
+    await startAnalytics(CONFIG);
+
+    trackOnce("privacy_boundary", { network: "mainnet-beta", wallet: "wallet-id", signature: "secret" });
+    consent.recordConsent("all");
+    await vi.waitFor(() => expect(posthog.capture).toHaveBeenCalledTimes(1));
+
+    expect(posthog.capture).toHaveBeenCalledWith("privacy_boundary", { network: "mainnet-beta" });
+  });
+
+  it("suppresses the legacy pre-confirmation launch event", async () => {
+    const consent = await loadConsent();
+    const { startAnalytics, track } = await loadAnalytics();
+    consent.recordConsent("all");
+    await startAnalytics(CONFIG);
+
+    track("launch_submitted", { network: "mainnet-beta" });
+    track("launch_succeeded", { network: "mainnet-beta" });
+    await Promise.resolve();
+
+    expect(posthog.capture).toHaveBeenCalledTimes(1);
+    expect(posthog.capture).toHaveBeenCalledWith("launch_succeeded", { network: "mainnet-beta" });
+  });
+
+  it("counts a recovered launch once in both funnel steps", async () => {
+    const consent = await loadConsent();
+    const { startAnalytics, track } = await loadAnalytics();
+    consent.recordConsent("all");
+    await startAnalytics(CONFIG);
+
+    track("launch_succeeded", { chain_mode: "meteora", network: "mainnet-beta" });
+    track("launch_recovered", { network: "mainnet-beta" });
+    await Promise.resolve();
+
+    expect(posthog.capture).toHaveBeenCalledTimes(2);
+    expect(posthog.capture).toHaveBeenCalledWith("launch_succeeded", { chain_mode: "meteora", network: "mainnet-beta" });
+    expect(posthog.capture).toHaveBeenCalledWith("launch_recovered", { network: "mainnet-beta" });
+  });
 });

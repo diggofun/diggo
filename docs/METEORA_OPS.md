@@ -1,5 +1,17 @@
 # Meteora DBC operations
 
+## Current readiness status
+
+Production is configured for `CHAIN_MODE=meteora` on `mainnet-beta`, but public mainnet launch is
+not ready. No mainnet DBC config has been submitted and production still uses the
+`METEORA_DBC_CONFIG=SET_AFTER_CREATE` placeholder. The config must be created and independently
+verified, the production RPC, migrations, and required funding must be in place, and a funded
+end-to-end launch/mining/Discoveries/Claim all rehearsal plus the required security review must
+complete before public access is opened.
+
+Native-program rent reclaim is unavailable in Meteora mode. The historical native reclaim action
+must not be represented as available in the current product.
+
 This runbook covers the temporary Meteora Dynamic Bonding Curve (DBC) launch path. The native
 Anchor program in `programs/diggo-protocol` is not used by these scripts. The pinned SDK is
 `@meteora-ag/dynamic-bonding-curve-sdk@1.5.13`.
@@ -101,10 +113,12 @@ priority fee. The exact verified cost is:
 - Exact first-funding minimum, including keeping the payer rent-exempt: 6,634,320 lamports (`0.006634320 SOL`)
 
 Fund the payer with **0.010000000 SOL (10,000,000 lamports)**. That leaves 3,365,680 lamports of
-headroom over the exact minimum for fee changes or a retry. Fund the mining vault with **0.1 SOL**:
-the vault signs mining payouts and pays the one-time leftover withdrawal, including an ATA when
-needed, while ordinary prepared mining claims are paid by the player. Refill the vault before its
-balance can no longer cover those operations; do not treat the vault as a SOL trading reserve.
+headroom over the exact minimum for fee changes or a retry. Fund the mining vault with **0.1 SOL**.
+Ordinary prepared mining claims are player-authorized, while the vault is an operational signer
+for mining payouts and the one-time leftover withdrawal, including an ATA when needed. The funded
+mainnet rehearsal must verify both paths, their actual authorizations, and their balance
+requirements. Refill the vault before it can no longer cover those operations; do not treat it as a
+SOL trading reserve.
 
 The dedicated-payer dry-run correctly refused submission but returned `AccountNotFound` because the
 new payer had no mainnet account yet. A separate no-send program simulation used a disposable,
@@ -284,3 +298,6 @@ excludes `scripts`, so the external config above is intentional for the focused 
 3. Back up the mainnet keypairs offline and confirm the mining-vault custody policy.
 4. Run a funded mainnet simulation immediately before `--allow-mainnet`; rent and priority fees can
    change with cluster state.
+5. Complete a funded mainnet rehearsal of launch, mining, Discoveries, and Claim all, including both
+   player-authorized claims and operations that require the mining vault.
+6. Complete the required security review before public mainnet access.

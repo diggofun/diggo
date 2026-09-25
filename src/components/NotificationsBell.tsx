@@ -222,8 +222,13 @@ export function NotificationsBell({ signedIn }: NotificationsBellProps) {
 
   if (!signedIn) {
     return (
-      <span className="notifications-bell is-disabled" title="Sign in to receive crew notifications">
-        Alerts
+      <span
+        className="notifications-bell is-disabled"
+        role="img"
+        aria-label="Alerts, sign in to receive crew notifications"
+        title="Sign in to receive crew notifications"
+      >
+        <span className="notifications-bell-label">Alerts</span>
       </span>
     );
   }

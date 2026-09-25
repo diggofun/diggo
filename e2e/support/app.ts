@@ -101,7 +101,7 @@ export async function expectBootstrapLoaded(page: Page): Promise<void> {
 
 export async function gotoMinePage(page: Page): Promise<void> {
   await page.goto("/mine");
-  await expect(page.getByRole("heading", { level: 1, name: /YOUR CREW IS/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /YOUR CREW/ })).toBeVisible();
 }
 
 /**

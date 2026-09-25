@@ -55,7 +55,8 @@ export const PLAYER_ACCOUNT_COST = PLAYER_ACCOUNT_SOL.toFixed(6) + " SOL";
 
 /** What playing is, stated once. The game has one tier: nothing is bought, posted or held back. */
 export const PLAY_SUMMARY =
-  "Everyone plays the same way. A player account and an activation are all it takes — there is " +
+  "Everyone plays the same way. A player account and an activation let your crew mine eligible " +
+  "memecoins; there is " +
   "no bond, no deposit and no minimum balance, and no paid tier to unlock.";
 
 /**
@@ -164,12 +165,13 @@ export function PlayerOnboarding({
           </article>
 
           <article className="onboarding-card">
-            <h3><IconMine size={16} /> What your wallet needs</h3>
+            <h3><IconMine size={16} /> What your wallet authorizes</h3>
             <p>{WALLET_REQUIREMENT}</p>
             <ul className="onboarding-list">
               <li>Nothing is locked: no bond, no deposit and no cooldown to wait out.</li>
+              <li>Your wallet signs account setup, shift activation, reward claims and, if you create a coin, the launch.</li>
               <li>Mining efficiency and discovery eligibility are the same for every wallet — there is no paid tier.</li>
-              <li>You can stop at any time, and leaving a mine returns its rent.</li>
+              <li>You can stop at any time; activation simply ends when its window closes.</li>
             </ul>
           </article>
         </div>

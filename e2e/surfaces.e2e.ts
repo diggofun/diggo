@@ -18,14 +18,14 @@ test("the discoveries page renders and the roll control is wired to the wallet",
   await startSignedIn(page);
 
   await page.goto("/discoveries");
-  await expect(page.getByRole("heading", { level: 1, name: /WHAT THE CREW/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /YOUR MINING LEDGER/ })).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
 
   // The control exists and is offered; clicking it is not asserted here. In v2 the roll is a
   // wallet-signed create_discovery_roll against the chain and the outcome is
   // sha256(epoch_seed || owner || window), so with no validator behind the dev pair there is no
   // opportunity to settle and nothing honest to assert about the result.
-  const roll = page.getByRole("button", { name: /Ask for an opportunity|Roll this window/ });
+  const roll = page.getByRole("button", { name: /Run this window's discovery/ });
   await expect(roll).toBeVisible();
 });
 

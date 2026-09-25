@@ -57,9 +57,9 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
             <IconDiscoveries size={14} /> Discoveries
           </div>
           <h1>
-            WHAT THE CREW
+            YOUR MINING
             <br />
-            TURNED UP.
+            DISCOVERIES.
           </h1>
         </div>
         <div className="discovery-roll">
@@ -84,8 +84,8 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
           title="Hidden finds are waiting underground."
           action={<button className="btn btn-primary" onClick={requestWalletMenu}>Connect wallet</button>}
         >
-          An active crew gets one discovery opportunity per window. Sign in to see what yours has
-          turned up. Rewards accrue here automatically; wallet collection is a separate action.
+          An eligible crew has one random discovery opportunity per window. Sign in to review the
+          memecoins it has mined. They accrue here until you approve a wallet collection.
         </EmptyState>
       )}
       {signedIn && loading && (
@@ -97,9 +97,9 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
       )}
       {signedIn && !loading && discoveries.length === 0 && (
         <EmptyState icon={<IconDiscoveries size={26} />} title="No discoveries yet">
-          An active, eligible crew has a chance each window, and the mine's own
-          liquidity, volume and reserve decide how good that chance can be. Any mined memecoin
-          appears here automatically, without a manual claim.
+          An eligible crew has one random opportunity each window. The mine's liquidity, volume and
+          reserve shape what can be found. Any mined memecoin appears here automatically; collection
+          is a separate wallet-approved action.
         </EmptyState>
       )}
 

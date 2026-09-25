@@ -1,7 +1,7 @@
 /**
- * Launch builder (spec 79). A real on-chain launch signed by the creator wallet: fixed supply,
- * program-locked mining and discovery reserves, optional atomic creator buy. Loaded lazily so the
- * Solana program client only ships to players who open it.
+ * Launch builder (spec 79). A real on-chain launch signed by the creator wallet with a fixed supply
+ * and chain-specific mining allocation. Loaded lazily so the Solana launch clients only ship to
+ * players who open it.
  *
  * The creator pays 100% by default, and the form says exactly how much before they sign: the three
  * accounts a coin is made of, plus the network fee. The one thing that can move that cost is an
@@ -152,7 +152,7 @@ export function LaunchModal({
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!launchReady) {
-      setMessage("Launching soon");
+      setMessage("Launch availability is not confirmed for this environment.");
       return;
     }
     if (!connected) {
@@ -279,8 +279,12 @@ export function LaunchModal({
       <section ref={dialogRef} className="launch-modal" role="dialog" aria-modal="true" aria-labelledby="launch-title" onMouseDown={(event) => event.stopPropagation()}>
         <button className="modal-close" onClick={onClose} aria-label="Close"><IconClose size={20} /></button>
         <div className="eyebrow">Launch on Diggo</div>
-        <h2 id="launch-title">Put your meme<br />on the map.</h2>
-        <p className="modal-intro">Every Diggo mint gets fixed supply and a program-locked mining allocation. This creates a real on-chain transaction from your wallet — Diggo never holds user funds.</p>
+        <h2 id="launch-title">Launch a coin<br />players can mine.</h2>
+        <p className="modal-intro">
+          {config.chainMode === "meteora"
+            ? "Create a fixed-supply coin with a wallet-signed Meteora launch. This launch configuration sets the creator trading fee to 0%. Leftover supply is held in the Diggo-signed mining vault for eligible player payouts. Mining rewards and yield are not guaranteed."
+            : "Set a fixed supply and chain-specific mining allocation, then create the coin with a wallet-signed transaction. Diggo never holds user funds."}
+        </p>
         <div className="launch-cost" aria-live="polite">
           <div className="launch-cost-head">
             <span className="launch-cost-label">You pay to launch</span>
@@ -297,7 +301,7 @@ export function LaunchModal({
             </div>
           </dl>
           {config.chainMode === "meteora" ? (
-            <p className="launch-cost-note"><strong>Mining rewards unlock at graduation.</strong> Leftover supply is claimable by the mining vault only after the curve graduates.</p>
+            <p className="launch-cost-note"><strong>Leftover supply goes to the Diggo-signed mining vault.</strong> Eligible mining payouts can accrue before graduation and may remain pending until a wallet-approved claim settles.</p>
           ) : sponsor ? (
             <p className="launch-sponsored">
               <IconBadge size={15} /> Sponsored — event #{sponsor.eventId} pays the rent from its vault, so you pay the network fee only. Sponsorship never changes your coin's power, rewards or discovery odds.
@@ -330,13 +334,13 @@ export function LaunchModal({
               <i>{file ? file.name : "PNG, JPG or WEBP · max 2 MB"}</i>
             </label>
             <div className="launch-allocation">
-              <span>1B SPL supply · 9 decimals</span><span>20% mining-vault leftover</span><span>Creator trading fee 0%</span><span>Dynamic fee on · anti-sniper 3%→1% / 60 min</span>
+              <span>1B SPL supply · 9 decimals</span><span>Leftovers to the Diggo-signed mining vault</span><span>Creator trading fee 0%</span><span>Dynamic fee on · anti-sniper 3%→1% / 60 min</span>
               {config.chainMode === "meteora" && <span>Migration threshold {METEORA_MIGRATION_THRESHOLD_SOL[meteoraCluster]} SOL</span>}
             </div>
             <TurnstileBox siteKey={TURNSTILE_SITE_KEY} onToken={onTurnstileToken} />
             {message && <p className="form-message">{message}</p>}
             <button className="primary-button launch-submit" disabled={!launchReady || state === "working" || !turnstileToken || !pendingTransaction.canSubmit()}>
-              {!launchReady ? "Launching soon" : state === "working" ? "Launching on-chain…" : "Launch on-chain"} <IconRocket size={17} />
+              {!launchReady ? "Launch unavailable" : state === "working" ? "Launching on-chain…" : "Launch on-chain"} <IconRocket size={17} />
             </button>
           </form>
           <details className="recover-launch">

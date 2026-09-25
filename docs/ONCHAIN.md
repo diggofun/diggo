@@ -1,5 +1,12 @@
 # On-chain authority, locked liquidity and account migration
 
+Status: historical/native-program reference. The current production configuration is
+`CHAIN_MODE=meteora` on `mainnet-beta`, so the native program is not the active launch, custody,
+pool, fee, or reserve path. Do not infer current Meteora behavior from the native authority model
+below; use [METEORA_OPS.md](./METEORA_OPS.md), [CUSTODY.md](./CUSTODY.md), and
+[DEPLOYMENT.md](./DEPLOYMENT.md) for the current boundary. Native rent reclaim is unavailable in
+Meteora mode.
+
 This document covers the parts of the Diggo protocol that only exist on Solana: who can
 change the program, how a graduated market's liquidity is locked, and how the program's
 accounts are upgraded when their layout changes. It is the operator-facing companion to

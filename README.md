@@ -1,12 +1,54 @@
 # Diggo.fun
 
-Diggo.fun is a Solana meme-coin launchpad wrapped in a finite-reserve mining game. This repository contains a production-shaped Cloudflare MVP: a React frontend, Worker API, D1 index, private Supabase Storage for token media, KV cache and wallet sessions, per-token Durable Objects, Helius event queues, a scheduled epoch Workflow, and Turnstile protection.
+Diggo.fun is a Solana memecoin launchpad combined with a mining game. Creators launch projects
+and tokens into the same ecosystem that players use for repeat participation.
 
-The UI is functional on devnet. The actual Solana programs and vanity-key generation service are deliberately outside this web repository; the launch API creates a secure job and requires every completed mint address to end in `diggo`.
+The player journey is:
+
+1. Connect a wallet and activate a 24-hour mining window.
+2. Complete a random mining interaction with the active crew.
+3. Review mined memecoins as they accrue in Discoveries.
+4. Use **Claim all** to sign a wallet-approved batch payout for up to 12 distinct coins.
+5. Return for the next mining window, or refer relevant players and creators to the ecosystem.
+
+ORE and Mining Power are game progression. They are not tokens, cannot be transferred or
+withdrawn, and cannot be bought with SOL or memecoins. Mined memecoins are real SPL tokens and
+their value can change or fall to zero.
+
+## Current mainnet status
+
+The repository is configured for `CHAIN_MODE=meteora` and the production environment points at
+`SOLANA_CLUSTER=mainnet-beta`. That configuration is not by itself a declaration that public
+mainnet launch is ready. Prelaunch education and demonstrations may continue, but public access
+should remain closed until the readiness gate below is complete and reviewed.
+
+Current blockers are:
+
+- replacing the production `METEORA_DBC_CONFIG=SET_AFTER_CREATE` placeholder with a verified mainnet
+  config address;
+- configuring a production-grade RPC, applying D1 migrations, and funding and verifying the payer
+  and mining-vault accounts;
+- rehearsing the real mainnet launch, mining, Discoveries and wallet-approved Claim all payout
+  flow end to end;
+- completing the required security review and recording its findings and unresolved items;
+- accepting that the native-program rent-reclaim action is unavailable in Meteora mode.
+
+The native Solana program is not the current production chain path. Documents that describe its
+authority model, pool custody, account migration or v2 design are preserved as historical and
+future architecture; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
+[docs/ONCHAIN.md](docs/ONCHAIN.md), and [docs/ONCHAIN_V2_DESIGN.md](docs/ONCHAIN_V2_DESIGN.md).
+
+## Start here
+
+- [Player and creator FAQ](docs/FAQ.md)
+- [Current Meteora deployment status](docs/DEPLOYMENT.md)
+- [Meteora operations and launch preparation](docs/METEORA_OPS.md)
+- [Security boundaries and current limitations](docs/SECURITY.md)
+- [Custody policy](docs/CUSTODY.md)
 
 ## Local development
 
-Requirements: Node.js 24+ and a free Cloudflare account for deployment.
+Requirements: Node.js 24+ and a Cloudflare account for Worker deployment.
 
 ```bash
 npm install
@@ -27,42 +69,6 @@ npm run check
 npm audit
 ```
 
-The check runs TypeScript, economic-invariant tests, the production frontend build, and a Wrangler deployment dry run.
-
-## Cloudflare deployment
-
-1. Replace `TURNSTILE_SITE_KEY` in `wrangler.jsonc` with the public key of a Diggo production widget.
-2. Add secrets; never put them in Git:
-
-   ```bash
-   npx wrangler secret put TURNSTILE_SECRET
-   npx wrangler secret put HELIUS_WEBHOOK_AUTH
-   npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
-   ```
-
-   Store the Helius value including its scheme, for example `Bearer <long-random-value>`, and put the exact same value in Helius `authHeader`.
-
-3. Deploy the Worker and automatically provision declared Cloudflare bindings:
-
-   ```bash
-   npm run build
-   npx wrangler deploy
-   npx wrangler d1 migrations apply diggo-db --remote
-   ```
-
-4. Configure Helius to deliver enhanced Solana events to `https://diggo.fun/webhooks/helius`.
-5. Attach `diggo.fun` as a Worker custom domain, proxy DNS through Cloudflare, and enable a WAF rate-limit rule for `POST /api/tokens`, `POST /api/auth/*`, and `/webhooks/*`.
-
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), [docs/SECURITY.md](docs/SECURITY.md), and [docs/VANITY_MINT.md](docs/VANITY_MINT.md) before a mainnet release.
-
-## Defaults
-
-- mining theme with neutral protocol terminology;
-- 95% launch allocation / 5% program-controlled Unmined Reserve;
-- 5-minute blocks and 7-day epochs;
-- 25% reward reduction per epoch;
-- upgrades route 70% to reserve, burn 20%, and route 10% to protocol;
-- one active mine per player;
-- Wallet Standard discovery through the current Solana Kit wallet plugin—no paid wallet service.
-
-The original product architecture is preserved in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The check runs TypeScript, tests, the production frontend build, and a Wrangler deployment dry
+run. Documentation changes must not be treated as evidence that the readiness blockers above have
+been completed.

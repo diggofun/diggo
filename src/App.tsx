@@ -16,6 +16,7 @@ import {
   getPlayerProfile,
   getPortfolio,
   getPlayerRewards,
+  getReferrals,
   getRewardClaimChallenge,
   getWalletSession,
   getToken,
@@ -35,7 +36,7 @@ import {
   runGameDiscovery,
   upgradeGameCrew,
 } from "./api";
-import { track } from "./analytics";
+import { track, trackOnce } from "./analytics";
 import { TURNSTILE_SITE_KEY } from "./constants";
 import { NEUTRAL_VERIFICATION_TEXT, runGated, VerificationRequiredError } from "./verification";
 import { CREW_COMPONENT_LABELS, CREW_COMPONENTS } from "./crewLabels";
@@ -214,6 +215,7 @@ export default function App() {
   );
 
   const page: PageId = useMemo(() => ROUTES[window.location.pathname] ?? "home", []);
+  const analyticsConfigured = Boolean(config.posthogApiKey && config.posthogHost);
   /**
    * The legal documents render in place of the home page at their own paths. They get no PageId on
    * purpose: that union is AppHeader.tsx's, and a legal notice belongs nowhere in the game nav.
@@ -224,6 +226,17 @@ export default function App() {
     const title = PAGE_TITLES[page];
     document.title = title ? title + " · Diggo.fun" : "Diggo.fun — Build and manage your memecoin mining crew";
   }, [page]);
+
+  useEffect(() => {
+    if (!analyticsConfigured) return;
+    const referralCode = new URLSearchParams(window.location.search).get("ref");
+    if (referralCode?.trim()) return trackOnce("referral_landed");
+  }, [analyticsConfigured]);
+
+  useEffect(() => {
+    if (page !== "discoveries" || !analyticsConfigured) return;
+    return trackOnce("discoveries_viewed", { network: config.cluster });
+  }, [analyticsConfigured, config.cluster, page]);
 
   const fetchBootstrap = useCallback(async (): Promise<void> => {
     try {
@@ -310,6 +323,24 @@ export default function App() {
   const featured = selected ?? tokens[0] ?? null;
   const isMiningActive = player?.activationState === "ACTIVE";
   const signedIn = Boolean(session && walletAddress && session === walletAddress);
+
+  useEffect(() => {
+    if (page !== "referrals" || !signedIn || !analyticsConfigured) return;
+    let current = true;
+    let cancelTrackedOnce: (() => void) | undefined;
+    void getReferrals()
+      .then((panel) => {
+        if (current && panel.totals.qualified > 0) cancelTrackedOnce = trackOnce("referral_qualified");
+      })
+      .catch(() => {
+        // The referral dashboard owns its own error state; absence of this observation is not a
+        // qualification event.
+      });
+    return () => {
+      current = false;
+      cancelTrackedOnce?.();
+    };
+  }, [analyticsConfigured, page, signedIn]);
 
   const refreshGame = useCallback(async (): Promise<void> => {
     if (!walletAddress || config.chainMode !== "meteora") return;
@@ -520,7 +551,7 @@ export default function App() {
       }
       await ensureSession();
       await confirmRewardClaimPayout(claim.id, result.signature);
-      track("reward_claimed", { mint: claim.mint, network: config.cluster });
+      track("reward_claimed", { network: config.cluster });
       await refreshClaims();
     } catch (error) {
       if (!pendingTransaction.record(error, "Reward claim")) setClaimError(messageOf(error));
@@ -548,6 +579,7 @@ export default function App() {
         payout: prepared.batch,
         nowSeconds: Math.floor(Date.now() / 1_000),
       });
+      track("claim_all_submitted", { network: config.cluster });
 
       // Confirmation is idempotent. Poll this exact batch/signature pair after submission instead
       // of ever sending the transaction again or asking the player for another signature.
@@ -556,6 +588,7 @@ export default function App() {
         if (result.batch.status === "SETTLED") {
           await refreshGame();
           setClaimAllNotice(settledClaimAllNotice(prepared));
+          track("claim_all_settled", { network: config.cluster });
           return;
         }
         if (attempt < 5) await new Promise((resolve) => window.setTimeout(resolve, 2_000));
@@ -1085,6 +1118,7 @@ export default function App() {
             onLaunched={(token) => {
               setTokens((current) => [token, ...current.filter((existing) => existing.mint !== token.mint)]);
               setSelected(token);
+              track("launch_succeeded", { chain_mode: config.chainMode, network: config.cluster });
             }}
           />
         )}
