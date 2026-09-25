@@ -1127,8 +1127,13 @@ body.has-modal { overflow: hidden; }
   .wallet-control:not(.signed-wallet) .wallet-button-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .site-menu { left: 14px; right: 14px; width: auto; }
   body { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); }
-  .tab-bar { position: fixed; z-index: 90; left: 0; right: 0; bottom: 0; height: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); padding: 6px 6px env(safe-area-inset-bottom); display: grid; grid-template-columns: repeat(5, 1fr); background: var(--ink); border-top: 2px solid var(--acid); }
-  .tab-bar a { display: grid; justify-items: center; align-content: center; gap: 4px; border-radius: var(--radius-md); color: var(--muted-on-dark); font: 800 10px/1 Inter, sans-serif; letter-spacing: .02em; }
+  .tab-bar { position: fixed; z-index: 90; left: 0; right: 0; bottom: 0; height: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); padding: 6px 6px env(safe-area-inset-bottom); display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); background: var(--ink); border-top: 2px solid var(--acid); }
+  /* Five labels share 360px minus the bar padding, so a track must be allowed to shrink below its
+     content width (minmax(0,1fr)) and a label must never wrap onto a second line: a wrapped label
+     pushed the row taller than the bar and the second line was clipped by the safe-area padding. */
+  .tab-bar a { min-width: 0; display: grid; justify-items: center; align-content: center; gap: 4px; border-radius: var(--radius-md); color: var(--muted-on-dark); font: 800 10px/1 Inter, sans-serif; letter-spacing: .02em; }
+  .tab-bar a > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab-bar a > .icon { width: 22px; height: 22px; }
   .tab-bar a[aria-current="page"] { color: var(--ink); background: var(--acid); }
   .tab-bar a:active { transform: scale(.96); }
 }
