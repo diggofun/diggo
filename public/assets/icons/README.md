@@ -45,6 +45,12 @@ watchlistFilled
 component ignores `filled` and repaints its single glyph, so a missing variant can never blank an
 icon out. Keep the star's outline identical to `watchlist.png` so the toggle does not jump.
 
+## Brand logos
+
+`x.png` and `x@2x.png` are the X (Twitter) logo for the official @Diggo_Fun links in the sidebar
+and footer. They are coloured `<img>` files, not mask glyphs, so they are outside the `IconName`
+registry and the asset audit skips them by name.
+
 ## Reviewing the set
 
 - `node scripts/dev/icon-sheet.mjs` writes a contact sheet of every asset at 2x (48px) and prints

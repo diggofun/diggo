@@ -476,6 +476,10 @@ export function SiteFooter() {
         <nav className="site-footer-product" aria-label="Product">
           <a href="/mines">Mines</a><a href="/leaderboards">Leaderboards</a><a href="/create">Launch</a>
         </nav>
+        <a className="site-footer-x" href="https://x.com/Diggo_Fun" target="_blank" rel="noopener noreferrer" aria-label="Diggo on X">
+          <img className="x-logo" src="/assets/icons/x.png" srcSet="/assets/icons/x.png 1x, /assets/icons/x@2x.png 2x" width={18} height={18} alt="" />
+          <span>@Diggo_Fun</span>
+        </a>
         <nav className="site-footer-legal" aria-label="Legal">
           {LEGAL_ROUTES.map((route) => (
             <a key={route.id} href={route.path}>
