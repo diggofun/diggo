@@ -709,6 +709,8 @@ export interface NotificationMineState {
 
 export interface NotificationDiscoveryState {
   readonly id: string;
+  readonly name: string;
+  readonly symbol: string;
   readonly rarity: string;
   readonly createdAt: number;
 }
@@ -805,6 +807,8 @@ export function computeNotifications(
   for (const discovery of rare) {
     emit("RARE_DISCOVERY_FOUND", "RARE_DISCOVERY_FOUND:" + discovery.id, {
       discoveryId: discovery.id,
+      name: discovery.name,
+      symbol: discovery.symbol,
       rarity: discovery.rarity,
     });
   }

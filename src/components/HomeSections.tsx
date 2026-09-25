@@ -39,7 +39,6 @@ export function HomeHero({
   onManageCrew,
   onLaunch,
   onClaimRewards,
-  claimCopy = "Claim on-chain rewards",
 }: {
   featured: TokenSummary | null;
   player: PlayerProfile | null;
@@ -50,8 +49,7 @@ export function HomeHero({
   onActivate(): void;
   onManageCrew(): void;
   onLaunch(): void;
-  onClaimRewards(): void;
-  claimCopy?: string;
+  onClaimRewards?(): void;
 }) {
   const isMiningActive = player?.activationState === "ACTIVE";
   const reservePercent = featured ? (featured.reserveRemaining / featured.reserveTotal) * 100 : 0;
@@ -68,8 +66,9 @@ export function HomeHero({
           MEMECOIN <span>MINING CREW.</span>
         </h1>
         <p>
-          Pick a mine, activate your crew once a day and let it dig while you are away. Upgrade
-          Miners, Drills and Carts with the ORE they bring back, and turn up rare discoveries.
+          Mine automatically with the eligible launched memecoins, activate your crew once a day and
+          let it dig while you are away. Upgrade Miners, Drills and Carts with the ORE they bring
+          back, and turn up rare discoveries.
         </p>
         <div className="hero-actions">
           <a className="btn btn-primary btn-lg" href="/mine">
@@ -136,9 +135,9 @@ export function HomeHero({
               {isMiningActive && (
                 <span><IconTimer size={13} /> resets in {countdown(Math.floor(player.activationExpiresAt ?? 0), now)}</span>
               )}
-              {connected && (
+              {connected && onClaimRewards && (
                 <button type="button" className="claim-rewards-button" onClick={onClaimRewards}>
-                  <IconOre size={12} /> {claimCopy}
+                  <IconOre size={12} /> Claim on-chain rewards
                 </button>
               )}
             </div>
@@ -325,8 +324,6 @@ export function SelectedMine({
   token,
   mineInfo,
   now,
-  canSwitch,
-  onSwitch,
 }: {
   token: TokenSummary;
   /**
@@ -336,8 +333,6 @@ export function SelectedMine({
    */
   mineInfo: MineInfo | null;
   now: number;
-  canSwitch: boolean;
-  onSwitch(): void;
 }) {
   const [copied, setCopied] = useState(false);
   const reservePercent = token.reserveTotal > 0 ? (token.reserveRemaining / token.reserveTotal) * 100 : 0;
@@ -368,11 +363,6 @@ export function SelectedMine({
           <h1 className="selected-title">{token.name}</h1>
         </div>
         <div className="selected-heading-actions">
-          {canSwitch && (
-            <button className="btn btn-ghost btn-sm switch-mine-button" onClick={onSwitch}>
-              Switch crew here <IconMine size={14} />
-            </button>
-          )}
           <a className="btn btn-ghost btn-sm" href={"/trade?mint=" + encodeURIComponent(token.mint)}>
             Trade ${token.symbol}
           </a>

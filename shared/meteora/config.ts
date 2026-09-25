@@ -4,7 +4,7 @@ export type MeteoraCluster = "devnet" | "mainnet-beta";
 export const METEORA_DBC_PROGRAM_ID = "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN";
 export const METEORA_DAMM_V2_PROGRAM_ID = "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG";
 export const METEORA_WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
-export const METEORA_FEE_CLAIMER = "GyGjx2nsgG2wDbUESGTw8aHndXh6b8d2znhZPqWSdwcH";
+export const METEORA_FEE_CLAIMER = "6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ";
 export const METEORA_DBC_CONFIG_PLACEHOLDER = "SET_AFTER_CREATE";
 
 export const METEORA_TOKEN = {

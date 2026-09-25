@@ -61,6 +61,9 @@ export interface GameStore {
   saveMine(mine: GameMineLedger, expectedVersion: number): Promise<boolean>;
   mineVersion(mint: string): Promise<number>;
   getBalance(wallet: string, mint: string): Promise<GameBalance>;
+  listBalances(wallet: string): Promise<GameBalance[]>;
+  /** Current server-visible power assigned to active players mining this mint. */
+  getEligiblePower(mint: string, now: number): Promise<number>;
   saveBalance(balance: GameBalance, expectedClaimable: bigint): Promise<boolean>;
   /** Atomically advances the mine ledger and credits the wallet's claimable balance. */
   settleMining(
@@ -75,7 +78,11 @@ export interface GameStore {
   getClaim(id: string): Promise<GameClaim | null>;
   listPendingClaims(limit: number): Promise<GameClaim[]>;
   listClaims(wallet: string, limit: number): Promise<GameClaim[]>;
+  /** Every claim for a wallet, in stable keyset order. Never truncate claim-all preparation. */
+  listClaimsForWallet(wallet: string): Promise<GameClaim[]>;
   markClaimPaid(id: string, signature: string): Promise<boolean>;
+  /** Atomically settles every included claim and advances each mine's paid total once. */
+  markClaimBatchPaid(claimIds: readonly string[], signature: string): Promise<boolean>;
   applyReferralCredit(record: ReferralCreditRecord): Promise<boolean>;
   getReferralCredit(id: string): Promise<ReferralCreditRecord | null>;
   referralWeekTotals(referrer: string, week: number): Promise<{ count: number; ore: number }>;
@@ -180,7 +187,7 @@ export class MemoryGameStore implements GameStore {
       mine.paid > mine.committed ||
       mine.remaining !== mine.initialReserve - mine.committed
     ) return false;
-    this.mines.set(mine.mint, { ...mine });
+    this.mines.set(mine.mint, { ...mine, version: version + 1 });
     this.mineVersions.set(mine.mint, version + 1);
     return true;
   }
@@ -196,6 +203,22 @@ export class MemoryGameStore implements GameStore {
       claimable: 0n,
       lastSettledAt: 0,
     };
+  }
+
+  async listBalances(wallet: string): Promise<GameBalance[]> {
+    return [...this.balances.values()]
+      .filter((balance) => balance.wallet === wallet)
+      .map((balance) => ({ ...balance }));
+  }
+
+  async getEligiblePower(mint: string, now: number): Promise<number> {
+    let total = 0;
+    for (const player of this.players.values()) {
+      if (player.activeMine === mint && player.activeUntil > now && player.activatedAt > 0 && player.activatedAt <= now && player.activeMiningPower > 0) {
+        total += player.activeMiningPower;
+      }
+    }
+    return total;
   }
 
   async saveBalance(balance: GameBalance, expectedClaimable: bigint): Promise<boolean> {
@@ -219,7 +242,7 @@ export class MemoryGameStore implements GameStore {
     const currentBalance = await this.getBalance(balance.wallet, balance.mint);
     if (currentBalance.claimable !== expectedClaimable) return false;
     if (mine.remaining !== mine.initialReserve - mine.committed) return false;
-    this.mines.set(mine.mint, { ...mine });
+    this.mines.set(mine.mint, { ...mine, version: mineVersion + 1 });
     this.mineVersions.set(mine.mint, mineVersion + 1);
     this.balances.set(this.balanceKey(balance.wallet, balance.mint), { ...balance, lastSettledAt: now });
     this.balanceVersions.set(this.balanceKey(balance.wallet, balance.mint), balance.claimable);
@@ -270,6 +293,38 @@ export class MemoryGameStore implements GameStore {
     }
     claim.status = "PAID";
     claim.signature = signature;
+    return true;
+  }
+
+  async listClaimsForWallet(wallet: string): Promise<GameClaim[]> {
+    return [...this.claims.values()]
+      .filter((claim) => claim.wallet === wallet)
+      .sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id))
+      .map((claim) => ({ ...claim }));
+  }
+
+  async markClaimBatchPaid(claimIds: readonly string[], signature: string): Promise<boolean> {
+    const unique = new Set(claimIds);
+    if (unique.size !== claimIds.length || unique.size === 0 || !signature) return false;
+    const claims: GameClaim[] = [];
+    for (const id of unique) {
+      const claim = this.claims.get(id);
+      if (!claim) return false;
+      if (claim.status === "PAID" && claim.signature !== signature) return false;
+      claims.push(claim);
+    }
+    const pending = claims.filter((claim) => claim.status === "PENDING");
+    const totals = new Map<string, bigint>();
+    for (const claim of pending) totals.set(claim.mint, (totals.get(claim.mint) ?? 0n) + claim.amount);
+    for (const [mint, amount] of totals) {
+      const mine = this.mines.get(mint);
+      if (!mine || mine.paid + amount > mine.committed) return false;
+    }
+    for (const [mint, amount] of totals) this.mines.get(mint)!.paid += amount;
+    for (const claim of pending) {
+      claim.status = "PAID";
+      claim.signature = signature;
+    }
     return true;
   }
 

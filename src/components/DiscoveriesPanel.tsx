@@ -10,7 +10,7 @@
  */
 import type { DiscoveryOpportunity, DiscoveryRecord, TokenSummary } from "../../shared/types";
 import { tokenAmount } from "../format";
-import { IconDiscoveries, IconMine, IconSwap } from "../icons";
+import { IconDiscoveries, IconMine } from "../icons";
 import { useReducedMotion } from "../motion";
 import { requestWalletMenu } from "../wallet";
 import { DiscoveryArt } from "./MineScene";
@@ -23,15 +23,12 @@ export interface DiscoveriesPanelProps {
   tokens: TokenSummary[];
   loading: boolean;
   rolling: boolean;
-  claimingId: string | null;
   error: string;
   notice: string;
   onRequestOpportunity(): void;
   onRoll(): void;
-  onClaim(discovery: DiscoveryRecord): void;
   onOpenToken(mint: string): void;
   onTrade(mint: string): void;
-  onSwitchCrew(mint: string): void;
 }
 
 function symbolOf(tokens: TokenSummary[], mint: string): string {
@@ -39,8 +36,7 @@ function symbolOf(tokens: TokenSummary[], mint: string): string {
 }
 
 export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
-  const { signedIn, discoveries, opportunity, tokens, loading, rolling, claimingId, error, notice } = props;
-  const claimable = discoveries.filter((discovery) => discovery.claimable);
+  const { signedIn, discoveries, opportunity, tokens, loading, rolling, error, notice } = props;
   const reducedMotion = useReducedMotion();
 
   const spent = opportunity !== null && opportunity.status !== "PENDING" && opportunity.status !== "ELIGIBLE";
@@ -89,7 +85,7 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
           action={<button className="btn btn-primary" onClick={requestWalletMenu}>Connect wallet</button>}
         >
           An active crew gets one discovery opportunity per window. Sign in to see what yours has
-          turned up and claim it before it expires.
+          turned up. Rewards accrue here automatically; wallet collection is a separate action.
         </EmptyState>
       )}
       {signedIn && loading && (
@@ -102,36 +98,9 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
       {signedIn && !loading && discoveries.length === 0 && (
         <EmptyState icon={<IconDiscoveries size={26} />} title="No discoveries yet">
           An active, eligible crew has a chance each window, and the mine's own
-          liquidity, volume and reserve decide how good that chance can be.
+          liquidity, volume and reserve decide how good that chance can be. Any mined memecoin
+          appears here automatically, without a manual claim.
         </EmptyState>
-      )}
-
-      {claimable.length > 0 && (
-        <div className="discovery-claimable">
-          <span className="claim-block-head-label">READY TO CLAIM</span>
-          <ul>
-            {claimable.map((discovery) => (
-              <li key={discovery.id}>
-                <div>
-                  <strong>
-                    {tokenAmount(discovery.tokenAmount)} {symbolOf(tokens, discovery.mint)}
-                  </strong>
-                  <small>
-                    {discovery.rarity} / {discovery.visualEvent}
-                  </small>
-                </div>
-                <div className="discovery-row-actions">
-                  <button className="badge ledger-token" onClick={() => props.onOpenToken(discovery.mint)}>
-                    View token
-                  </button>
-                  <button disabled={claimingId === discovery.id} onClick={() => props.onClaim(discovery)}>
-                    {claimingId === discovery.id ? "Claiming…" : "Claim"}
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
       )}
 
       <div className="discovery-grid">
@@ -146,20 +115,17 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
             </header>
             {/* Generated art for the rarity; a rarity without art keeps the drawn rarity tag. */}
             <DiscoveryArt rarity={discovery.rarity} className="discovery-card-art" />
-            <h4>{discovery.visualEvent}</h4>
+            <h4>{tokens.find((token) => token.mint === discovery.mint)?.name ?? "Mined memecoin"}</h4>
             <strong>
               {tokenAmount(discovery.tokenAmount)} {symbolOf(tokens, discovery.mint)}
             </strong>
-            <small>{new Date(discovery.createdAt * 1_000).toLocaleString()}</small>
+            <small>{discovery.rarity} · {discovery.visualEvent} · accrued automatically</small>
             <div className="discovery-card-actions">
               <button className="badge ledger-token" onClick={() => props.onOpenToken(discovery.mint)}>
                 Token page
               </button>
               <button className="badge ledger-token" onClick={() => props.onTrade(discovery.mint)}>
                 Trade
-              </button>
-              <button className="badge ledger-token" onClick={() => props.onSwitchCrew(discovery.mint)}>
-                <IconSwap size={12} /> Switch crew to this mine
               </button>
             </div>
           </article>

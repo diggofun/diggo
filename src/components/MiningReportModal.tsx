@@ -24,7 +24,6 @@ export interface MiningReportModalProps {
   error: string;
   onCollect(): void;
   onManageCrew(): void;
-  onSwitchMine(): void;
   onClose(): void;
 }
 
@@ -45,7 +44,6 @@ export function MiningReportModal({
   error,
   onCollect,
   onManageCrew,
-  onSwitchMine,
   onClose,
 }: MiningReportModalProps) {
   const discovery = report.discovery;
@@ -157,8 +155,8 @@ export function MiningReportModal({
                 +{tokenAmount(discovery.tokenAmount)} {dollar(discovery.symbol)}
               </strong>
               <small>
-                Your crew hit a {discovery.visualEvent} while digging {mineLabel}. Claim it from Discoveries before it
-                expires.
+                Your crew hit a {discovery.visualEvent} while digging {mineLabel}. It was added to Discoveries as a
+                mined memecoin; moving it to your wallet requires a separate wallet-approved collection.
               </small>
             </div>
           </div>
@@ -205,9 +203,6 @@ export function MiningReportModal({
           )}
           <button className="outline-button" onClick={onManageCrew}>
             Manage crew <IconHammer size={15} />
-          </button>
-          <button className="outline-button" onClick={onSwitchMine}>
-            Switch mine
           </button>
           <button className="primary-button" disabled={collecting || collected} onClick={onCollect} data-autofocus>
             {collected ? (

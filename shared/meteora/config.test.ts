@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  METEORA_FEE_CLAIMER,
   estimatedMeteoraLaunchCostLamports,
   isMeteoraConfigPubkey,
   migrationThresholdLamports,
@@ -9,6 +10,10 @@ import {
 } from "./config";
 
 describe("Meteora configuration", () => {
+  it("pins the canonical platform fee destination", () => {
+    expect(METEORA_FEE_CLAIMER).toBe("6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ");
+  });
+
   it("defaults to the temporary Meteora mode and mainnet", () => {
     expect(normalizeChainMode(undefined)).toBe("meteora");
     expect(normalizeChainMode("native")).toBe("native");

@@ -51,6 +51,12 @@ export interface MeteoraTransaction {
   postTokenBalances: { accountIndex: number; mint: string; owner: string | null; amount: string }[];
 }
 
+function wireBase64(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value) && typeof value[0] === "string") return value[0];
+  return null;
+}
+
 function requireString(value: unknown, name: string): string {
   const text = typeof value === "string" ? value.trim() : "";
   if (!text) throw new Error(`${name} is required`);
@@ -284,6 +290,17 @@ export async function readTransaction(env: MeteoraRpcEnv, signature: string): Pr
     preTokenBalances: tokenBalances(value.meta?.preTokenBalances),
     postTokenBalances: tokenBalances(value.meta?.postTokenBalances),
   };
+}
+
+/** Reads the canonical wire bytes used to prove a reported signature came from our prepared transaction. */
+export async function readTransactionWire(env: MeteoraRpcEnv, signature: string): Promise<string | null> {
+  const response = await getChainRpc(meteoraRpcEnv(env)).getTransaction(signature as never, {
+    commitment: "confirmed",
+    encoding: "base64",
+    maxSupportedTransactionVersion: 0,
+  } as never).send();
+  const value = response as unknown as { transaction?: unknown } | null;
+  return value ? wireBase64(value.transaction) : null;
 }
 
 export function decodePoolConfig(data: Uint8Array): { quoteMint: string; feeClaimer: string; leftoverReceiver: string; tokenDecimal: number; migrationQuoteThreshold: bigint } {

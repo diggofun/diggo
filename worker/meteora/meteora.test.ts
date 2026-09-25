@@ -314,7 +314,7 @@ describe("Meteora vault instructions", () => {
     expect(message.instructions).toHaveLength(2);
     expect(createAta?.programAddress).toBe(ASSOCIATED_TOKEN_PROGRAM_ID);
     expect(createAta?.data).toEqual(Uint8Array.of(1));
-    expect(Array.from(createAta?.accounts ?? [], (key: any) => key.address)).toEqual([
+    expect(Array.from(createAta?.accounts ?? []).map((key) => key.address)).toEqual([
       keys.trader,
       destination,
       keys.trader,
@@ -324,7 +324,7 @@ describe("Meteora vault instructions", () => {
     ]);
     expect(Array.from(createAta?.accounts ?? [])[0]?.role).toBe(AccountRole.WRITABLE_SIGNER);
     expect(transfer?.programAddress).toBe(METEORA_TOKEN_PROGRAM_ID);
-    expect(Array.from(transfer?.accounts ?? [], (key: any) => key.address)).toEqual([
+    expect(Array.from(transfer?.accounts ?? []).map((key) => key.address)).toEqual([
       source,
       keys.mint,
       destination,

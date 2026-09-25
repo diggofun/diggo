@@ -25,10 +25,6 @@ export interface MineInfoPanelProps {
   now: number;
   loading: boolean;
   error: string;
-  /** False for a signed-out visitor, who has no share to estimate. */
-  canSwitch: boolean;
-  switching: boolean;
-  onSwitchHere(): void;
 }
 
 function accountingNote(accounting: MiningAccounting | undefined): string {
@@ -44,9 +40,6 @@ export function MineInfoPanel({
   now,
   loading,
   error,
-  canSwitch,
-  switching,
-  onSwitchHere,
 }: MineInfoPanelProps) {
   if (!mine) {
     return (
@@ -78,7 +71,7 @@ export function MineInfoPanel({
    * Two ends of a mine look alike in the numbers and mean different things. A reserve that is gone is
    * a fully mined mine. A curve cap that is gone is a mine waiting for graduation: the Mining Reserve
    * behind it is untouched and starts paying the moment the market graduates. Only the first is over,
-   * so the status label, the note under the header and the switch button all follow that split.
+   * so the status label and the note under the header follow that split.
    */
   const capSpent = curveCapSpent(curve);
   const reserveSpent = !onCurve && mine.remainingReserve <= 0;
@@ -116,15 +109,7 @@ export function MineInfoPanel({
             /* A status this build has no label for is still shown, in its own words: a new state from
                the API should surface rather than silently disappear. */
             <span className={"badge badge-" + statusView.tone}>{statusView.badge}</span>
-          ) : (
-            <button
-              className="btn btn-ghost btn-sm switch-here"
-              disabled={!canSwitch || switching}
-              onClick={onSwitchHere}
-            >
-              {switching ? "Switching…" : "Switch crew to this mine"}
-            </button>
-          )}
+          ) : null}
         </div>
       </div>
 

@@ -52,9 +52,11 @@ interface MineRow {
   reserve_total: number;
 }
 
-/** One row of the indexed discovery projection: the numeric tier, and when the find happened. */
+/** One row of the indexed discovery projection: display identity, numeric tier, and find time. */
 interface DiscoveryRow {
   id: string;
+  name: string;
+  symbol: string;
   rarity: number | null;
   found_at: number;
 }
@@ -135,7 +137,11 @@ export async function loadNotificationInput(env: RuntimeEnv, wallet: string, now
     // Only the rare tiers are read. Taking the newest finds of any rarity would let ten commons
     // push a rare one out of the window before computeNotifications ever saw it.
     env.DB.prepare(
-      "SELECT d.id, d.rarity, " + discoveryFoundAt("d") + " AS found_at FROM discovery_events d" +
+      "SELECT d.id, d.rarity, " + discoveryFoundAt("d") + " AS found_at, " +
+        "COALESCE(NULLIF(t.name, ''), NULLIF(t.symbol, ''), 'Memecoin') AS name, " +
+        "COALESCE(NULLIF(t.symbol, ''), 'MEME') AS symbol " +
+        "FROM discovery_events d" +
+        " LEFT JOIN tokens t ON t.coin = d.coin" +
         " WHERE d.wallet = ?1 AND d.rarity IN (" + rareTierPlaceholders + ")" +
         " AND " + discoveryFoundAt("d") + " >= " + windowPlaceholder +
         " ORDER BY found_at DESC, d.id ASC LIMIT 10",
@@ -165,7 +171,9 @@ export async function loadNotificationInput(env: RuntimeEnv, wallet: string, now
       : null,
     discoveries: discoveries.results.flatMap((row) => {
       const rarity = rarityNameForTier(row.rarity);
-      return rarity !== null && isRareRarity(rarity) ? [{ id: row.id, rarity, createdAt: row.found_at }] : [];
+      return rarity !== null && isRareRarity(rarity)
+        ? [{ id: row.id, name: row.name, symbol: row.symbol, rarity, createdAt: row.found_at }]
+        : [];
     }),
   };
 }

@@ -163,6 +163,19 @@ function addDiscovery(db: DatabaseSync, fixture: DiscoveryFixture): void {
   );
 }
 
+function addToken(db: DatabaseSync, discoveryId: string, name: string, symbol: string): void {
+  db.prepare(
+    "INSERT INTO tokens (mint, coin, slug, name, symbol, creator, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'MINING_ACTIVE')",
+  ).run(
+    "mint-" + discoveryId,
+    "coin-" + discoveryId,
+    "slug-" + discoveryId,
+    name,
+    symbol,
+    RARE_WALLET,
+  );
+}
+
 interface StoredNotification {
   kind: string;
   dedupe_key: string;
@@ -214,10 +227,13 @@ describe("the indexed discovery projection", () => {
     const { db, env } = harness();
     addPlayer(db, RARE_WALLET);
     addDiscovery(db, { id: "opp-epic", wallet: RARE_WALLET, rarity: EPIC, rolledAt: NOW - 120, settledAt: NOW - 60 });
+    addToken(db, "opp-epic", "Epic Cat", "CAT");
 
     const input = await loadNotificationInput(env, RARE_WALLET, NOW);
 
-    expect(input?.discoveries).toEqual([{ id: "opp-epic", rarity: "epic", createdAt: NOW - 60 }]);
+    expect(input?.discoveries).toEqual([
+      { id: "opp-epic", name: "Epic Cat", symbol: "CAT", rarity: "epic", createdAt: NOW - 60 },
+    ]);
   });
 
   it("dates a find from the settle, so a roll that sat pending past the window still counts", async () => {
@@ -233,7 +249,9 @@ describe("the indexed discovery projection", () => {
 
     const input = await loadNotificationInput(env, RARE_WALLET, NOW);
 
-    expect(input?.discoveries).toEqual([{ id: "opp-late", rarity: "rare", createdAt: NOW - 30 }]);
+    expect(input?.discoveries).toEqual([
+      { id: "opp-late", name: "Memecoin", symbol: "MEME", rarity: "rare", createdAt: NOW - 30 },
+    ]);
   });
 
   it("falls back to the index time when the settle stored no block time", async () => {
@@ -243,7 +261,9 @@ describe("the indexed discovery projection", () => {
 
     const input = await loadNotificationInput(env, RARE_WALLET, NOW);
 
-    expect(input?.discoveries).toEqual([{ id: "opp-nobt", rarity: "rare", createdAt: NOW - 600 }]);
+    expect(input?.discoveries).toEqual([
+      { id: "opp-nobt", name: "Memecoin", symbol: "MEME", rarity: "rare", createdAt: NOW - 600 },
+    ]);
   });
 
   it("ignores pending rolls, non-rare tiers and finds older than the window", async () => {
@@ -263,7 +283,9 @@ describe("the indexed discovery projection", () => {
 
     const input = await loadNotificationInput(env, RARE_WALLET, NOW);
 
-    expect(input?.discoveries).toEqual([{ id: "rare", rarity: "rare", createdAt: NOW - 240 }]);
+    expect(input?.discoveries).toEqual([
+      { id: "rare", name: "Memecoin", symbol: "MEME", rarity: "rare", createdAt: NOW - 240 },
+    ]);
   });
 
   it("orders the newest find first, breaking ties by id", async () => {
@@ -284,6 +306,7 @@ describe("GET /api/notifications", () => {
     const { db, env, kv } = harness();
     addPlayer(db, RARE_WALLET);
     addDiscovery(db, { id: "opp-1", wallet: RARE_WALLET, rarity: RARE, rolledAt: NOW - 120, settledAt: NOW - 60 });
+    addToken(db, "opp-1", "Rare Meme", "RARE");
     await signIn(kv, RARE_WALLET);
 
     const response = await getNotifications(bellRequest(RARE_WALLET), env);
@@ -292,7 +315,12 @@ describe("GET /api/notifications", () => {
     const listed = (await response.json()) as BellBody;
     expect(listed.notifications).toHaveLength(1);
     expect(listed.notifications[0].kind).toBe("RARE_DISCOVERY_FOUND");
-    expect(listed.notifications[0].payload).toMatchObject({ discoveryId: "opp-1", rarity: "rare" });
+    expect(listed.notifications[0].payload).toMatchObject({
+      discoveryId: "opp-1",
+      name: "Rare Meme",
+      symbol: "RARE",
+      rarity: "rare",
+    });
     expect(listed.unread).toBe(1);
     expect(storedNotifications(db, RARE_WALLET).map((row) => row.kind)).toEqual(["RARE_DISCOVERY_FOUND"]);
 

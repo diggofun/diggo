@@ -9,14 +9,18 @@ export {
 } from "./indexer";
 export { decodeMeteoraEventData } from "./indexer";
 export {
+  buildPreparedClaimBatchTransaction,
   buildSplTokenTransferInstruction,
   buildPreparedMiningClaimTransaction,
   buildWithdrawLeftoverInstruction,
+  confirmClaimBatch,
   confirmMiningClaim,
   loadMiningVaultSigner,
+  prepareClaimBatch,
   prepareMiningClaim,
   runVaultSweep,
   validateClaimCaps,
+  verifyClaimBatchTransfer,
   verifyMiningClaimTransfer,
 } from "./vault";
 export {

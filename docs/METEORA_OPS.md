@@ -11,7 +11,8 @@ Anchor program in `programs/diggo-protocol` is not used by these scripts. The pi
 - Quote mint: wrapped SOL, `So11111111111111111111111111111111111111112`
 - Supply: 1,000,000,000 SPL tokens with 9 decimals
 - Leftover reserve: 200,000,000 tokens (20%) to the mining vault
-- Fee claimer / partner: `GyGjx2nsgG2wDbUESGTw8aHndXh6b8d2znhZPqWSdwcH`
+- Diggo partner fee claimer: `6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ`
+- Diggo Worker treasury (`DIGGO_TREASURY`): `6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ`
 - Pool creation fee: 0.01 SOL; the SDK/program split applies at pool creation
 - Creator trading fee: 0%
 - Anti-sniper schedule: 3% to 1% over 60 minutes, with dynamic fees enabled
@@ -26,6 +27,16 @@ release that supports fractional percentages.
 
 The SDK also requires a curve split. The scripts currently use `percentageSupplyOnMigration: 25`,
 which is a temporary operational default and needs owner confirmation before mainnet launch.
+
+`feeClaimer`, the leftover receiver, and the partner/creator split are fixed when `createConfig`
+creates the config account. The pinned SDK and program IDL expose no instruction to change those
+config destinations, so verify the canonical wallet before mainnet signing. `DIGGO_TREASURY` is a
+Worker setting for Diggo-controlled flows; it does not change the config or redirect fees from an
+existing pool. Meteora's pool-creation protocol fee also has a separate program-controlled
+treasury, so `DIGGO_TREASURY` cannot redirect that protocol-level fee. Separately, the program does
+expose `updatePoolFees` for an authorized pool operator, so a pool's cliff, dynamic, and compounding
+fee parameters are mutable even though the config's fee destinations and partner/creator split are
+fixed.
 
 ## Key handling
 
@@ -75,7 +86,7 @@ Prepared on 2026-09-25 without sending a transaction:
 
 - Payer: `GkCYyWzSjhSFEjKNx1ebWThtVLzQj7L84ktAHe31MBSx`
 - Mining vault / leftover receiver: `H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT`
-- Fee claimer: `GyGjx2nsgG2wDbUESGTw8aHndXh6b8d2znhZPqWSdwcH`
+- Fee claimer: `6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ`
 - Mainnet Helius endpoint file: `C:\Users\Jurek\.diggo-mainnet\helius-mainnet-rpc-url.txt`; `getHealth` returned `ok`
 - Payer and vault balances at verification time: 0 lamports
 
@@ -104,17 +115,25 @@ before any signing. `--allow-mainnet` is intentionally absent from this runbook'
 
 ## Fees and leftover tokens
 
-Claim partner trading fees to the owner wallet (or another explicitly selected receiver):
+Claim partner trading fees to the canonical platform fee wallet:
 
 ```powershell
 npx tsx scripts/meteora/claim-partner-fees.ts `
-  --cluster devnet `
-  --payer C:\Users\Jurek\.diggo-devnet\payer.json `
+  --cluster mainnet `
+  --fee-claimer C:\Users\Jurek\.diggo-mainnet\platform-fee-wallet.json `
+  --payer C:\Users\Jurek\.diggo-mainnet\payer.json `
   --pool <POOL_ADDRESS>
 ```
 
-The optional `--receiver` defaults to the owner fee-claimer wallet. The transaction signs locally;
-the script prints the pool, receiver, signature, and exact payer balance change.
+The keypair path must resolve to the canonical fee-claimer wallet and must remain outside the
+repository. The script reads the pool's config and rejects any pool configured for another fee
+claimer. The optional `--receiver` is also restricted to the canonical wallet. The transaction is
+signed by the fee-claimer key and the payer, and the script prints the pool, config, receiver,
+signature, and exact payer balance change.
+
+The devnet config listed below was created before the canonical-wallet update and retains its
+original immutable fee claimer. The current claim script intentionally rejects that legacy config;
+do not represent a config change as a way to redirect already-accrued fees.
 
 After graduation, the mining reserve can be withdrawn with the manual fallback:
 

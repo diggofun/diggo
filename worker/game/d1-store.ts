@@ -164,6 +164,27 @@ export class D1GameStore implements GameStore {
     return row ? { wallet: String(row.wallet), mint: String(row.mint), claimable: bigint(row.claimable), lastSettledAt: number(row.last_settled_at) } : { wallet, mint, claimable: 0n, lastSettledAt: 0 };
   }
 
+  async listBalances(wallet: string): Promise<GameBalance[]> {
+    const result = await this.db.prepare(
+      "SELECT wallet, mint, claimable, last_settled_at FROM game_balances WHERE wallet = ?1 ORDER BY mint",
+    ).bind(wallet).all<Record<string, unknown>>();
+    return (result.results ?? []).map((row) => ({
+      wallet: String(row.wallet),
+      mint: String(row.mint),
+      claimable: bigint(row.claimable),
+      lastSettledAt: number(row.last_settled_at),
+    }));
+  }
+
+  async getEligiblePower(mint: string, now: number): Promise<number> {
+    const row = await this.db.prepare(
+      "SELECT COALESCE(SUM(CASE WHEN active_mining_power > 0 THEN active_mining_power ELSE 0 END), 0) AS total" +
+        " FROM game_players WHERE active_mine = ?1 AND active_until > ?2 AND activated_at > 0 AND activated_at <= ?2",
+    ).bind(mint, now).first<{ total: number | string | null }>();
+    const total = Number(row?.total ?? 0);
+    return Number.isSafeInteger(total) && total > 0 ? total : 0;
+  }
+
   async saveBalance(balance: GameBalance, expectedClaimable: bigint): Promise<boolean> {
     const result = await this.db.prepare(
       "INSERT INTO game_balances (wallet, mint, claimable, last_settled_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)" +
@@ -270,6 +291,59 @@ export class D1GameStore implements GameStore {
       ).bind(signature, Math.floor(Date.now() / 1_000), id, claim.mint, nextPaid),
     ]);
     return (results[0]?.meta.changes ?? 0) === 1 && (results[1]?.meta.changes ?? 0) === 1;
+  }
+
+  async listClaimsForWallet(wallet: string): Promise<GameClaim[]> {
+    const pageSize = 256;
+    const claims: GameClaim[] = [];
+    let cursorCreatedAt = Number.MAX_SAFE_INTEGER;
+    let cursorId = "\uffff";
+    for (;;) {
+      const result = await this.db.prepare(
+        "SELECT * FROM game_claims WHERE wallet = ?1 AND (created_at < ?2 OR (created_at = ?2 AND id < ?3))" +
+        " ORDER BY created_at DESC, id DESC LIMIT ?4",
+      ).bind(wallet, cursorCreatedAt, cursorId, pageSize).all<Record<string, unknown>>();
+      const page = (result.results ?? []).map(claimFromRow);
+      claims.push(...page);
+      if (page.length < pageSize) return claims;
+      const last = page[page.length - 1]!;
+      cursorCreatedAt = last.createdAt;
+      cursorId = last.id;
+    }
+  }
+
+  async markClaimBatchPaid(claimIds: readonly string[], signature: string): Promise<boolean> {
+    const unique = [...new Set(claimIds)];
+    if (unique.length === 0 || unique.length !== claimIds.length || !signature) return false;
+    const placeholders = unique.map((_id, index) => "?" + (index + 2)).join(",");
+    const rows = await this.db.prepare(
+      "SELECT * FROM game_claims WHERE id IN (" + placeholders + ") ORDER BY id",
+    ).bind(signature, ...unique).all<Record<string, unknown>>();
+    if ((rows.results?.length ?? 0) !== unique.length) return false;
+    const claims = rows.results.map(claimFromRow);
+    if (claims.some((claim) => claim.status === "PAID" && claim.signature !== signature)) return false;
+    const pending = claims.filter((claim) => claim.status === "PENDING");
+    if (pending.length === 0) return true;
+    const totals = new Map<string, bigint>();
+    for (const claim of pending) totals.set(claim.mint, (totals.get(claim.mint) ?? 0n) + claim.amount);
+    const now = Math.floor(Date.now() / 1_000);
+    const statements = [];
+    for (const [mint, amount] of totals) {
+      const mine = await this.getMine(mint);
+      if (!mine || mine.paid + amount > mine.committed) return false;
+      const nextPaid = mine.paid + amount;
+      statements.push(this.db.prepare(
+        "UPDATE game_mines SET paid=?1, version=version+1, updated_at=?2 WHERE mint=?3 AND version=?4 AND paid=?5 AND ?1 <= committed",
+      ).bind(nextPaid.toString(), now, mint, mine.version, mine.paid.toString()));
+      for (const claim of pending.filter((entry) => entry.mint === mint)) {
+        statements.push(this.db.prepare(
+          "UPDATE game_claims SET status='PAID', signature=?1, paid_at=?2 WHERE id=?3 AND status='PENDING'" +
+            " AND EXISTS (SELECT 1 FROM game_mines WHERE mint=?4 AND paid=?5)",
+        ).bind(signature, now, claim.id, mint, nextPaid.toString()));
+      }
+    }
+    const results = await this.db.batch(statements);
+    return results.every((result) => (result.meta?.changes ?? 0) === 1);
   }
 
   async getReferralCredit(id: string): Promise<ReferralCreditRecord | null> {

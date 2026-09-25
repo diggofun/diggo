@@ -28,8 +28,8 @@ import { isAbsolute, resolve } from "node:path";
 
 export type Cluster = "devnet" | "mainnet";
 
-export const ADMIN_WALLET =
-  "GyGjx2nsgG2wDbUESGTw8aHndXh6b8d2znhZPqWSdwcH";
+export const PLATFORM_FEE_WALLET =
+  "6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ";
 export const DBC_PROGRAM_ID =
   "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN";
 export const DAMM_V2_PROGRAM_ID =

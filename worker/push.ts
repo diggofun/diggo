@@ -430,9 +430,11 @@ export function notificationMessage(kind: string, payload: unknown): PushMessage
       };
     case "RARE_DISCOVERY_FOUND": {
       const rarity = stringField(data, "rarity");
+      const name = stringField(data, "name");
       return {
         title: PUSH_TITLE,
-        body: "A " + (rarity === null ? "rare" : rarity) + " discovery is waiting to be claimed.",
+        body: (name === null ? "A memecoin" : name) + " was mined: " +
+          (rarity === null ? "a rare discovery" : rarity) + ".",
         url: "/discoveries",
         tag,
       };

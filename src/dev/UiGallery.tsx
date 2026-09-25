@@ -279,7 +279,6 @@ export function UiGallery() {
     error: "",
     onActivate: noop,
     onManageCrew: noop,
-    onSwitchMine: noop,
     onCollect: () => setReportOpen(true),
   };
 
@@ -365,15 +364,12 @@ export function UiGallery() {
           tokens={[SAMPLE_MINE]}
           loading={false}
           rolling={false}
-          claimingId={null}
           error=""
           notice=""
           onRequestOpportunity={noop}
           onRoll={noop}
-          onClaim={noop}
           onOpenToken={noop}
           onTrade={noop}
-          onSwitchCrew={noop}
         />
       )}
       {show("loadouts") && (
@@ -462,7 +458,7 @@ export function UiGallery() {
       )}
       {show("market") && (
         <>
-          <SelectedMine token={SAMPLE_MINE} mineInfo={SAMPLE_MINE_INFO} now={NOW} canSwitch onSwitch={noop} />
+          <SelectedMine token={SAMPLE_MINE} mineInfo={SAMPLE_MINE_INFO} now={NOW} />
           <ExploreBoard tokens={[SAMPLE_MINE, SAMPLE_RESERVE_TOKEN]} onLaunch={noop} />
         </>
       )}
@@ -474,9 +470,6 @@ export function UiGallery() {
             now={NOW}
             loading={false}
             error=""
-            canSwitch
-            switching={false}
-            onSwitchHere={noop}
           />
           <MineInfoPanel
             mine={SAMPLE_RESERVE_MINE_INFO}
@@ -484,9 +477,6 @@ export function UiGallery() {
             now={NOW}
             loading={false}
             error=""
-            canSwitch
-            switching={false}
-            onSwitchHere={noop}
           />
           <MineInfoPanel
             mine={SAMPLE_SPENT_MINE_INFO}
@@ -494,9 +484,6 @@ export function UiGallery() {
             now={NOW}
             loading={false}
             error=""
-            canSwitch
-            switching={false}
-            onSwitchHere={noop}
           />
         </>
       )}
@@ -509,7 +496,6 @@ export function UiGallery() {
           error=""
           onCollect={() => setCollected(true)}
           onManageCrew={noop}
-          onSwitchMine={noop}
           onClose={() => setReportOpen(false)}
         />
       )}

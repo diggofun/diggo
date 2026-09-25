@@ -1,9 +1,9 @@
 import { Keypair, PublicKey } from "@solana/web3.js";
 import {
-  ADMIN_WALLET,
   DAMM_V2_PROGRAM_ID,
   DBC_PROGRAM_ID,
   NATIVE_SOL_MINT,
+  PLATFORM_FEE_WALLET,
   buildDiggoConfig,
   clientFor,
   connectionFor,
@@ -29,7 +29,7 @@ console.log(`Cluster: ${cluster}`);
 console.log(`Payer: ${payer.publicKey.toBase58()}`);
 console.log(`Config: ${config.toBase58()}`);
 console.log(`Mining vault: ${miningVault.toBase58()}`);
-console.log(`feeClaimer/partner: ${ADMIN_WALLET}`);
+console.log(`feeClaimer/partner: ${PLATFORM_FEE_WALLET}`);
 console.log(`DBC program: ${DBC_PROGRAM_ID}`);
 console.log(`DAMM v2 program: ${DAMM_V2_PROGRAM_ID}`);
 console.log(`Quote mint: ${NATIVE_SOL_MINT}`);
@@ -37,7 +37,7 @@ const buildConfigTransaction = () =>
   client.partner.createConfig({
     ...configParameters,
     config,
-    feeClaimer: new PublicKey(ADMIN_WALLET),
+    feeClaimer: new PublicKey(PLATFORM_FEE_WALLET),
     leftoverReceiver: miningVault,
     quoteMint: new PublicKey(NATIVE_SOL_MINT),
     payer: payer.publicKey,
