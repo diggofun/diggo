@@ -242,6 +242,16 @@ export function AppHeader({ page, session, signedIn, summary, game, solBalance, 
           <a className="sidebar-link" href="/#watchlist" onClick={() => setSidebarOpen(false)}>
             <IconWatchlist size={26} /> Watchlist
           </a>
+          <a
+            className="sidebar-link sidebar-x"
+            href="https://x.com/Diggo_Fun"
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => setSidebarOpen(false)}
+          >
+            <img className="x-logo" src="/assets/icons/x.png" srcSet="/assets/icons/x.png 1x, /assets/icons/x@2x.png 2x" width={22} height={22} alt="" />
+            Follow on X
+          </a>
           {signedIn && (
             <NavLink item={{ page: "admin", href: "/admin", label: "Admin", icon: IconAdmin }} active={page === "admin"} className="sidebar-link" onNavigate={() => setSidebarOpen(false)} />
           )}

@@ -34,9 +34,13 @@ const ENTRIES = Object.entries(ICON_REGISTRY) as Array<[IconName, ComponentType<
 
 /** The PNG stems really present in public/assets/icons, read from disk instead of from the code. */
 const ASSET_DIR = fileURLToPath(new URL("../../public/assets/icons/", import.meta.url));
+/** Brand logos rendered as plain <img> files; they sit beside the glyphs but are not mask icons. */
+const BRAND_IMAGE_STEMS = new Set(["x", "x@2x"]);
+
 const SHIPPED_STEMS = readdirSync(ASSET_DIR)
   .filter((file) => file.endsWith(".png"))
   .map((file) => file.replace(/\.png$/, ""))
+  .filter((stem) => !BRAND_IMAGE_STEMS.has(stem))
   .sort();
 
 describe("icon set", () => {
