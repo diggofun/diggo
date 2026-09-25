@@ -16,10 +16,11 @@
  * and decide appeals. Every control can only slow an account down or stop doing so - none of them
  * can move, seize or redirect value, because no endpoint exists that could.
  */
-import { Suspense, lazy, useCallback, useEffect, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   ApiError,
   adminSignedRequest,
+  getAdminDashboard,
   getAdminAbuseView,
   getAdminAppeals,
   getAdminMetrics,
@@ -27,6 +28,7 @@ import {
   type AdminAppeal,
   type AdminMetrics,
 } from "../api";
+import type { AdminDashboardPayload } from "../../shared/adminDashboard";
 import { shortAddress } from "../format";
 import { IconReject } from "../icons";
 import { useDiggoWallet } from "../wallet";
@@ -41,6 +43,7 @@ const SponsorEventsPanel = lazy(() =>
 
 export interface AdminScreenProps {
   signedIn: boolean;
+  chainMode: "meteora" | "native";
   /**
    * The deployed program id, so the sponsor section can build its instructions. Omitted means the
    * cluster has not been configured yet, and the sponsor section says so instead of rendering a
@@ -67,6 +70,123 @@ function reasonFromTemplate(scope: string): string {
 
 function formatStamp(seconds: number | null): string {
   return seconds === null ? "-" : new Date(seconds * 1_000).toLocaleString();
+}
+
+function metricNumber(value: number | null): string {
+  return value === null ? "-" : value.toLocaleString();
+}
+
+function metricSol(value: string | null): string {
+  return value === null ? "Unavailable" : value + " SOL";
+}
+
+function metricStamp(value: number | null): string | null {
+  return value === null || value <= 0 ? null : new Date(value * 1_000).toLocaleString();
+}
+
+function DashboardKpi({ label, value, note }: { label: string; value: string; note?: string }) {
+  return (
+    <article className="admin-kpi">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {note && <small>{note}</small>}
+    </article>
+  );
+}
+
+function DashboardPanel({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <section className={"admin-dashboard-panel " + className}>{children}</section>;
+}
+
+function DashboardSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <DashboardPanel>
+      <div className="admin-dashboard-panel-head"><span>{title}</span></div>
+      {children}
+    </DashboardPanel>
+  );
+}
+
+function SolscanLink({ href, children }: { href: string | null; children: ReactNode }) {
+  return href === null ? <>{children}</> : <a href={href} target="_blank" rel="noreferrer">{children}</a>;
+}
+
+function AdminDashboardView({ data }: { data: AdminDashboardPayload }) {
+  const feeRows = [
+    { label: "Partner trading fees", fee: data.fees.partnerTrading },
+    { label: "Partner creation fees", fee: data.fees.creation },
+  ];
+  const jobRows = [
+    { label: "Indexer", job: data.jobs.indexer },
+    { label: "Vault sweep", job: data.jobs.vaultSweep },
+    { label: "Cron / crank", job: data.jobs.cron },
+  ];
+  const hasNeverRun = jobRows.some(({ job }) => job.lastSuccessfulAt === null || job.lastSuccessfulAt <= 0);
+  const hasNewerError = jobRows.some(({ job }) => job.lastError !== null);
+  const jobHealth = hasNeverRun ? "Waiting" : hasNewerError ? "Degraded" : "Healthy";
+  return (
+    <section className="admin-dashboard" aria-label="Operations dashboard">
+      <div className="admin-dashboard-meta">
+        <span>CHAIN_MODE <b>{data.chainMode}</b></span>
+        <span>CLUSTER <b>{data.cluster}</b></span>
+        <span>GENERATED <b>{new Date(data.generatedAt * 1_000).toLocaleString()}</b></span>
+        <span>CACHED UNTIL <b>{new Date(data.cachedUntil * 1_000).toLocaleTimeString()}</b></span>
+      </div>
+      <div className="admin-kpi-grid">
+        <DashboardKpi label="Coins launched" value={metricNumber(data.launches.total)} note={`${metricNumber(data.launches.last24h)} in 24h · ${metricNumber(data.launches.last7d)} in 7d`} />
+        <DashboardKpi label="Graduated coins" value={metricNumber(data.graduated.total)} note={`${metricNumber(data.graduated.last24h)} in 24h · ${metricNumber(data.graduated.last7d)} in 7d`} />
+        <DashboardKpi label="Trading volume · 24h" value={metricSol(data.tradingVolume.last24h.sol)} note={data.tradingVolume.last24h.estimated ? "estimated from indexed fills" : undefined} />
+        <DashboardKpi label="Trading volume · 7d" value={metricSol(data.tradingVolume.last7d.sol)} note={data.tradingVolume.last7d.estimated ? "estimated from indexed fills" : undefined} />
+        <DashboardKpi label="Trading volume · all" value={metricSol(data.tradingVolume.all.sol)} note={data.tradingVolume.all.estimated ? "estimated from indexed fills" : undefined} />
+        <DashboardKpi label="Fees" value={metricSol(data.fees.partnerTrading.accruedSol)} note="partner trading share" />
+        <DashboardKpi label="Vault" value={metricSol(data.vault.solBalance)} note={data.vault.address ? "SOL balance" : "address unavailable"} />
+        <DashboardKpi label="Claims" value={metricNumber(data.claims.pending)} note={`${metricNumber(data.claims.paid)} paid`} />
+        <DashboardKpi label="Players" value={metricNumber(data.players.total)} note={`${metricNumber(data.players.last24h)} new in 24h · ${metricNumber(data.crews.active24h)} active crews`} />
+        <DashboardKpi label="Referrals" value={metricNumber(data.referrals.qualified)} note={`${metricNumber(data.referrals.invited)} invited`} />
+        <DashboardKpi label="Job health" value={jobHealth} note={hasNeverRun ? "one or more jobs have not run" : hasNewerError ? "a job reported a newer error" : "indexer, sweep and cron"} />
+      </div>
+      <div className="admin-dashboard-grid">
+        <DashboardSection title="Partner fees">
+          <div className="admin-compact-table">
+            <div className="admin-compact-row admin-compact-head"><span>Fee</span><span>Accrued</span><span>Claimable</span></div>
+            {feeRows.map(({ label, fee }) => (
+              <div className="admin-compact-row" key={label}>
+                <span>{label}{fee.estimated && <em className="admin-estimate">estimated</em>}</span>
+                <span>{metricSol(fee.accruedSol)}</span>
+                <span>{metricSol(fee.claimableSol)}</span>
+              </div>
+            ))}
+          </div>
+          <div className="admin-address-links">
+            <span>Fee claimer: <SolscanLink href={data.links.feeClaimer}>{data.addresses.feeClaimer ?? "-"}</SolscanLink></span>
+            <span>Treasury: <SolscanLink href={data.links.treasury}>{data.addresses.treasury ?? "Unavailable"}</SolscanLink></span>
+          </div>
+        </DashboardSection>
+        <DashboardSection title="Mining vault">
+          <div className="admin-vault-head"><strong>{metricSol(data.vault.solBalance)}</strong><SolscanLink href={data.vault.solscanUrl}>{data.vault.address ?? "Vault address unavailable"}</SolscanLink></div>
+          {data.vault.tokenBalances.length === 0 ? <p className="admin-empty">No indexed token balances.</p> : <div className="admin-balance-list">{data.vault.tokenBalances.map((balance) => <div key={balance.mint}><span title={balance.mint}>{balance.mint}</span><strong>{balance.amount}</strong><small>{balance.tokenAccount}</small></div>)}</div>}
+        </DashboardSection>
+        <DashboardSection title="Claims and referrals">
+          <div className="admin-compact-table">
+            <div className="admin-compact-row"><span>Mining claims pending</span><strong>{metricNumber(data.claims.pending)}</strong></div>
+            <div className="admin-compact-row"><span>Mining claims paid</span><strong>{metricNumber(data.claims.paid)}</strong></div>
+            <div className="admin-compact-row"><span>Referrals invited</span><strong>{metricNumber(data.referrals.invited)}</strong></div>
+            <div className="admin-compact-row"><span>Referrals qualified</span><strong>{metricNumber(data.referrals.qualified)}</strong></div>
+            <div className="admin-compact-row"><span>ORE credited</span><strong>{data.referrals.oreCredited ?? "-"}</strong></div>
+          </div>
+        </DashboardSection>
+        <DashboardSection title="Background jobs">
+          <div className="admin-compact-table">
+            {jobRows.map(({ label, job }) => {
+              const lastSuccess = metricStamp(job.lastSuccessfulAt);
+              const neverRun = lastSuccess === null;
+              return <div className="admin-compact-row" key={label}><span>{label}{lastSuccess && <small>Last success: {lastSuccess}</small>}</span><strong className={job.lastError && !neverRun ? "admin-job-error" : ""}>{neverRun ? "Not run yet" : job.lastError ?? "Healthy"}</strong></div>;
+            })}
+          </div>
+        </DashboardSection>
+      </div>
+    </section>
+  );
 }
 
 /**
@@ -166,7 +286,7 @@ export function ClaimedCell({ account }: { account: ClaimedValueFields }) {
   );
 }
 
-export function AdminScreen({ signedIn, programId }: AdminScreenProps) {
+export function AdminScreen({ signedIn, chainMode, programId }: AdminScreenProps) {
   const connected = useDiggoWallet();
   const [abuse, setAbuse] = useState<AdminAbuseView | null>(null);
   const [metrics, setMetrics] = useState<AdminMetrics | null>(null);
@@ -183,6 +303,9 @@ export function AdminScreen({ signedIn, programId }: AdminScreenProps) {
   const [restrictionWallet, setRestrictionWallet] = useState("");
   const [restrictionKind, setRestrictionKind] = useState(RESTRICTION_KINDS[0]);
   const [restrictionHours, setRestrictionHours] = useState("24");
+  const [dashboard, setDashboard] = useState<AdminDashboardPayload | null>(null);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
+  const [dashboardError, setDashboardError] = useState("");
 
   const load = useCallback(async () => {
     if (!signedIn) {
@@ -190,6 +313,15 @@ export function AdminScreen({ signedIn, programId }: AdminScreenProps) {
       return;
     }
     setLoading(true);
+    setDashboardLoading(true);
+    setDashboardError("");
+    void getAdminDashboard()
+      .then((result) => { setDashboard(result); setDashboardError(""); })
+      .catch((failure) => {
+        setDashboardError(failure instanceof Error ? failure.message : "The operations dashboard is unavailable right now.");
+        if (failure instanceof ApiError && failure.status >= 400 && failure.status < 500) setDenied(true);
+      })
+      .finally(() => setDashboardLoading(false));
     try {
       const [abuseResult, metricsResult, appealsResult] = await Promise.all([
         getAdminAbuseView(50),
@@ -338,6 +470,15 @@ export function AdminScreen({ signedIn, programId }: AdminScreenProps) {
 
   return (
     <section className="admin-screen page-shell" id="admin">
+      {dashboard && <AdminDashboardView data={dashboard} />}
+      {!dashboard && dashboardError && (
+        <div className="admin-block">
+          <div className="admin-block-head"><span>OPERATIONS DASHBOARD</span><small>{dashboardError}</small></div>
+          <p className="admin-empty">The live operations summary is temporarily unavailable. The operator console below is still available.</p>
+          <button className="btn btn-ghost" onClick={() => void load()}>Retry dashboard</button>
+        </div>
+      )}
+      {!dashboard && !dashboardError && dashboardLoading && <p className="admin-empty">Loading operations dashboard…</p>}
       <div className="section-heading">
         <div>
           <div className="eyebrow">
@@ -385,7 +526,7 @@ export function AdminScreen({ signedIn, programId }: AdminScreenProps) {
         </div>
       )}
 
-      <div className="admin-block">
+      {chainMode !== "meteora" && <div className="admin-block">
         <div className="admin-block-head">
           <span>
             APPEALS
@@ -466,7 +607,7 @@ export function AdminScreen({ signedIn, programId }: AdminScreenProps) {
           })}
           {appeals.length === 0 && <p className="admin-empty">No appeals in this view.</p>}
         </div>
-      </div>
+      </div>}
 
       <div className="admin-block">
         <div className="admin-block-head">
@@ -666,7 +807,7 @@ export function AdminScreen({ signedIn, programId }: AdminScreenProps) {
         screen because it is an operator tool, and it is separated from the abuse tooling above
         because a sponsor event cannot touch a player's power, rewards or discovery odds.
       */}
-      <div className="admin-block">
+      {chainMode !== "meteora" && <div className="admin-block">
         <div className="admin-block-head">
           <span>SPONSORSHIP</span>
           <small>rent and fee subsidies, paid from your own vault</small>
@@ -678,7 +819,7 @@ export function AdminScreen({ signedIn, programId }: AdminScreenProps) {
         ) : (
           <p className="admin-empty">This cluster has no program id configured yet.</p>
         )}
-      </div>
+      </div>}
     </section>
   );
 }
