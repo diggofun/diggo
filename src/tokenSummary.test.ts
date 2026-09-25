@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeTokenSummaries, normalizeTokenSummary } from "./tokenSummary";
+import { normalizeMineInfo, normalizeTokenSummaries, normalizeTokenSummary } from "./tokenSummary";
 
 // The exact slim row /api/bootstrap served for $DIGGO when every coin view crashed.
 const SLIM_DIGGO = {
@@ -51,5 +51,27 @@ describe("normalizeTokenSummary", () => {
     expect(normalizeTokenSummary({ ...SLIM_DIGGO, graduated: true })!.curveMining.onCurve).toBe(false);
     expect(normalizeTokenSummaries([SLIM_DIGGO, null, { name: "x" }, "bad"])).toHaveLength(1);
     expect(normalizeTokenSummaries(undefined)).toEqual([]);
+  });
+});
+
+
+describe("normalizeMineInfo", () => {
+  it("completes the slim Meteora mine info that crashed MineInfoPanel", () => {
+    const mine = normalizeMineInfo({
+      mint: SLIM_DIGGO.mint,
+      pool: SLIM_DIGGO.pool,
+      symbol: "DIGGO",
+      name: "Diggo",
+      status: "active",
+      venue: "meteora",
+      graduated: false,
+      claimable: "0",
+    })!;
+    expect(mine.curveMining.onCurve).toBe(true);
+    expect(mine.emissionSource).toBe("CURVE");
+    expect(mine.accounting.authoritative).toBe(false);
+    expect(mine.reductionSchedule).toEqual([]);
+    expect(mine.estimatedShare).toBeNull();
+    expect(normalizeMineInfo(null)).toBeNull();
   });
 });
