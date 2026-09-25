@@ -217,11 +217,11 @@ a { color: inherit; text-decoration: none; }
 .swap-price-tag { text-align: right; }
 .swap-price-tag span { display: block; font: 800 9px monospace; letter-spacing: .1em; color: var(--muted); margin-bottom: 6px; }
 .swap-price-tag strong { font: 900 22px monospace; color: var(--purple); }
-.swap-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 16px; align-items: start; }
-.swap-chart-panel { position: relative; border: 1px solid var(--line); background: #f8f5ec; padding: 12px; }
+.swap-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.swap-chart-panel { position: relative; min-width: 0; border: 1px solid var(--line); background: #f8f5ec; padding: 12px; }
 .swap-chart { width: 100%; }
 .swap-chart-empty { position: absolute; inset: 12px; display: flex; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 20px; background: rgba(248,245,236,.88); font: 700 11px monospace; color: var(--muted); pointer-events: none; }
-.swap-form { border: 1px solid var(--ink); background: var(--paper); padding: 20px; display: grid; gap: 14px; box-shadow: 6px 6px 0 var(--acid); }
+.swap-form { min-width: 0; border: 1px solid var(--ink); background: var(--paper); padding: 20px; display: grid; gap: 14px; box-shadow: 6px 6px 0 var(--acid); }
 .swap-tabs { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--ink); }
 .swap-tabs button { padding: 10px; background: transparent; font: 900 11px monospace; text-transform: uppercase; letter-spacing: .05em; }
 .swap-tabs button.active { background: var(--ink); color: white; }
@@ -1666,4 +1666,28 @@ body.has-modal { overflow: hidden; }
   .diggo-stats .metric-panel { border-bottom: 1px solid var(--line); }
   .diggo-stats .metric-panel:nth-child(2n) { border-right: 0; }
   .diggo-stats .metric-panel:nth-last-child(-n+2) { border-bottom: 0; }
+}
+
+/* Candlestick chart (TradingView Lightweight Charts) */
+.candle-chart { display: grid; gap: 8px; margin-bottom: 12px; min-width: 0; }
+.candle-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+.candle-intervals, .candle-currency { display: flex; border: 1px solid var(--ink); border-radius: var(--radius-sm); overflow: hidden; }
+.candle-intervals button, .candle-currency button { min-width: 38px; min-height: 30px; padding: 4px 8px; border: 0; border-right: 1px solid var(--line); background: var(--paper); color: var(--ink); font: 800 10px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
+.candle-intervals button:last-child, .candle-currency button:last-child { border-right: 0; }
+.candle-intervals button.active, .candle-currency button.active { background: var(--ink); color: var(--acid); }
+.candle-intervals button:hover:not(.active):not(:disabled), .candle-currency button:hover:not(.active):not(:disabled) { background: var(--acid); }
+.candle-currency button:disabled { color: var(--muted); cursor: not-allowed; opacity: .55; }
+.candle-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; min-height: 16px; font: 700 10px var(--font-mono); color: var(--muted); }
+.candle-legend b { color: var(--ink); font-weight: 800; }
+.candle-legend b.up { color: var(--success); }
+.candle-legend b.down { color: var(--danger); }
+.candle-stage { position: relative; height: 340px; min-width: 0; }
+.candle-canvas { position: absolute; inset: 0; }
+.candle-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 20px; text-align: center; background: rgba(248,245,236,.9); font: 700 11px var(--font-mono); color: var(--muted); }
+.candle-update-error { font: 700 10px var(--font-mono); color: var(--danger); }
+.candle-attribution { justify-self: end; font: 700 9px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); text-decoration: none; }
+.candle-attribution:hover { color: var(--ink); text-decoration: underline; }
+@media (max-width: 640px) {
+  .candle-stage { height: 260px; }
+  .candle-intervals button, .candle-currency button { min-width: 34px; padding: 4px 6px; }
 }

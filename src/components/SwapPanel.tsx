@@ -16,6 +16,7 @@
  */
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
+import { CandleChart } from "./CandleChart";
 import type { MarketTrade, TokenSummary } from "../../shared/types";
 import { recordTrade } from "../api";
 import { track } from "../analytics";
@@ -139,7 +140,7 @@ function MeteoraSwapPanel({
   return (
     <section className="swap-terminal page-shell" id="swap">
       <div className="section-heading"><div><h2>TRADE<br />${token.symbol}.</h2></div><div className="swap-price-tag"><span>METEORA DBC</span><strong>{snapshot ? `${snapshot.metrics.priceSol.toFixed(9)} SOL` : "—"}</strong><span>{snapshot?.metrics.graduated ? "GRADUATED · DAMM v2" : "BONDING CURVE"}</span></div></div>
-      <div className="swap-grid"><div className="swap-chart-panel"><div className="swap-capacity"><span>GRADUATION PROGRESS</span><strong>{Math.round(progress * 100)}%</strong><progress max="1" value={progress} /><small>{snapshot?.metrics.graduated ? "Mining rewards are unlocked." : "Mining rewards unlock at graduation."}</small></div></div>
+      <div className="swap-grid"><div className="swap-chart-panel"><CandleChart mint={token.mint} symbol={token.symbol} /><div className="swap-capacity"><span>GRADUATION PROGRESS</span><strong>{Math.round(progress * 100)}%</strong><progress max="1" value={progress} /><small>{snapshot?.metrics.graduated ? "Mining rewards are unlocked." : "Mining rewards unlock at graduation."}</small></div></div>
         <form className="swap-form" onSubmit={submit}><div className="swap-tabs"><button type="button" className={side === "buy" ? "active" : ""} onClick={() => setSide("buy")}>Buy</button><button type="button" className={side === "sell" ? "active" : ""} onClick={() => setSide("sell")}>Sell</button></div>
           <label>{side === "buy" ? "Pay (SOL)" : `Sell ($${token.symbol})`}<input type="number" min="0" step="any" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" /></label>
           <div className="swap-quote"><span>YOU RECEIVE (EST., 1% SLIPPAGE FLOOR)</span><strong>{output === null ? "—" : side === "buy" ? `${formatTokenAmount(output, token.decimals)} $${token.symbol}` : `${(Number(output) / 1_000_000_000).toFixed(6)} SOL`}</strong></div>
