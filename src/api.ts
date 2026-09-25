@@ -38,6 +38,7 @@ import bs58 from "bs58";
 import { DEVICE_HEADER, deviceId } from "./device";
 import type { ChainMode } from "../shared/meteora";
 import { normalizeMeteoraConfigPubkey } from "../shared/meteora";
+import { officialMintFromEnv } from "../shared/officialMint";
 import type { AdminDashboardPayload } from "../shared/adminDashboard";
 
 /** An HTTP failure carrying the Worker's status and machine-readable code. */
@@ -129,6 +130,13 @@ export interface DiggoConfig {
   cluster: string;
   chainMode: ChainMode;
   meteoraConfigPubkey: string;
+  /**
+   * The platform official coin's mint, or null while $DIGGO has not launched.
+   *
+   * Null is a real state rather than a missing field: /diggo renders its "launches soon" empty state
+   * for it rather than a market with invented numbers.
+   */
+  officialMint: string | null;
   posthogApiKey?: string;
   posthogHost?: string;
   turnstileSiteKey: string;
@@ -136,9 +144,50 @@ export interface DiggoConfig {
   vanitySuffix: string;
 }
 
+/**
+ * The official mint from /api/config, the endpoint that owns the value.
+ *
+ * Returns undefined when the request fails so the caller can keep its own default: a missing
+ * config endpoint must never be the reason the trade page breaks.
+ */
+async function getConfigFallbackMint(): Promise<string | null | undefined> {
+  try {
+    const data = await getJson<{ officialMint?: string | null }>("/api/config");
+    return data.officialMint;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface Bootstrap {
   tokens: TokenSummary[];
   config: DiggoConfig;
+}
+
+/** The oracle quote as GET /api/status serves it: a price plus where it came from. */
+interface SolUsdQuote {
+  priceUsd: number;
+  source: string;
+  available: boolean;
+}
+
+/**
+ * SOL/USD from the Worker's Jupiter-backed oracle cache, as served by GET /api/status.
+ *
+ * `solUsd` is the full oracle quote, not a bare number, so the price is read out of it and the
+ * `available` flag is honoured: a quote the Worker could not refresh resolves to null here, and the
+ * header then shows no USD figure at all rather than a stale or made-up one.
+ */
+export async function fetchSolUsd(): Promise<number | null> {
+  try {
+    const data = await getJson<{ solUsd?: SolUsdQuote | number | null }>("/api/status");
+    const quote = data.solUsd;
+    const price = typeof quote === "number" ? quote : quote?.priceUsd;
+    if (typeof quote === "object" && quote !== null && quote.available === false) return null;
+    return typeof price === "number" && Number.isFinite(price) && price > 0 ? price : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -156,6 +205,7 @@ interface BootstrapPayload {
   meteoraConfigPubkey?: string;
   meteoraConfig?: string | null;
   meteoraDbcConfig?: string | null;
+  officialMint?: string | null;
   programId?: string;
   posthogApiKey?: string;
   posthogHost?: string;
@@ -166,12 +216,20 @@ interface BootstrapPayload {
 export async function getBootstrap(): Promise<Bootstrap> {
   try {
     const data = await getJson<BootstrapPayload>("/api/bootstrap?limit=1000");
+    // The native-mode bootstrap is assembled in worker/tokens.ts and carries no officialMint, so
+    // fall back to /api/config - the endpoint that owns the value - only when it is absent. The
+    // Meteora path (production) already spreads it into the bootstrap, and costs no extra request.
+    const officialMint =
+      data.officialMint === undefined ? (await getConfigFallbackMint()) : data.officialMint;
     const config: DiggoConfig = {
       cluster: data.cluster === "devnet" ? "devnet" : "mainnet-beta",
       chainMode: data.chainMode === "native" ? "native" : "meteora",
       meteoraConfigPubkey: normalizeMeteoraConfigPubkey(
         data.meteoraConfigPubkey ?? data.meteoraDbcConfig ?? data.meteoraConfig,
       ),
+      // Validated client-side with the same rule the Worker applied, so a hand-edited or stale
+      // response can never put a non-pubkey on the trade page.
+      officialMint: officialMintFromEnv(officialMint),
       posthogApiKey: data.posthogApiKey,
       posthogHost: data.posthogHost,
       turnstileSiteKey: data.turnstileSiteKey ?? "",
@@ -187,6 +245,7 @@ export async function getBootstrap(): Promise<Bootstrap> {
         cluster: "mainnet-beta",
         chainMode: "meteora",
         meteoraConfigPubkey: "",
+        officialMint: null,
         turnstileSiteKey: "",
         programId: "",
         vanitySuffix: "diggo",
@@ -257,6 +316,8 @@ export async function getWalletSession(): Promise<{ wallet: string } | null> {
 }
 
 export async function uploadTokenImage(file: File): Promise<string> {
+  if (file.size === 0) throw new Error("That image is empty — pick a different file");
+  if (file.size > 2_000_000) throw new Error("Image too large (2 MB maximum)");
   const form = new FormData();
   form.set("file", file);
   const data = await parseResponse<{ url: string }>(await request("/api/media", { form }));
