@@ -335,7 +335,8 @@ authoritative for a player's token balance. See `docs/SECURITY.md` and `docs/CUS
 The production environment selects Meteora and `mainnet-beta`, but the deployment is not ready for
 an unqualified public-launch claim. The remaining gates are:
 
-- replace `METEORA_DBC_CONFIG=SET_AFTER_CREATE` with an independently verified mainnet config;
+- independently verify the configured mainnet DBC config
+  `5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF` and its fee claimer and mining vault;
 - configure a production RPC, apply production D1 migrations, and fund and verify the payer and
   mining vault;
 - rehearse a real mainnet launch, activation, random mining, Discoveries and wallet-approved

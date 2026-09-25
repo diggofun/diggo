@@ -20,7 +20,7 @@ import { getSolUsd } from "../oracle";
 import { apiError, checkRateLimit, checkWalletRateLimit, isBase58Address, json } from "../http";
 import { getChainRpc, LAMPORTS_PER_SOL } from "../chainV2";
 import { confirmClaimBatch, confirmMiningClaim, prepareClaimBatch, prepareMiningClaim, runMeteoraIndexer, runVaultSweep } from "../meteora";
-import { readSignatures } from "../meteora/rpc";
+import { decodeTokenAccountAmount, deriveAssociatedTokenAddress, readAccount, readSignatures } from "../meteora/rpc";
 import { recordJobRun } from "../indexStore";
 
 type RuntimeEnvLike = GameEnv;
@@ -161,6 +161,36 @@ export function meteoraPayout(env: GameEnv): MiningPayout {
     },
     async confirmBatch(wallet, batchId, signature) {
       return confirmClaimBatch(rpcEnv(env), wallet, batchId, signature);
+    },
+    async vaultInventory(mint) {
+      // A read needs no signing key, so the configured vault address is enough. This is the same
+      // associated token account `prepareClaimBatch` funds from, and the same token-account layout
+      // it decodes, so a positive result here is a real proof that the batch can be paid. A missing
+      // account is reported as zero rather than unknown: the vault demonstrably holds nothing, which
+      // is exactly the case `prepareClaimBatch` refuses. Only a failed read is unknown.
+      const vault = String(env.MINING_VAULT_PUBLIC_KEY || "").trim();
+      if (!vault) return null;
+      let account: string;
+      try {
+        account = deriveAssociatedTokenAddress(mint, vault);
+      } catch {
+        return null;
+      }
+      let data: Uint8Array;
+      try {
+        const found = await readAccount(rpcEnv(env), account);
+        if (!found) return { available: 0n, account };
+        data = found.data;
+      } catch (error) {
+        console.warn("Vault inventory read failed; treating the mint as unproven", { mint, error });
+        return null;
+      }
+      try {
+        return { available: decodeTokenAccountAmount(data), account };
+      } catch (error) {
+        console.warn("Vault token account could not be decoded; treating the mint as unproven", { mint, error });
+        return null;
+      }
     },
   };
 }

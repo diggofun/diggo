@@ -43,7 +43,9 @@ const buildConfigTransaction = () =>
     payer: payer.publicKey,
   });
 
-if (cluster === "mainnet" && option("allow-mainnet", args, 0) === undefined) {
+const allowMainnet = args.includes("--allow-mainnet") ||
+  args.some((arg) => arg.startsWith("--allow-mainnet="));
+if (cluster === "mainnet" && !allowMainnet) {
   const transaction = await buildConfigTransaction();
   transaction.recentBlockhash = (await connection.getLatestBlockhash("confirmed")).blockhash;
   transaction.feePayer = payer.publicKey;

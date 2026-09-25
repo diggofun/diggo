@@ -49,6 +49,39 @@ export function MeteoraMineDashboard({ game, mine, now, connected, activating, e
 
 interface CrewProps { game: GameState | null; pending: string | null; error: string; notice: string; onUpgrade(component: GameCrewComponent): void; }
 
+interface DiscoveryClaimCounts {
+  availableCount?: number;
+  claimableCount?: number;
+  pendingCount?: number;
+  pendingUntilGraduationCount?: number;
+}
+
+export interface DiscoveryRewardCounts {
+  available: number;
+  pending: number;
+}
+
+function countOrZero(value: number | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+}
+
+export function discoveryRewardCounts(
+  claimAll: (GameState["claimAll"] & DiscoveryClaimCounts) | undefined,
+  inferredAvailable: number,
+  inferredPending: number,
+): DiscoveryRewardCounts {
+  if (!claimAll?.supported) return { available: 0, pending: inferredPending };
+  return {
+    available: countOrZero(claimAll.availableCount) ?? countOrZero(claimAll.claimableCount) ??
+      Math.min(countOrZero(claimAll.count) ?? 0, inferredAvailable),
+    pending: countOrZero(claimAll.pendingCount) ?? countOrZero(claimAll.pendingUntilGraduationCount) ?? inferredPending,
+  };
+}
+
+function hasGraduated(tokens: TokenSummary[], mint: string): boolean {
+  return tokens.find((token) => token.mint === mint)?.curveMining.onCurve === false;
+}
+
 export function MeteoraCrewScreen({ game, pending, error, notice, onUpgrade }: CrewProps) {
   if (!game) return <section className="crew-screen page-shell"><div className="empty-state"><p>Sign in to see your crew.</p></div></section>;
   const crew = validCrew(game);
@@ -62,12 +95,22 @@ export function MeteoraDiscoveriesScreen({ game, tokens, connected, busy, error,
   const claims = game?.claims.filter((claim) => claim.kind === "discovery" && claim.status === "PENDING") ?? [];
   const balances = game?.balances ?? [];
   const names = new Map(tokens.map((token) => [token.mint, token]));
+  const balanceMints = new Set(balances.map((balance) => balance.mint));
+  const claimsWithoutBalance = claims.filter((claim) => !balanceMints.has(claim.mint));
+  const availableBalances = balances.filter((balance) => hasGraduated(tokens, balance.mint));
+  const pendingBalances = balances.filter((balance) => !hasGraduated(tokens, balance.mint));
+  const availableClaims = claimsWithoutBalance.filter((claim) => hasGraduated(tokens, claim.mint));
+  const pendingClaims = claimsWithoutBalance.filter((claim) => !hasGraduated(tokens, claim.mint));
   const requirements = [
     { met: (game?.activeDays ?? 0) >= 5, label: "5 active mining days" },
     { met: (game?.validActivations ?? 0) >= 5, label: "5 valid shift activations" },
     { met: portfolioUsd >= 10, label: "$10 portfolio value" },
   ];
-  const claimAllCount = game?.claimAll?.supported ? game.claimAll.count : 0;
+  const rewardCounts = discoveryRewardCounts(
+    game?.claimAll as (GameState["claimAll"] & DiscoveryClaimCounts) | undefined,
+    availableBalances.length + availableClaims.length,
+    pendingBalances.length + pendingClaims.length,
+  );
 
   return (
     <section className="discoveries page-shell meteora-discoveries" id="discoveries">
@@ -81,9 +124,10 @@ export function MeteoraDiscoveriesScreen({ game, tokens, connected, busy, error,
         </button>
       </div>
       <p className="section-intro">
-        Each eligible window has one random discovery opportunity. Mined memecoins accrue here;
-        claim all sends one wallet-approved batch transaction for up to 12 distinct coins. Pre-graduation
-        mining payouts may be pending, and rewards reach your wallet only after a claim settles.
+        Each eligible window has one random discovery opportunity. Rewards from graduated coins are
+        available to claim together in one wallet-approved batch transaction. Rewards from coins still
+        on their bonding curve remain pending until graduation. Mining does not guarantee that a coin
+        will graduate.
       </p>
       <div className="discovery-requirements" aria-label="Discovery requirements">
         {requirements.map((requirement) => <span className={requirement.met ? "is-met" : ""} key={requirement.label}>{requirement.met ? "Ready" : "Pending"} · {requirement.label}</span>)}
@@ -94,22 +138,47 @@ export function MeteoraDiscoveriesScreen({ game, tokens, connected, busy, error,
       {claimAllNotice && <p className="form-message discovery-notice" role="status">{claimAllNotice}</p>}
       <div className="discovery-claimable">
         <div className="claim-block-head">
-          <span>ACCRUED REWARDS</span>
-          {claimAllCount > 0 && <button className="btn btn-primary" type="button" disabled={!connected || claimAllPending} onClick={onClaimAll}>{claimAllPending ? "Signing…" : "Claim all"}</button>}
+          <span>AVAILABLE GRADUATED REWARDS</span>
+          <strong>{rewardCounts.available} coin{rewardCounts.available === 1 ? "" : "s"}</strong>
         </div>
+        {rewardCounts.available > 0 && <button className="btn btn-primary" type="button" disabled={!connected || claimAllPending} onClick={onClaimAll}>{claimAllPending ? "Signing…" : "Claim all"}</button>}
+        {rewardCounts.available === 0 && <small>No rewards from graduated coins are available to claim yet.</small>}
+      </div>
+      {rewardCounts.available > 0 && (
+        <div className="discovery-grid">
+          {availableBalances.map((balance) => {
+            const token = names.get(balance.mint);
+            const name = balance.name ?? token?.name ?? "Mined memecoin";
+            const symbol = balance.symbol ?? token?.symbol ?? "tokens";
+            return <article className="discovery-card" key={balance.mint}><header><span className="rarity-tag">MINED</span><em className="reward-status status-eligible">READY</em></header><DiscoveryArtPlaceholder /><h4>{name}</h4><strong>{tokenAmount(Number(balance.amountWhole))} ${symbol}</strong><small>Available to claim from a graduated coin</small></article>;
+          })}
+          {availableClaims.map((claim) => {
+            const token = names.get(claim.mint);
+            const name = claim.name ?? token?.name ?? "Mined memecoin";
+            const symbol = claim.symbol ?? token?.symbol ?? "tokens";
+            return <article className="discovery-card" key={claim.id}><header><span className="rarity-tag">DISCOVERY</span><em className="reward-status status-eligible">READY</em></header><DiscoveryArtPlaceholder /><h4>{name}</h4><strong>{tokenAmount(Number(claim.amountWhole))} ${symbol}</strong><small>Available to claim from a graduated coin</small></article>;
+          })}
+        </div>
+      )}
+      <div className="discovery-claimable">
+        <div className="claim-block-head">
+          <span>PENDING UNTIL GRADUATION</span>
+          <strong>{rewardCounts.pending} coin{rewardCounts.pending === 1 ? "" : "s"}</strong>
+        </div>
+        <small>These rewards have accrued but cannot be claimed while their coin is pre-graduation. A coin may never graduate.</small>
       </div>
       <div className="discovery-grid">
-        {balances.map((balance) => {
+        {pendingBalances.map((balance) => {
           const token = names.get(balance.mint);
           const name = balance.name ?? token?.name ?? "Mined memecoin";
           const symbol = balance.symbol ?? token?.symbol ?? "tokens";
-          return <article className="discovery-card" key={balance.mint}><header><span className="rarity-tag">MINED</span><em className="reward-status status-pending">ACCRUED</em></header><DiscoveryArtPlaceholder /><h4>{name}</h4><strong>{tokenAmount(Number(balance.amountWhole))} ${symbol}</strong><small>Available in Discoveries · not yet in wallet</small></article>;
+          return <article className="discovery-card" key={balance.mint}><header><span className="rarity-tag">MINED</span><em className="reward-status status-pending">PENDING</em></header><DiscoveryArtPlaceholder /><h4>{name}</h4><strong>{tokenAmount(Number(balance.amountWhole))} ${symbol}</strong><small>Accrued from a pre-graduation coin · not claimable yet</small></article>;
         })}
-        {claims.filter((claim) => !balances.some((balance) => balance.mint === claim.mint)).map((claim) => {
+        {pendingClaims.map((claim) => {
           const token = names.get(claim.mint);
           const name = claim.name ?? token?.name ?? "Mined memecoin";
           const symbol = claim.symbol ?? token?.symbol ?? "tokens";
-          return <article className="discovery-card" key={claim.id}><header><span className="rarity-tag">DISCOVERY</span><em className="reward-status status-pending">ACCRUED</em></header><DiscoveryArtPlaceholder /><h4>{name}</h4><strong>{tokenAmount(Number(claim.amountWhole))} ${symbol}</strong><small>Added automatically from your crew's discovery</small></article>;
+          return <article className="discovery-card" key={claim.id}><header><span className="rarity-tag">DISCOVERY</span><em className="reward-status status-pending">PENDING</em></header><DiscoveryArtPlaceholder /><h4>{name}</h4><strong>{tokenAmount(Number(claim.amountWhole))} ${symbol}</strong><small>Accrued from a pre-graduation coin · not claimable yet</small></article>;
         })}
       </div>
       {game && balances.length === 0 && claims.length === 0 && <div className="empty-state"><p>No discoveries yet. An eligible crew has one random opportunity each window.</p></div>}

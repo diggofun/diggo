@@ -9,7 +9,7 @@ import { ed25519 } from "@noble/curves/ed25519.js";
 import { MINING_RESERVE, TOKEN_SCALE, type GameCoin, type GameServices } from "./contracts";
 import type { RuntimeEnv } from "../env";
 import { accrueMining, discoveryId, isPortfolioEligible, releasedMiningAllocation } from "./rules";
-import { ensurePlayerMine, getPlayerGameStateDetail, handleActivate, handleActivationChallenge, handleClaimAll, handleClaimAllConfirm, settleMining, settlePlayerMining } from "./service";
+import { collectClaimable, ensurePlayerMine, getPlayerGameStateDetail, handleActivate, handleActivationChallenge, handleClaimAll, handleClaimAllConfirm, handleDiscovery, settleMining, settlePlayerMining } from "./service";
 import { MemoryGameStore, mineConservation, starterCrew } from "./store";
 
 const MINT = "So11111111111111111111111111111111111111112";
@@ -17,6 +17,8 @@ const WALLET = "11111111111111111111111111111111";
 // Confirmation is stubbed here, but request validation must still receive a real 64-byte Solana
 // transaction signature rather than a 32-byte wallet address.
 const SIGNATURE = bs58.encode(Uint8Array.from({ length: 64 }, (_, index) => index + 1));
+/** Comfortably above any balance these tests create, so the default vault reads as fully funded. */
+const MAX_U64_BALANCE = (1n << 64n) - 1n;
 
 function coin(startsAt: number, graduated = false) {
   return { mint: MINT, symbol: "D", name: "Diggo", createdAt: startsAt, miningStartsAt: startsAt, graduated };
@@ -29,13 +31,16 @@ function gameContext(store: MemoryGameStore, coinSource: GameCoin | readonly Gam
       async listActiveMines() { return coins; },
       async getMine(mint) { return coins.find((entry) => entry.mint === mint) ?? null; },
     },
-    payout: {
-      async prepare() { throw new Error("not used"); },
-      async confirm() { return false; },
-      async prepareBatch() { throw new Error("not used"); },
-      async confirmBatch() { return []; },
-    },
-  };
+   payout: {
+     async prepare() { throw new Error("not used"); },
+     async confirm() { return false; },
+     async prepareBatch() { throw new Error("not used"); },
+     async confirmBatch() { return []; },
+      // A graduated coin is treated as fully funded unless a test overrides this, so existing
+      // batch tests keep paying while the new filtering tests drive the value per mint.
+      async vaultInventory() { return { available: MAX_U64_BALANCE, account: null }; },
+   },
+ };
   return { env: env as never, services, store, now: () => now };
 }
 
@@ -357,7 +362,8 @@ describe("off-chain game rules", () => {
     const { env, put } = authenticatedEnv(WALLET);
     await put(`auth:session:session-${WALLET}`, WALLET);
     const prepared: unknown[] = [];
-    const mines = Array.from({ length: 13 }, (_, index) => ({ ...coin(1), mint: `${index}`.repeat(43).slice(0, 44) }));
+    // Graduated, because this test is about the per-message item ceiling, not about graduation.
+    const mines = Array.from({ length: 13 }, (_, index) => ({ ...coin(1, true), mint: `${index}`.repeat(43).slice(0, 44) }));
     await store.ensurePlayer(WALLET, 0, starterCrew());
     for (const entry of mines) await store.saveBalance({ wallet: WALLET, mint: entry.mint, claimable: TOKEN_SCALE, lastSettledAt: 1 }, 0n);
     const base = gameContext(store, coin(1, true), now, env);
@@ -372,6 +378,201 @@ describe("off-chain game rules", () => {
     const response = await handleClaimAll(context, sessionRequest(WALLET));
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ totalItems: 13, remainingItems: 1, complete: false });
-    expect(prepared).toHaveLength(12);
+   expect(prepared).toHaveLength(12);
+ });
+
+ it("keeps a graduated, funded payout in the batch while an ungraduated one stays pending", async () => {
+   const store = new MemoryGameStore();
+   const now = 700;
+    const { env, put } = authenticatedEnv(WALLET);
+    await put(`auth:session:session-${WALLET}`, WALLET);
+    const held = "33333333333333333333333333333333";
+    const payable = "44444444444444444444444444444444";
+    const launched = [{ ...coin(1), mint: held, graduated: false }, { ...coin(1), mint: payable, graduated: true }];
+    await store.ensurePlayer(WALLET, 0, starterCrew());
+    await store.saveBalance({ wallet: WALLET, mint: held, claimable: TOKEN_SCALE * 2n, lastSettledAt: 10 }, 0n);
+    await store.saveBalance({ wallet: WALLET, mint: payable, claimable: TOKEN_SCALE * 5n, lastSettledAt: 10 }, 0n);
+    const base = gameContext(store, launched, now, env);
+    const prepared: Array<{ mint: string; amount: bigint }> = [];
+    const context = {
+      ...base,
+      services: {
+        ...base.services,
+        coins: { async listActiveMines() { return launched; }, async getMine(mint: string) { return launched.find((entry) => entry.mint === mint) ?? null; } },
+        payout: {
+          ...base.services.payout,
+          async prepareBatch(_w: string, items: Array<{ mint: string; amount: bigint }>) {
+            prepared.push(...items);
+            return { id: "batch-1", transaction: "base64", expiresAt: 790, items: items as never };
+          },
+        },
+      },
+    };
+
+    const result = await collectClaimable(context as never, WALLET, now);
+    expect(result.items.map((item) => item.mint)).toEqual([payable]);
+    expect(result.items[0]!.amount).toBe(TOKEN_SCALE * 5n);
+    expect(result.pending).toEqual([expect.objectContaining({ mint: held, reason: "awaiting_graduation", amount: TOKEN_SCALE * 2n })]);
+    expect(result.pendingMints).toBe(1);
+
+    // The held reward is parked on its own PENDING claim: not paid, not merged into the batch,
+    // and still fully owed to the player once the mint becomes payable.
+    expect((await store.getBalance(WALLET, held)).claimable).toBe(0n);
+    expect((await store.getBalance(WALLET, payable)).claimable).toBe(0n);
+    const heldClaims = (await store.listClaimsForWallet(WALLET)).filter((claim) => claim.mint === held);
+    expect(heldClaims.every((claim) => claim.status === "PENDING")).toBe(true);
+    expect(heldClaims.reduce((sum, claim) => sum + claim.amount, 0n)).toBe(TOKEN_SCALE * 2n);
+
+    const response = await handleClaimAll(context as never, sessionRequest(WALLET));
+    expect(response.status).toBe(200);
+    const body = await response.json() as { items: { mint: string }[]; pendingCount: number; pending: { mint: string; reason: string }[] };
+    expect(body.items.map((item) => item.mint)).toEqual([payable]);
+    expect(body.pendingCount).toBe(1);
+    expect(body.pending).toEqual([expect.objectContaining({ mint: held, reason: "awaiting_graduation" })]);
+    // The vault is asked to sign exactly the one payable mint, so the unfunded one cannot abort it.
+   expect(prepared.map((item) => item.mint)).toEqual([payable]);
+ });
+
+  it("holds a graduated reward the vault cannot fund, and one whose funding is unknown", async () => {
+    const store = new MemoryGameStore();
+    const now = 800;
+    const empty = "55555555555555555555555555555555";
+    const unreadable = "66666666666666666666666666666666";
+    const rich = "77777777777777777777777777777777";
+    const launched = [empty, unreadable, rich].map((mint) => ({ ...coin(1, true), mint }));
+    await store.ensurePlayer(WALLET, 0, starterCrew());
+    for (const mint of [empty, unreadable, rich]) await store.saveBalance({ wallet: WALLET, mint, claimable: TOKEN_SCALE * 3n, lastSettledAt: 10 }, 0n);
+    const base = gameContext(store, launched, now);
+    const context = {
+      ...base,
+      services: {
+        ...base.services,
+        coins: { async listActiveMines() { return launched; }, async getMine(mint: string) { return launched.find((entry) => entry.mint === mint) ?? null; } },
+        payout: {
+          ...base.services.payout,
+          async vaultInventory(mint: string) {
+            if (mint === empty) return { available: TOKEN_SCALE, account: "ata-empty" };
+            if (mint === unreadable) return null;
+            return { available: TOKEN_SCALE * 100n, account: "ata-rich" };
+          },
+        },
+      },
+    };
+    const result = await collectClaimable(context as never, WALLET, now);
+    expect(result.items.map((item) => item.mint)).toEqual([rich]);
+    const byReason = Object.fromEntries(result.pending.map((entry) => [entry.mint, entry.reason]));
+    expect(byReason).toEqual({ [empty]: "vault_unfunded", [unreadable]: "vault_unknown" });
+    expect(result.pendingMints).toBe(2);
+    // An unfunded or unproven mint keeps its reward owed, held as a PENDING claim, never paid.
+    for (const mint of [empty, unreadable]) {
+      const heldClaims = (await store.listClaimsForWallet(WALLET)).filter((claim) => claim.mint === mint);
+      expect(heldClaims.every((claim) => claim.status === "PENDING")).toBe(true);
+      expect(heldClaims.reduce((sum, claim) => sum + claim.amount, 0n)).toBe(TOKEN_SCALE * 3n);
+    }
+  });
+
+  it("never pays an ungraduated coin even when the vault reports a large balance", async () => {
+    const store = new MemoryGameStore();
+    const now = 900;
+    await store.ensurePlayer(WALLET, 0, starterCrew());
+    await store.saveBalance({ wallet: WALLET, mint: MINT, claimable: TOKEN_SCALE * 9n, lastSettledAt: 10 }, 0n);
+    // Graduation is checked before inventory, so funding cannot shortcut it.
+    const result = await collectClaimable(gameContext(store, coin(1, false), now), WALLET, now);
+    expect(result.items).toEqual([]);
+    expect(result.pending).toEqual([expect.objectContaining({ mint: MINT, reason: "awaiting_graduation" })]);
+  });
+
+  it("holds an unknown launch rather than promising a payout for an unconfirmable mint", async () => {
+    const store = new MemoryGameStore();
+    const now = 950;
+    await store.ensurePlayer(WALLET, 0, starterCrew());
+    await store.saveBalance({ wallet: WALLET, mint: MINT, claimable: TOKEN_SCALE, lastSettledAt: 10 }, 0n);
+    const base = gameContext(store, coin(1, true), now);
+    const context = { ...base, services: { ...base.services, coins: { async listActiveMines() { return []; }, async getMine() { return null; } } } };
+    const result = await collectClaimable(context as never, WALLET, now);
+    expect(result.items).toEqual([]);
+    expect(result.pending).toEqual([expect.objectContaining({ mint: MINT, reason: "awaiting_graduation" })]);
+  });
+
+  it("reports pending reasons instead of a bare error when nothing is payable yet", async () => {
+    const store = new MemoryGameStore();
+    const now = 990;
+    const { env, put } = authenticatedEnv(WALLET);
+    await put(`auth:session:session-${WALLET}`, WALLET);
+    await store.ensurePlayer(WALLET, 0, starterCrew());
+    await store.saveBalance({ wallet: WALLET, mint: MINT, claimable: TOKEN_SCALE * 2n, lastSettledAt: 10 }, 0n);
+    const response = await handleClaimAll(gameContext(store, coin(1, false), now, env), sessionRequest(WALLET));
+    expect(response.status).toBe(409);
+    const body = await response.json() as { code: string; pendingCount: number; pending: { reason: string; amountWhole: string }[] };
+    expect(body.code).toBe("NOTHING_TO_CLAIM");
+    expect(body.pendingCount).toBe(1);
+    expect(body.pending[0]!.reason).toBe("awaiting_graduation");
+    expect(body.pending[0]!.amountWhole).toBe("2");
+    // The refusal pays nothing and loses nothing: the reward is still owed on a PENDING claim.
+    const heldClaims = (await store.listClaimsForWallet(WALLET)).filter((claim) => claim.mint === MINT);
+    expect(heldClaims.every((claim) => claim.status === "PENDING")).toBe(true);
+    expect(heldClaims.reduce((sum, claim) => sum + claim.amount, 0n)).toBe(TOKEN_SCALE * 2n);
+  });
+
+  it("counts only payable mints in the claim-all button state", async () => {
+    const store = new MemoryGameStore();
+    const now = 1_100;
+    const held = "88888888888888888888888888888888";
+    const payable = "99999999999999999999999999999999";
+    const launched = [{ ...coin(1), mint: held }, { ...coin(1, true), mint: payable }];
+    await store.ensurePlayer(WALLET, 0, starterCrew());
+    await store.saveBalance({ wallet: WALLET, mint: held, claimable: TOKEN_SCALE, lastSettledAt: 10 }, 0n);
+    await store.saveBalance({ wallet: WALLET, mint: payable, claimable: TOKEN_SCALE, lastSettledAt: 10 }, 0n);
+    const base = gameContext(store, launched, now);
+    const context = {
+      ...base,
+      services: {
+        ...base.services,
+        coins: { async listActiveMines() { return launched; }, async getMine(mint: string) { return launched.find((entry) => entry.mint === mint) ?? null; } },
+      },
+    };
+   const state = await getPlayerGameStateDetail(context as never, WALLET);
+   expect(state.claimAll.count).toBe(1);
+ });
+
+  it("only rolls a discovery while the activation window is live", async () => {
+    const store = new MemoryGameStore();
+    const now = 2_000;
+    const { env, put } = authenticatedEnv(WALLET);
+    await put(`auth:session:session-${WALLET}`, WALLET);
+    const created = await store.ensurePlayer(WALLET, now - 30 * 86_400, starterCrew());
+    // Every other discovery gate is satisfied: account age, play days and the configured secret.
+    await store.savePlayer({
+      ...created, activeDays: 10, validActivations: 10,
+      activatedAt: now - 3_600, activeUntil: now - 1, activeMine: MINT, activeMiningPower: 10,
+    }, 0);
+    const base = gameContext(store, [{ ...coin(now - 100, false) }], now, { ...env, DISCOVERY_SECRET: "s".repeat(48) });
+    const context = {
+      ...base,
+      services: {
+        ...base.services,
+        wallet: { async walletCreatedAt() { return now - 30 * 86_400; } },
+        portfolio: { async portfolioUsd() { return 25; } },
+      },
+    };
+    const window = async (activatedAt: number, activeUntil: number) => {
+      const player = (await store.getPlayer(WALLET))!;
+      await store.savePlayer({ ...player, activatedAt, activeUntil }, await store.playerVersion(WALLET));
+    };
+
+    // An elapsed window: a real-token roll must be refused.
+    const expired = await handleDiscovery(context as never, sessionRequest(WALLET));
+    expect(expired.status).toBe(403);
+    expect((await expired.json() as { code: string }).code).toBe("ACTIVATION_REQUIRED");
+
+    // A window that has not opened yet is equally not-active.
+    await window(now + 60, now + 3_600);
+    expect((await handleDiscovery(context as never, sessionRequest(WALLET))).status).toBe(403);
+
+    // A live window rolls normally, and the boundary instant itself counts as active.
+    await window(now, now + 3_600);
+    const live = await handleDiscovery(context as never, sessionRequest(WALLET));
+    expect(live.status).toBe(200);
+    expect((await live.json() as { discovered: boolean }).discovered).toBe(true);
   });
 });

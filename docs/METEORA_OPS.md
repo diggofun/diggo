@@ -2,12 +2,12 @@
 
 ## Current readiness status
 
-Production is configured for `CHAIN_MODE=meteora` on `mainnet-beta`, but public mainnet launch is
-not ready. No mainnet DBC config has been submitted and production still uses the
-`METEORA_DBC_CONFIG=SET_AFTER_CREATE` placeholder. The config must be created and independently
-verified, the production RPC, migrations, and required funding must be in place, and a funded
-end-to-end launch/mining/Discoveries/Claim all rehearsal plus the required security review must
-complete before public access is opened.
+Production is configured for `CHAIN_MODE=meteora` on `mainnet-beta` with the approved DBC config
+`5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF`. Its fee claimer is
+`6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ`, and its mining vault / leftover receiver is
+`H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT`. Public mainnet launch is not ready: production
+RPC, migrations, required funding, a funded end-to-end launch/mining/Discoveries/Claim all
+rehearsal, and the required security review must still be complete before public access is opened.
 
 Native-program rent reclaim is unavailable in Meteora mode. The historical native reclaim action
 must not be represented as available in the current product.
@@ -31,24 +31,24 @@ Anchor program in `programs/diggo-protocol` is not used by these scripts. The pi
 - Migration threshold: 2 SOL on devnet, 85 SOL on mainnet
 - Partner liquidity: 90%, including 10% permanently locked; creator liquidity: 0%
 - DAMM v2 migrated pool fee: 1% (100 bps)
+- Approved migration fee: 1% (the pinned SDK cannot represent the researched 0.5% value)
+- Approved `percentageSupplyOnMigration`: 25%
 
-The SDK's `Customizable` migration fee accepts whole percentage points. The current config
-therefore uses 1% with a 0% creator share. The requested 0.5% cannot be represented by SDK
-1.5.13; do not sign a mainnet config until the owner accepts 1% or the SDK is upgraded to a
-release that supports fractional percentages.
+The SDK's `Customizable` migration fee accepts whole percentage points. The approved config uses 1%
+with a 0% creator share. The requested 0.5% cannot be represented by SDK 1.5.13; this limitation is
+part of the approved configuration and must be kept in any future SDK upgrade review.
 
-The SDK also requires a curve split. The scripts currently use `percentageSupplyOnMigration: 25`,
-which is a temporary operational default and needs owner confirmation before mainnet launch.
+The SDK also requires a curve split. The approved configuration uses
+`percentageSupplyOnMigration: 25`.
 
 `feeClaimer`, the leftover receiver, and the partner/creator split are fixed when `createConfig`
 creates the config account. The pinned SDK and program IDL expose no instruction to change those
-config destinations, so verify the canonical wallet before mainnet signing. `DIGGO_TREASURY` is a
-Worker setting for Diggo-controlled flows; it does not change the config or redirect fees from an
-existing pool. Meteora's pool-creation protocol fee also has a separate program-controlled
-treasury, so `DIGGO_TREASURY` cannot redirect that protocol-level fee. Separately, the program does
-expose `updatePoolFees` for an authorized pool operator, so a pool's cliff, dynamic, and compounding
-fee parameters are mutable even though the config's fee destinations and partner/creator split are
-fixed.
+config destinations. `DIGGO_TREASURY` is a Worker setting for Diggo-controlled flows; it does not
+change the config or redirect fees from an existing pool. Meteora's pool-creation protocol fee also
+has a separate program-controlled treasury, so `DIGGO_TREASURY` cannot redirect that protocol-level
+fee. Separately, the program does expose `updatePoolFees` for an authorized pool operator, so a
+pool's cliff, dynamic, and compounding fee parameters are mutable even though the config's fee
+destinations and partner/creator split are fixed.
 
 ## Key handling
 
@@ -92,9 +92,10 @@ refuses to submit unless `--allow-mainnet` is explicitly supplied. Review the si
 immediately before using that flag. A config keypair is generated in memory and is not written to
 disk; only its public key is printed. The config has no post-creation authority in this flow.
 
-## Verified mainnet preparation
+## Historical mainnet preparation record
 
-Prepared on 2026-09-25 without sending a transaction:
+This section preserves the preparation state observed on 2026-09-25, before the approved config was
+created. It is not the current configuration status.
 
 - Payer: `GkCYyWzSjhSFEjKNx1ebWThtVLzQj7L84ktAHe31MBSx`
 - Mining vault / leftover receiver: `H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT`
@@ -201,7 +202,7 @@ The smoke test therefore exercised config reuse, pool creation, first buy, token
 quote generation, and a sell back to the curve. The disposable mint and pool are not production
 launch records.
 
-## Mainnet one-time config cost reference
+## Mainnet config creation cost reference
 
 The pinned SDK's config account is 1,048 bytes including the Anchor discriminator. Solana rent
 exemption for that size is 5,974,080 lamports. With two required signatures (payer and config),
@@ -210,8 +211,8 @@ the estimated one-time cost is:
 `5,974,080 + 10,000 = 5,984,080 lamports = 0.005984080 SOL`
 
 This excludes the new payer account's own 650,240-lamport rent exemption, priority fees, and any
-future protocol change to account size/rent. See **Verified mainnet preparation** for the complete
-first-funding calculation. No mainnet transaction was submitted during preparation.
+future protocol change to account size/rent. See **Historical mainnet preparation record** for the
+first-funding calculation used during preparation.
 
 ## Purging devnet Meteora data
 
@@ -291,13 +292,12 @@ git diff --check
 The repository's default Vitest configuration includes `src`, `shared`, and `worker` tests but
 excludes `scripts`, so the external config above is intentional for the focused script tests.
 
-## Open launch questions
+## Remaining launch gates
 
-1. Approve 1% migration fee (SDK limitation) or upgrade the SDK before mainnet signing.
-2. Approve the temporary 25% `percentageSupplyOnMigration` curve split.
-3. Back up the mainnet keypairs offline and confirm the mining-vault custody policy.
-4. Run a funded mainnet simulation immediately before `--allow-mainnet`; rent and priority fees can
-   change with cluster state.
-5. Complete a funded mainnet rehearsal of launch, mining, Discoveries, and Claim all, including both
-   player-authorized claims and operations that require the mining vault.
-6. Complete the required security review before public mainnet access.
+1. Back up the mainnet keypairs offline and confirm the mining-vault custody policy.
+2. Run a funded mainnet simulation immediately before any operational transaction; rent and
+   priority fees can change with cluster state.
+3. Complete a funded mainnet rehearsal of launch, mining, Discoveries, and Claim all, including both
+   player-authorized claims and operations that require the mining vault. Pre-graduation rewards must
+   remain pending, and post-graduation payouts must wait until vault inventory is available.
+4. Complete the required security review before public mainnet access.

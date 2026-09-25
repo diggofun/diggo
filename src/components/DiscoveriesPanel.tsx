@@ -35,6 +35,10 @@ function symbolOf(tokens: TokenSummary[], mint: string): string {
   return tokens.find((token) => token.mint === mint)?.symbol ?? mint.slice(0, 4);
 }
 
+function isOnCurve(tokens: TokenSummary[], mint: string): boolean {
+  return tokens.find((token) => token.mint === mint)?.curveMining.onCurve === true;
+}
+
 export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
   const { signedIn, discoveries, opportunity, tokens, loading, rolling, error, notice } = props;
   const reducedMotion = useReducedMotion();
@@ -85,7 +89,8 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
           action={<button className="btn btn-primary" onClick={requestWalletMenu}>Connect wallet</button>}
         >
           An eligible crew has one random discovery opportunity per window. Sign in to review the
-          memecoins it has mined. They accrue here until you approve a wallet collection.
+          memecoins it has mined. Rewards from a coin that has not graduated stay pending; mining
+          does not guarantee that a coin will graduate.
         </EmptyState>
       )}
       {signedIn && loading && (
@@ -99,36 +104,49 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
         <EmptyState icon={<IconDiscoveries size={26} />} title="No discoveries yet">
           An eligible crew has one random opportunity each window. The mine's liquidity, volume and
           reserve shape what can be found. Any mined memecoin appears here automatically; collection
-          is a separate wallet-approved action.
+          is a separate wallet-approved action after graduation. Mining does not guarantee that a coin
+          will graduate.
         </EmptyState>
       )}
 
       <div className="discovery-grid">
         {discoveries.map((discovery) => (
-          <article
-            className={"discovery-card rarity-" + discovery.rarity + (reducedMotion ? " is-quiet" : "")}
-            key={discovery.id}
-          >
-            <header>
-              <span className={"rarity-tag rarity-" + discovery.rarity}>{discovery.rarity.toUpperCase()}</span>
-              <em className={"reward-status status-" + discovery.status.toLowerCase()}>{discovery.status}</em>
-            </header>
-            {/* Generated art for the rarity; a rarity without art keeps the drawn rarity tag. */}
-            <DiscoveryArt rarity={discovery.rarity} className="discovery-card-art" />
-            <h4>{tokens.find((token) => token.mint === discovery.mint)?.name ?? "Mined memecoin"}</h4>
-            <strong>
-              {tokenAmount(discovery.tokenAmount)} {symbolOf(tokens, discovery.mint)}
-            </strong>
-            <small>{discovery.rarity} · {discovery.visualEvent} · accrued automatically</small>
-            <div className="discovery-card-actions">
-              <button className="badge ledger-token" onClick={() => props.onOpenToken(discovery.mint)}>
-                Token page
-              </button>
-              <button className="badge ledger-token" onClick={() => props.onTrade(discovery.mint)}>
-                Trade
-              </button>
-            </div>
-          </article>
+          (() => {
+            const pendingUntilGraduation =
+              (discovery.status === "PENDING" || discovery.status === "ELIGIBLE") &&
+              isOnCurve(tokens, discovery.mint);
+            const status = pendingUntilGraduation ? "PENDING" : discovery.status;
+            return (
+              <article
+                className={"discovery-card rarity-" + discovery.rarity + (reducedMotion ? " is-quiet" : "")}
+                key={discovery.id}
+              >
+                <header>
+                  <span className={"rarity-tag rarity-" + discovery.rarity}>{discovery.rarity.toUpperCase()}</span>
+                  <em className={"reward-status status-" + status.toLowerCase()}>{status}</em>
+                </header>
+                {/* Generated art for the rarity; a rarity without art keeps the drawn rarity tag. */}
+                <DiscoveryArt rarity={discovery.rarity} className="discovery-card-art" />
+                <h4>{tokens.find((token) => token.mint === discovery.mint)?.name ?? "Mined memecoin"}</h4>
+                <strong>
+                  {tokenAmount(discovery.tokenAmount)} {symbolOf(tokens, discovery.mint)}
+                </strong>
+                <small>
+                  {pendingUntilGraduation
+                    ? "Pending until this coin graduates · not claimable yet"
+                    : `${discovery.rarity} · ${discovery.visualEvent} · accrued automatically`}
+                </small>
+                <div className="discovery-card-actions">
+                  <button className="badge ledger-token" onClick={() => props.onOpenToken(discovery.mint)}>
+                    Token page
+                  </button>
+                  <button className="badge ledger-token" onClick={() => props.onTrade(discovery.mint)}>
+                    Trade
+                  </button>
+                </div>
+              </article>
+            );
+          })()
         ))}
       </div>
     </section>

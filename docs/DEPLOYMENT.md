@@ -7,9 +7,12 @@ devnet with Meteora. The native on-chain program is not the current production p
 and custody history remain useful operator context, but native launch steps must not be used as a
 Meteora deployment checklist.
 
-The current production Meteora config is still the literal placeholder `SET_AFTER_CREATE`. No
-mainnet DBC config has been submitted. Public mainnet access is therefore readiness-gated, not a
-claim that a live production curve or payout flow has been validated.
+The approved production Meteora DBC config is
+`5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF`. Its fee claimer is
+`6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ`, and its mining vault / leftover receiver is
+`H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT`. Public mainnet access is still readiness-gated;
+the configured addresses are not by themselves evidence that the live launch and payout flow has
+been rehearsed.
 
 Prelaunch education may explain the product journey, but it must not imply that mainnet launches,
 mining payouts, or rewards are live before the gates below are complete.
@@ -18,8 +21,10 @@ mining payouts, or rewards are live before the gates below are complete.
 
 Before announcing public mainnet access:
 
-1. Create and independently verify the production Meteora DBC config, then replace
-   `METEORA_DBC_CONFIG` with its public address.
+1. Independently verify that the production environment still uses the approved DBC config
+   `5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF`, fee claimer
+   `6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ`, and vault
+   `H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT`.
 2. Configure a keyed, mainnet RPC provider as `DIGGO_RPC_URL`; retain only mainnet-compatible
    fallbacks in `DIGGO_RPC_URLS`.
 3. Apply the production D1 migrations and confirm the scheduled Meteora indexer is healthy.
@@ -44,11 +49,11 @@ native deployment must not be paired with `mainnet-beta` or used as a Meteora re
 | --- | --- |
 | `CHAIN_MODE` | `meteora` |
 | `SOLANA_CLUSTER` | `mainnet-beta` |
-| `METEORA_DBC_CONFIG` | The verified production DBC config address; currently `SET_AFTER_CREATE` |
+| `METEORA_DBC_CONFIG` | `5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF` |
 | `DIGGO_RPC_URL` | Keyed mainnet RPC URL supplied as a Wrangler secret |
 | `DIGGO_RPC_URLS` | Mainnet-compatible fallbacks only, if used |
 | `MINING_VAULT_SECRET` | Operational mining-vault key supplied as a Wrangler secret, never a plain var; required for the validated payout/vault path, though the Worker can boot and index without it |
-| `MINING_VAULT_PUBLIC_KEY` | Must match the approved mining-vault key and the on-chain `leftoverReceiver` |
+| `MINING_VAULT_PUBLIC_KEY` | `H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT`; must match the on-chain `leftoverReceiver` |
 | `TURNSTILE_SECRET` | Required for verified production launch flows; the server verifies the production Turnstile response |
 
 Set secrets independently per environment:

@@ -25,7 +25,7 @@
     "ENVIRONMENT": "production",
     "SOLANA_CLUSTER": "mainnet-beta",
     "CHAIN_MODE": "meteora",
-    "METEORA_DBC_CONFIG": "SET_AFTER_CREATE",
+    "METEORA_DBC_CONFIG": "5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF",
     "MINING_VAULT_PUBLIC_KEY": "H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT",
     "MINING_CLAIM_PER_CLAIM": "250000000",
     "MINING_CLAIM_PER_DAY": "1000000000",

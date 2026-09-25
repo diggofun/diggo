@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { ed25519 } from "@noble/curves/ed25519.js";
 import bs58 from "bs58";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,6 +13,14 @@ const rpcState = vi.hoisted(() => ({
   wire: null as string | null,
   historyCalls: 0,
   historyError: null as Error | null,
+  confirmationStatus: "finalized" as "processed" | "confirmed" | "finalized" | null,
+  statusSlot: 95n,
+  statusError: null as unknown,
+  transaction: null as Record<string, unknown> | null,
+  transactionMeta: null as Record<string, unknown> | null,
+  proofError: null as Error | null,
+  proofErrorStage: null as "status" | "wire" | "transaction" | null,
+  proofCalls: 0,
 }));
 
 vi.mock("../chainV2", async (importOriginal) => {
@@ -20,6 +29,39 @@ vi.mock("../chainV2", async (importOriginal) => {
     ...actual,
     getChainRpc: () => ({
       getBlockHeight: () => ({ send: async () => rpcState.blockHeight }),
+      getSignatureStatuses: () => ({
+        send: async () => {
+          if (rpcState.proofError && rpcState.proofErrorStage === "status") throw rpcState.proofError;
+          return {
+            context: { slot: rpcState.statusSlot },
+            value: [{
+              slot: rpcState.statusSlot,
+              confirmations: null,
+              err: rpcState.statusError,
+              status: rpcState.statusError ? { Err: rpcState.statusError } : { Ok: null },
+              confirmationStatus: rpcState.confirmationStatus,
+            }],
+          };
+        },
+      }),
+      getTransaction: () => ({
+        send: async () => {
+          rpcState.proofCalls += 1;
+          const stage = rpcState.proofCalls === 1 ? "wire" : "transaction";
+          if (rpcState.proofError && rpcState.proofErrorStage === stage) throw rpcState.proofError;
+          const value = rpcState.transaction ?? (rpcState.wire === null ? null : {
+            slot: rpcState.statusSlot,
+            blockTime: null,
+            meta: rpcState.transactionMeta,
+            transaction: {
+              signatures: ["signature-placeholder"],
+              message: { accountKeys: [], instructions: [] },
+            },
+          });
+          if (stage === "wire") return { slot: rpcState.statusSlot, transaction: value ? [rpcState.wire] : null };
+          return value;
+        },
+      }),
       getLatestBlockhash: () => ({
         send: async () => ({ context: { slot: 100n }, value: { blockhash: bs58.encode(new Uint8Array(32).fill(7)), lastValidBlockHeight: 150n } }),
       }),
@@ -46,11 +88,13 @@ vi.mock("./rpc", async (importOriginal) => {
         failed: false,
       }));
     },
+    readAccount: async () => ({ pubkey: "vault-ata", lamports: 0n, data: new Uint8Array(64) }),
     readTransactionWire: async () => rpcState.wire,
   };
 });
 
-import { confirmClaimBatch, prepareClaimBatch } from "./vault";
+import { confirmClaimBatch, loadMiningVaultSigner, prepareClaimBatch } from "./vault";
+import { deriveAssociatedTokenAddress } from "./rpc";
 
 type SqlValue = string | number | bigint | null;
 
@@ -130,6 +174,14 @@ describe("claim-all batch security", () => {
     rpcState.wire = null;
     rpcState.historyCalls = 0;
     rpcState.historyError = null;
+    rpcState.confirmationStatus = "finalized";
+    rpcState.statusSlot = 95n;
+    rpcState.statusError = null;
+    rpcState.transaction = null;
+    rpcState.transactionMeta = null;
+    rpcState.proofError = null;
+    rpcState.proofErrorStage = null;
+    rpcState.proofCalls = 0;
   });
 
   it("returns the identical live envelope after wall-clock expiry", async () => {
@@ -185,4 +237,145 @@ describe("claim-all batch security", () => {
     expect(row).toMatchObject({ status: "SENT", signature: null, cap_reserved: 1 });
     expect((db.prepare("SELECT reserved, settled FROM meteora_daily_claim_caps").get() as Record<string, string>)).toMatchObject({ reserved: "10", settled: "0" });
   });
+
+  it("keeps a confirmed-only transaction pending without mutating the batch", async () => {
+    const { db, env } = harness();
+    seedBatch(db);
+    rpcState.confirmationStatus = "confirmed";
+    rpcState.wire = WIRE;
+    expect(await confirmClaimBatch(env, WALLET, "base", SIGNATURE)).toEqual([]);
+    expect(rpcState.proofCalls).toBe(0);
+    expectBatchPending(db);
+  });
+
+  it("keeps an orphaned signature pending without reading or mutating the batch", async () => {
+    const { db, env } = harness();
+    seedBatch(db);
+    rpcState.confirmationStatus = null;
+    expect(await confirmClaimBatch(env, WALLET, "base", SIGNATURE)).toEqual([]);
+    expect(rpcState.proofCalls).toBe(0);
+    expectBatchPending(db);
+  });
+
+  it("fails closed when finality RPC lookup fails without mutating the batch", async () => {
+    const { db, env } = harness();
+    seedBatch(db);
+    rpcState.proofError = new Error("finality RPC unavailable");
+    rpcState.proofErrorStage = "status";
+    await expect(confirmClaimBatch(env, WALLET, "base", SIGNATURE)).rejects.toThrow("finality RPC unavailable");
+    expectBatchPending(db);
+  });
+
+  it("settles only after finalized wire and transfer effects match, then replays idempotently", async () => {
+    const { db, env } = harness();
+    const vaultPrivateKey = Uint8Array.from({ length: 32 }, (_, index) => index + 9);
+    const vaultSecretBytes = new Uint8Array([...vaultPrivateKey, ...ed25519.getPublicKey(vaultPrivateKey)]);
+    const vaultSecret = bs58.encode(vaultSecretBytes);
+    const configuredEnv = { ...(env as Record<string, unknown>), MINING_VAULT_SECRET: vaultSecret } as never;
+    const signer = await loadMiningVaultSigner(configuredEnv);
+    seedBatch(db);
+    const vault = signer.address;
+    const source = deriveAssociatedTokenAddress(MINT, vault);
+    const destination = deriveAssociatedTokenAddress(MINT, WALLET);
+    const systemProgram = "11111111111111111111111111111111";
+    const tokenProgram = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+    const associatedTokenProgram = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+    rpcState.wire = WIRE;
+    rpcState.transactionMeta = {
+      err: null,
+      logMessages: [],
+      innerInstructions: [],
+      preTokenBalances: [
+        { accountIndex: 1, mint: MINT, owner: vault, uiTokenAmount: { amount: "20" } },
+        { accountIndex: 2, mint: MINT, owner: WALLET, uiTokenAmount: { amount: "5" } },
+      ],
+      postTokenBalances: [
+        { accountIndex: 1, mint: MINT, owner: vault, uiTokenAmount: { amount: "10" } },
+        { accountIndex: 2, mint: MINT, owner: WALLET, uiTokenAmount: { amount: "15" } },
+      ],
+    };
+    rpcState.transaction = {
+      slot: rpcState.statusSlot,
+      blockTime: null,
+      meta: rpcState.transactionMeta,
+      transaction: {
+        signatures: [SIGNATURE, bs58.encode(Uint8Array.from({ length: 64 }, () => 8))],
+        message: {
+          accountKeys: [WALLET, source, destination, vault, MINT, systemProgram, tokenProgram],
+          instructions: [
+            {
+              programId: associatedTokenProgram,
+              accounts: [WALLET, destination, WALLET, MINT, systemProgram, tokenProgram],
+              data: bs58.encode(Uint8Array.of(1)),
+            },
+            {
+              programId: tokenProgram,
+              accounts: [source, MINT, destination, vault],
+              data: bs58.encode(Uint8Array.of(3, 0, 0, 0, 0, 0, 0, 0, 10)),
+            },
+          ],
+        },
+      },
+    };
+
+    expect(await confirmClaimBatch(configuredEnv, WALLET, "base", SIGNATURE)).toEqual(ITEMS);
+    const settled = db.prepare("SELECT status, signature, cap_reserved FROM meteora_claim_batches WHERE id='base'").get() as Record<string, unknown>;
+    expect(settled).toMatchObject({ status: "SETTLED", signature: SIGNATURE, cap_reserved: 0 });
+    expect(db.prepare("SELECT reserved, settled FROM meteora_daily_claim_caps").get()).toMatchObject({ reserved: "10", settled: "10" });
+
+    const proofCallsAfterFirstConfirmation = rpcState.proofCalls;
+    expect(await confirmClaimBatch(configuredEnv, WALLET, "base", SIGNATURE)).toEqual(ITEMS);
+    expect(rpcState.proofCalls).toBe(proofCallsAfterFirstConfirmation);
+  });
+
+  it("keeps a finalized transaction pending when its transfer effects do not match", async () => {
+    const { db, env } = harness();
+    const vaultPrivateKey = Uint8Array.from({ length: 32 }, (_, index) => index + 9);
+    const vaultSecretBytes = new Uint8Array([...vaultPrivateKey, ...ed25519.getPublicKey(vaultPrivateKey)]);
+    const vaultSecret = bs58.encode(vaultSecretBytes);
+    const configuredEnv = { ...(env as Record<string, unknown>), MINING_VAULT_SECRET: vaultSecret } as never;
+    const signer = await loadMiningVaultSigner(configuredEnv);
+    seedBatch(db);
+    const vault = signer.address;
+    const source = deriveAssociatedTokenAddress(MINT, vault);
+    const destination = deriveAssociatedTokenAddress(MINT, WALLET);
+    const systemProgram = "11111111111111111111111111111111";
+    const tokenProgram = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+    const associatedTokenProgram = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+    rpcState.wire = WIRE;
+    rpcState.transactionMeta = {
+      err: null,
+      preTokenBalances: [
+        { accountIndex: 1, mint: MINT, owner: vault, uiTokenAmount: { amount: "20" } },
+        { accountIndex: 2, mint: MINT, owner: WALLET, uiTokenAmount: { amount: "5" } },
+      ],
+      postTokenBalances: [
+        { accountIndex: 1, mint: MINT, owner: vault, uiTokenAmount: { amount: "11" } },
+        { accountIndex: 2, mint: MINT, owner: WALLET, uiTokenAmount: { amount: "14" } },
+      ],
+    };
+    rpcState.transaction = {
+      slot: rpcState.statusSlot,
+      meta: rpcState.transactionMeta,
+      transaction: {
+        signatures: [SIGNATURE, bs58.encode(Uint8Array.from({ length: 64 }, () => 8))],
+        message: {
+          accountKeys: [WALLET, source, destination, vault, MINT, systemProgram, tokenProgram],
+          instructions: [
+            { programId: associatedTokenProgram, accounts: [WALLET, destination, WALLET, MINT, systemProgram, tokenProgram], data: bs58.encode(Uint8Array.of(1)) },
+            { programId: tokenProgram, accounts: [source, MINT, destination, vault], data: bs58.encode(Uint8Array.of(3, 0, 0, 0, 0, 0, 0, 0, 10)) },
+          ],
+        },
+      },
+    };
+
+    expect(await confirmClaimBatch(configuredEnv, WALLET, "base", SIGNATURE)).toEqual([]);
+    expectBatchPending(db);
+  });
 });
+
+function expectBatchPending(db: DatabaseSync): void {
+  const row = db.prepare("SELECT status, signature, cap_reserved FROM meteora_claim_batches WHERE id='base'").get() as Record<string, unknown>;
+  expect(row).toMatchObject({ status: "SENT", signature: null, cap_reserved: 1 });
+  expect(db.prepare("SELECT reserved, settled FROM meteora_daily_claim_caps").get()).toMatchObject({ reserved: "10", settled: "0" });
+}

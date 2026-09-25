@@ -18,14 +18,15 @@ their value can change or fall to zero.
 ## Current mainnet status
 
 The repository is configured for `CHAIN_MODE=meteora` and the production environment points at
-`SOLANA_CLUSTER=mainnet-beta`. That configuration is not by itself a declaration that public
-mainnet launch is ready. Prelaunch education and demonstrations may continue, but public access
-should remain closed until the readiness gate below is complete and reviewed.
+`SOLANA_CLUSTER=mainnet-beta`. The approved production DBC config is
+`5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF`; its fee claimer is
+`6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ`, and the mining vault / leftover receiver is
+`H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT`. This configuration is not by itself a declaration
+that public mainnet launch is ready. Prelaunch education and demonstrations may continue, but public
+access should remain closed until the readiness gate below is complete and reviewed.
 
 Current blockers are:
 
-- replacing the production `METEORA_DBC_CONFIG=SET_AFTER_CREATE` placeholder with a verified mainnet
-  config address;
 - configuring a production-grade RPC, applying D1 migrations, and funding and verifying the payer
   and mining-vault accounts;
 - rehearsing the real mainnet launch, mining, Discoveries and wallet-approved Claim all payout

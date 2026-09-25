@@ -341,18 +341,45 @@ interface ClaimableItem {
   symbol: string | null;
 }
 
+/** Why a reward is being held back from this batch. Reported verbatim so the client can explain itself. */
+export type PendingClaimReason = "awaiting_graduation" | "vault_unfunded" | "vault_unknown";
+
+export interface PendingClaim {
+  mint: string;
+  name: string | null;
+  symbol: string | null;
+  amount: bigint;
+  claimIds: string[];
+  reason: PendingClaimReason;
+}
+
+export interface CollectClaimableResult {
+  items: ClaimableItem[];
+  pending: PendingClaim[];
+  /** How many distinct mints a reward is being held for, which is what the UI can act on. */
+  pendingMints: number;
+}
+
 /**
- * Every reward the wallet has actually accrued, mining and discovery alike, that is ready to pay.
+ * Every reward the wallet has actually accrued that is ready to pay right now.
+ *
+ * Eligibility is deliberately stricter than "has a balance". A pre-graduation mine pays its
+ * rewards out of the bonding curve, and those tokens are not in the vault's SPL account until the
+ * graduation leftover is swept, so a reward there is real but not yet payable. Because
+ * `prepareBatch` is all-or-nothing and throws on the first mint it cannot fund, one unpayable mint
+ * would otherwise cancel a whole batch of correctly-funded graduated rewards. So the batch is
+ * assembled only from mints that are both graduated and provably covered by vault inventory, and
+ * everything else is left untouched on the balance and returned as an explicit pending reason.
  *
  * Only balances are read here. Nothing is reserved and nothing is debited: the vault refuses to sign
  * a batch it cannot fund, and the game ledger is only advanced once the chain has confirmed. That
  * ordering is what keeps a failed or expired prepare from costing the player their balance.
  */
-async function collectClaimable(
+export async function collectClaimable(
   context: GameHandlerContext,
   wallet: string,
   now: number,
-): Promise<ClaimableItem[]> {
+): Promise<CollectClaimableResult> {
   const store = contextStore(context);
   const player = await ensurePlayer(context, wallet);
   // Settling first is required, not cosmetic: a mine the player just switched into has an unlocked
@@ -389,7 +416,39 @@ async function collectClaimable(
       add(created.mint, created.id, created.amount, coin?.name ?? null, coin?.symbol ?? null);
     }
   }
-  return [...byMint.values()].sort((a, b) => a.mint.localeCompare(b.mint));
+
+  // Graduation and funding are per-mint facts, so each candidate mint is decided exactly once.
+  const candidates = [...byMint.values()].sort((a, b) => a.mint.localeCompare(b.mint));
+  const items: ClaimableItem[] = [];
+  const held: PendingClaim[] = [];
+  for (const candidate of candidates) {
+    const coin = await context.services.coins.getMine(candidate.mint);
+    if (!coin) {
+      // An unknown launch is not proof of graduation; hold rather than promise a payout that may
+      // never become fundable. The amount stays on the claim, so nothing is lost by waiting.
+      held.push({ ...candidate, reason: "awaiting_graduation" });
+      continue;
+    }
+    if (!coin.graduated) {
+      held.push({ ...candidate, reason: "awaiting_graduation" });
+      continue;
+    }
+    const inventory = await context.services.payout.vaultInventory(candidate.mint);
+    if (inventory === null) {
+      held.push({ ...candidate, reason: "vault_unknown" });
+      continue;
+    }
+    if (inventory.available < candidate.amount) {
+      held.push({ ...candidate, reason: "vault_unfunded" });
+      continue;
+    }
+    items.push(candidate);
+  }
+  return {
+    items,
+    pending: held.sort((a, b) => a.mint.localeCompare(b.mint)),
+    pendingMints: held.length,
+  };
 }
 
 /**
@@ -405,8 +464,31 @@ export async function handleClaimAll(context: GameHandlerContext, request: Reque
   const wallet = await authenticatedWallet(context, request, "claim-all");
   if (!wallet) return apiError("Wallet authentication required", 401);
   const now = unixNow(context);
-  const items = await collectClaimable(context, wallet, now);
-  if (items.length === 0) return apiError("No rewards are ready to claim", 409, "NOTHING_TO_CLAIM");
+  const { items, pending, pendingMints } = await collectClaimable(context, wallet, now);
+  const pendingView = pending.map((entry) => ({
+    mint: entry.mint,
+    name: entry.name,
+    symbol: entry.symbol,
+    amount: entry.amount.toString(),
+    amountWhole: (Number(entry.amount) / Number(TOKEN_SCALE)).toString(),
+    reason: entry.reason,
+  }));
+  if (items.length === 0) {
+    // A wallet holding only unpayable rewards is a normal, expected state, not an error to hide:
+    // the rewards are real and stay on the claim, they just cannot be transferred yet. Reporting
+    // the reason is what stops the client implying the player has nothing at all.
+    return json(
+      {
+        error: pendingMints > 0
+          ? "Your rewards are not claimable yet"
+          : "No rewards are ready to claim",
+        code: "NOTHING_TO_CLAIM",
+        pendingCount: pendingMints,
+        pending: pendingView,
+      },
+      { status: 409 },
+    );
+  }
   // Extremely diversified wallets can exceed the conservative packed-message ceiling. Pay the first
   // slice and report the remainder explicitly; after it settles, another call continues naturally.
   const batchItems = items.slice(0, MAX_CLAIM_ALL_ITEMS);
@@ -434,6 +516,10 @@ export async function handleClaimAll(context: GameHandlerContext, request: Reque
       totalItems: items.length,
       remainingItems: Math.max(0, items.length - batchItems.length),
       complete: items.length <= batchItems.length,
+      // Held rewards are reported explicitly so the client can say what is waiting and why,
+      // instead of implying that a partial batch was the player's whole balance.
+      pendingCount: pendingMints,
+      pending: pendingView,
     });
   } catch {
     // A failed preparation reserved nothing on chain and debited nothing in the ledger, so the
@@ -540,6 +626,13 @@ export async function handleDiscovery(context: GameHandlerContext, request: Requ
   if (!walletCreatedAt || now - walletCreatedAt < DISCOVERY_MIN_WALLET_AGE_SECONDS) return apiError("Wallet age could not be verified", 403);
   if (!context.services.portfolio || !isPortfolioEligible(await context.services.portfolio.portfolioUsd(wallet))) return apiError("Discovery portfolio requirement not met", 403);
   if (player.activeDays < 5 || player.validActivations < 5) return apiError("Discovery play requirement not met", 403);
+  // A Discovery pays real tokens, so it may only roll inside a live activation window, using the
+  // same boundary that credits mining blocks: activation instant inclusive, activeUntil exclusive.
+  // Without this an expired crew could still roll, and since the roll is commit-reveal and
+  // idempotent per epoch it would be a one-shot real-token reward for a day never worked.
+  if (!isEligibleForBlock(player.activeUntil, now, player.activatedAt)) {
+    return apiError("Activate your crew to roll for a discovery", 403, "ACTIVATION_REQUIRED");
+  }
   const coins = (await context.services.coins.listActiveMines()).filter((coin) => coin.miningStartsAt <= now && !coin.graduated);
   const epoch = discoveryEpoch(now);
   const secret = context.env.DISCOVERY_SECRET?.trim();
@@ -592,10 +685,11 @@ export async function getPlayerGameStateDetail(
   const balance = coin ? await store.getBalance(wallet, coin.mint) : null;
   const mine = coin ? await store.getMine(coin.mint) : null;
   const balances = await store.listBalances(wallet);
-  // The button is driven by what would actually be paid: balances with something in them plus
-  // discovery and other claims already reserved but not yet transferred.
-  const pendingClaimable = balances.filter((entry) => entry.claimable > 0n).length +
-    (await store.listClaimsForWallet(wallet)).filter((claim) => claim.status === "PENDING").length;
+  // The button is driven by what would actually be paid by one call: mints that are both graduated
+  // and covered by vault inventory. A pre-graduation balance is a real reward the player owns, but
+  // it cannot be transferred yet, so counting it here would advertise a payout the vault would
+  // refuse. The held rewards are reported separately instead of inflating this count.
+  const claimableMints = await countPayableMints(context, wallet);
   const balanceViews = await Promise.all(balances.map(async (entry) => {
     const metadata = await context.services.coins.getMine(entry.mint);
     return {
@@ -628,8 +722,31 @@ export async function getPlayerGameStateDetail(
     claims: await Promise.all((await store.listClaims(wallet, 20)).map(async (claim) =>
       serializeClaimWithCoin(claim, await context.services.coins.getMine(claim.mint)))),
     balances: balanceViews,
-    claimAll: { supported: true, count: pendingClaimable, signatures: 1 as const, maxItems: MAX_CLAIM_ALL_ITEMS },
+    claimAll: { supported: true, count: claimableMints, signatures: 1 as const, maxItems: MAX_CLAIM_ALL_ITEMS },
   };
+}
+
+/**
+ * How many distinct mints a single claim-all call could pay right now.
+ *
+ * This deliberately reuses the same graduation and funding rule as the payout path rather than
+ * counting raw balances, so the number the UI shows is the number the next call can actually move.
+ * A vault read that fails is treated as not-payable, because a count is a promise about the next
+ * call and an unread chain cannot support one.
+ */
+async function countPayableMints(context: GameHandlerContext, wallet: string): Promise<number> {
+  const store = contextStore(context);
+  const mints = new Set<string>();
+  for (const balance of await store.listBalances(wallet)) if (balance.claimable > 0n) mints.add(balance.mint);
+  for (const claim of await store.listClaimsForWallet(wallet)) if (claim.status === "PENDING") mints.add(claim.mint);
+  let payable = 0;
+  for (const mint of mints) {
+    const coin = await context.services.coins.getMine(mint);
+    if (!coin?.graduated) continue;
+    const inventory = await context.services.payout.vaultInventory(mint);
+    if (inventory && inventory.available > 0n) payable += 1;
+  }
+  return payable;
 }
 
 export async function creditReferralOre(

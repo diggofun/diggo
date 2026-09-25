@@ -20,10 +20,10 @@ signature), 403 (eligibility), 404 (unknown mine), 409 (state/eligibility confli
 ```json
 {
   "chainMode": "meteora",
-  "cluster": "devnet",
-  "meteoraConfig": "5Dtu9MNLM1k4asZgYos2Dm7CU75zkY4QqQSMkt8GGRar",
-  "meteoraDbcConfig": "5Dtu9MNLM1k4asZgYos2Dm7CU75zkY4QqQSMkt8GGRar",
-  "miningVault": "6i6EuPmUrg8R6zehqQKFd2XoE5A3mYjZQhm9u6ocBo7d",
+  "cluster": "mainnet-beta",
+  "meteoraConfig": "5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF",
+  "meteoraDbcConfig": "5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF",
+  "miningVault": "H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT",
   "miningClaimCaps": { "perClaim": "250000000", "perDay": "1000000000" }
 }
 ```
@@ -75,9 +75,9 @@ optional query parameter used to include the caller's current balance.
 `activeMine` is `null` until a mine is selected. There is one active mine per wallet. `POST
 /api/game/mine` accepts `{ "mint": "<base mint>" }`; omitting `mint` selects the wallet's most
 recently indexed Meteora pool, and switching settles the old mine first. Pre-graduation mining is
-still accumulated, but `claimable` is pending until graduation: it is reported as
-`pendingUntilGraduation` on portfolio/mine responses and remains `PENDING` in claim history until
-the Meteora vault payout succeeds.
+still accumulated, but `claimable` is pending until graduation and until mining inventory is
+available to the configured vault: it is reported as `pendingUntilGraduation` on portfolio/mine
+responses and remains `PENDING` in claim history until the Meteora vault payout succeeds.
 
 ### Activation
 
@@ -99,9 +99,10 @@ must have enough ORE. `POST /api/game/claim` accepts `{ "mint": "..." }` and ret
   "status": "PENDING|PAID" }
 ```
 
-For an active pool the claim remains `PENDING`; for a graduated pool the Worker calls
-`payMiningClaim` and marks it `PAID` when the transaction has a signature. Failed payout attempts
-remain pending for a later retry. Claim history is limited to the most recent 20 entries.
+For an active pool the claim remains `PENDING`. A graduated pool is claimable only when the
+configured mining vault has inventory available; then the Worker calls `payMiningClaim` and marks
+it `PAID` when the transaction has a signature. Failed or inventory-blocked payout attempts remain
+pending for a later retry. Claim history is limited to the most recent 20 entries.
 
 ### Discovery and referrals
 

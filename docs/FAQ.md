@@ -26,9 +26,9 @@ player reviews and signs the transaction. Diggo records the batch as settled onl
 transaction can be verified. If more than 12 coins are available, another Claim all transaction
 is needed for the remainder.
 
-Pre-graduation mining rewards can accrue but remain pending until the relevant Meteora pool has
-graduated and the payout can proceed. A visible accrual is not a promise that a reward is already
-claimable.
+Pre-graduation mining rewards can accrue but remain pending. They become claimable only after the
+relevant Meteora pool has graduated and mining inventory is available to the configured vault. A
+visible accrual is not a promise that a reward is already claimable.
 
 ## What are ORE and Mining Power?
 
@@ -51,9 +51,10 @@ settings must be independently checked before a mainnet config is signed.
 
 ## Is mainnet public launch ready?
 
-Not yet. The repository is configured for mainnet-beta with Meteora, but the production DBC config
-is still a placeholder. Public launch also depends on production RPC, migrations and funding, an
-end-to-end real payout rehearsal, and completion of the required security review.
+Not yet. The repository is configured for mainnet-beta with Meteora and the approved production DBC
+config is `5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF`. Public launch also depends on production
+RPC, migrations and funding, an end-to-end real payout rehearsal, and completion of the required
+security review.
 
 Prelaunch education and demonstrations can happen before public access is opened. They must not
 be described as proof of mainnet readiness.

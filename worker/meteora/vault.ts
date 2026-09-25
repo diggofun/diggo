@@ -21,6 +21,7 @@ import {
   deriveAssociatedTokenAddress,
   meteoraRpcEnv,
   readAccount,
+  readFinalizedTransactionProof,
   readSignatures,
   readTransaction,
   readTransactionWire,
@@ -660,17 +661,20 @@ export async function confirmMiningClaim(env: MeteoraRpcEnv, claimId: string, si
   const id = claimId.trim();
   if (!id) throw new Error("claimId is required");
   const operation = await env.DB.prepare(
-    "SELECT id, mint, wallet, amount, day_index, status, signature FROM meteora_vault_claims WHERE id=?1",
-  ).bind(id).first<{ id: string; mint: string; wallet: string; amount: string; day_index: number; status: string; signature: string | null }>();
+    "SELECT id, mint, wallet, amount, day_index, status, signature, prepared_transaction FROM meteora_vault_claims WHERE id=?1",
+  ).bind(id).first<{ id: string; mint: string; wallet: string; amount: string; day_index: number; status: string; signature: string | null; prepared_transaction: string | null }>();
   if (!operation) throw new Error("claim not found");
   if (operation.status === "SETTLED") return operation.signature === signature;
   if (operation.signature && operation.signature !== signature) throw new Error("signature does not match the prepared claim");
   if (operation.status !== "SENT") throw new Error("claim is not awaiting confirmation");
+  if (!operation.prepared_transaction) throw new Error("claim has no prepared transaction");
   const signer = await loadMiningVaultSigner(env);
   const source = deriveAssociatedTokenAddress(operation.mint, signer.address);
   const destination = deriveAssociatedTokenAddress(operation.mint, operation.wallet);
-  const transaction = await readTransaction(env, signature);
-  if (!verifyMiningClaimTransfer(transaction, {
+  const proof = await readFinalizedTransactionProof(env, signature);
+  if (!proof) return false;
+  if (proof.wire !== operation.prepared_transaction) throw new Error("signature does not match the prepared claim");
+  if (!verifyMiningClaimTransfer(proof.transaction, {
     mint: operation.mint,
     wallet: operation.wallet,
     vault: signer.address,
@@ -1048,15 +1052,15 @@ export async function confirmClaimBatch(
   if (batch.signature && batch.signature !== signature) throw new Error("signature does not match the prepared claim batch");
   if (!batch.prepared_transaction) throw new Error("claim batch has no prepared transaction");
   const items = decodeBatchItems(batch.items);
-  const wire = await readTransactionWire(env, signature);
-  if (!wire) return [];
+  const proof = await readFinalizedTransactionProof(env, signature);
+  if (!proof) return [];
+  const { wire } = proof;
   // A valid 64-byte signature is not enough: the reported transaction must be the exact durable
   // bytes this server prepared. This prevents a player from binding an unrelated transfer to a
   // batch id and also binds confirmations to one specific attempt across replacements.
   if (wire !== batch.prepared_transaction) throw new Error("signature does not match the prepared claim transaction");
   const signer = await loadMiningVaultSigner(env);
-  const transaction = await readTransaction(env, signature);
-  if (!verifyClaimBatchTransfer(transaction, {
+  if (!verifyClaimBatchTransfer(proof.transaction, {
     wallet: batch.wallet,
     vault: signer.address,
     items: items.map((item) => ({ mint: item.mint, amount: item.amount })),

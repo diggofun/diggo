@@ -52,10 +52,12 @@ properties of the current Meteora deployment:
 
 ## Current readiness and limitations
 
-The repository is configured for Meteora on `mainnet-beta`, but the production
-`METEORA_DBC_CONFIG` is still `SET_AFTER_CREATE`. Public mainnet launch remains blocked until a
-verified config is installed, production RPC/D1/funding are confirmed, a real launch through
-Claim all final settlement is rehearsed, and the required security review is complete.
+The repository is configured for Meteora on `mainnet-beta` with the approved production DBC config
+`5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF`, fee claimer
+`6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ`, and mining vault
+`H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT`. Public mainnet launch remains blocked until
+production RPC/D1/funding are confirmed, a real launch through Claim all final settlement is
+rehearsed, and the required security review is complete.
 
 The native rent-reclaim action is unavailable in Meteora mode. No Meteora equivalent is exposed by
 the current product. This is a product limitation, not a claim that third-party Solana tools cannot

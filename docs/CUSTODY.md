@@ -11,9 +11,11 @@ launch, swap and pool transactions with the relevant wallet. A player signs the 
 Claim all payout transaction. The Worker prepares and indexes the supported flow and records a
 settlement only after the transaction can be verified.
 
-The mining vault is an operational account used by the Worker path for prepared Meteora payouts
-and sweeps. Its key is a deployment secret (`MINING_VAULT_SECRET`), not a user-wallet key. Its
-custody, balance and funded mainnet rehearsal must be verified before public launch.
+The mining vault is `H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT`, the approved operational
+account used by the Worker path for prepared Meteora payouts and sweeps. Its key is a deployment
+secret (`MINING_VAULT_SECRET`), not a user-wallet key. Its custody, balance and funded mainnet
+rehearsal must be verified before public launch. Rewards remain pending until a pool graduates and
+the vault has inventory available for the payout.
 
 ## User assets
 
