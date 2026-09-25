@@ -277,7 +277,7 @@ instruction and a public crank. What replaced it is the advisory alert list on
 | POST | `/api/indexer/coin?mint=` | Re-read one coin from chain now |
 | POST | `/api/indexer/player?wallet=` | Re-read one wallet's account now |
 
-Both only re-read chain. The cron trigger does the same work on a two-minute cadence: a signature
+Both only re-read chain. The cron trigger does the same work on a five-minute cadence: a signature
 sweep (events and trade instructions) and an account sweep (coins, pools, positions, opportunities,
 budgets, sponsor accounts, the protocol config, and every wallet the indexer has seen).
 

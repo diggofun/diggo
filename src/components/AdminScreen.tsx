@@ -111,6 +111,25 @@ function SolscanLink({ href, children }: { href: string | null; children: ReactN
   return href === null ? <>{children}</> : <a href={href} target="_blank" rel="noreferrer">{children}</a>;
 }
 
+export const JOB_STALE_AFTER_SECONDS = 15 * 60;
+
+export function adminJobHealth(
+  data: AdminDashboardPayload,
+  now = data.generatedAt,
+): { status: "Waiting" | "Degraded" | "Healthy"; note: string } {
+  const jobs = [data.jobs.indexer, data.jobs.vaultSweep, data.jobs.cron];
+  if (jobs.some((job) => job.lastSuccessfulAt === null || job.lastSuccessfulAt <= 0)) {
+    return { status: "Waiting", note: "one or more jobs have not run" };
+  }
+  if (jobs.some((job) => now - job.lastSuccessfulAt! > JOB_STALE_AFTER_SECONDS)) {
+    return { status: "Degraded", note: `no successful run in over ${JOB_STALE_AFTER_SECONDS / 60} minutes` };
+  }
+  if (jobs.some((job) => job.lastError !== null)) {
+    return { status: "Degraded", note: "a job reported a newer error" };
+  }
+  return { status: "Healthy", note: "indexer, sweep and cron" };
+}
+
 function AdminDashboardView({ data }: { data: AdminDashboardPayload }) {
   const feeRows = [
     { label: "Partner trading fees", fee: data.fees.partnerTrading },
@@ -121,9 +140,7 @@ function AdminDashboardView({ data }: { data: AdminDashboardPayload }) {
     { label: "Vault sweep", job: data.jobs.vaultSweep },
     { label: "Cron / crank", job: data.jobs.cron },
   ];
-  const hasNeverRun = jobRows.some(({ job }) => job.lastSuccessfulAt === null || job.lastSuccessfulAt <= 0);
-  const hasNewerError = jobRows.some(({ job }) => job.lastError !== null);
-  const jobHealth = hasNeverRun ? "Waiting" : hasNewerError ? "Degraded" : "Healthy";
+  const jobHealth = adminJobHealth(data);
   return (
     <section className="admin-dashboard" aria-label="Operations dashboard">
       <div className="admin-dashboard-meta">
@@ -143,7 +160,7 @@ function AdminDashboardView({ data }: { data: AdminDashboardPayload }) {
         <DashboardKpi label="Claims" value={metricNumber(data.claims.pending)} note={`${metricNumber(data.claims.paid)} paid`} />
         <DashboardKpi label="Players" value={metricNumber(data.players.total)} note={`${metricNumber(data.players.last24h)} new in 24h · ${metricNumber(data.crews.active24h)} active crews`} />
         <DashboardKpi label="Referrals" value={metricNumber(data.referrals.qualified)} note={`${metricNumber(data.referrals.invited)} invited`} />
-        <DashboardKpi label="Job health" value={jobHealth} note={hasNeverRun ? "one or more jobs have not run" : hasNewerError ? "a job reported a newer error" : "indexer, sweep and cron"} />
+        <DashboardKpi label="Job health" value={jobHealth.status} note={jobHealth.note} />
       </div>
       <div className="admin-dashboard-grid">
         <DashboardSection title="Partner fees">

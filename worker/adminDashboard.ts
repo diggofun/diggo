@@ -261,9 +261,9 @@ async function readJobQueries(env: RuntimeEnv, successSql: string, errorSql: str
 
 async function readJobs(env: RuntimeEnv): Promise<AdminDashboardPayload["jobs"]> {
   const [indexer, vaultSweep, cron] = await Promise.all([
-    readJobQueries(env, "SELECT MAX(finished_at) AS at FROM indexer_runs WHERE status = 'OK'", "SELECT finished_at AS at, detail FROM indexer_runs WHERE status <> 'OK' AND finished_at > 0 ORDER BY finished_at DESC LIMIT 1"),
-    readJobQueries(env, "SELECT MAX(updated_at) AS at FROM meteora_vault_operations WHERE status = 'SETTLED' AND kind = 'WITHDRAW_LEFTOVER'", "SELECT updated_at AS at, error AS detail FROM meteora_vault_operations WHERE status = 'FAILED' AND error IS NOT NULL ORDER BY updated_at DESC LIMIT 1"),
-    readJobQueries(env, "SELECT MAX(created_at) AS at FROM crank_runs WHERE status = 'SENT'", "SELECT created_at AS at, detail FROM crank_runs WHERE status = 'FAILED' AND detail IS NOT NULL ORDER BY created_at DESC LIMIT 1"),
+    readJobQueries(env, "SELECT MAX(finished_at) AS at FROM indexer_runs WHERE kind = 'meteora:index' AND status = 'OK'", "SELECT finished_at AS at, detail FROM indexer_runs WHERE kind = 'meteora:index' AND status = 'FAILED' AND finished_at > 0 ORDER BY finished_at DESC LIMIT 1"),
+    readJobQueries(env, "SELECT MAX(finished_at) AS at FROM indexer_runs WHERE kind = 'meteora:vault-sweep' AND status = 'OK'", "SELECT finished_at AS at, detail FROM indexer_runs WHERE kind = 'meteora:vault-sweep' AND status = 'FAILED' AND finished_at > 0 ORDER BY finished_at DESC LIMIT 1"),
+    readJobQueries(env, "SELECT MAX(finished_at) AS at FROM indexer_runs WHERE kind = 'cron:meteora' AND status = 'OK'", "SELECT finished_at AS at, detail FROM indexer_runs WHERE kind = 'cron:meteora' AND status = 'FAILED' AND finished_at > 0 ORDER BY finished_at DESC LIMIT 1"),
   ]);
   return { indexer, vaultSweep, cron };
 }

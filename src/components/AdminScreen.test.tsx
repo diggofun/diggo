@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   ClaimedCell,
+  JOB_STALE_AFTER_SECONDS,
+  adminJobHealth,
   claimedValueDisplay,
   lamportsToExactSol,
   type ClaimedValueFields,
 } from "./AdminScreen";
+import type { AdminDashboardPayload } from "../../shared/adminDashboard";
 
 /**
  * The claimed column, pinned against the false zero.
@@ -19,6 +22,15 @@ import {
  */
 
 const SOL = 1_000_000_000;
+
+function dashboardJobs(lastSuccessfulAt: number | null, lastError: string | null = null) {
+  const job = { lastSuccessfulAt, lastError };
+  return { indexer: job, vaultSweep: job, cron: job };
+}
+
+function dashboardWithJobs(jobs: AdminDashboardPayload["jobs"]): AdminDashboardPayload {
+  return { jobs, generatedAt: 1_000 } as AdminDashboardPayload;
+}
 
 function account(fields: Partial<ClaimedValueFields>): ClaimedValueFields {
   return { claimedValueUsd: 0, ...fields };
@@ -38,6 +50,29 @@ describe("lamportsToExactSol", () => {
     expect(lamportsToExactSol("1.5")).toBeNull();
     expect(lamportsToExactSol("-1")).toBeNull();
     expect(lamportsToExactSol("not-a-count")).toBeNull();
+  });
+});
+
+describe("admin job health", () => {
+  const now = 1_000;
+
+  it("allows a fresh five-minute run and reports a stale scheduled job as degraded", () => {
+    const fresh = dashboardWithJobs(dashboardJobs(now - 5 * 60));
+    const stale = dashboardWithJobs(dashboardJobs(now - JOB_STALE_AFTER_SECONDS - 1));
+
+    expect(adminJobHealth(fresh, now).status).toBe("Healthy");
+    expect(adminJobHealth(stale, now)).toEqual({
+      status: "Degraded",
+      note: "no successful run in over 15 minutes",
+    });
+  });
+
+  it("waits for a first run and reports a newer error after all jobs have run", () => {
+    expect(adminJobHealth(dashboardWithJobs(dashboardJobs(null)), now).status).toBe("Waiting");
+    expect(adminJobHealth(dashboardWithJobs(dashboardJobs(now - 60, "RPC unavailable")), now)).toEqual({
+      status: "Degraded",
+      note: "a job reported a newer error",
+    });
   });
 });
 
