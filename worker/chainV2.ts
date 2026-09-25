@@ -13,6 +13,9 @@ import {
   type Base58EncodedBytes,
   address,
   createSolanaRpc,
+  createDefaultRpcTransport,
+  createSolanaRpcFromTransport,
+  type RpcTransport,
   type Instruction,
   type KeyPairSigner,
   type Rpc,
@@ -72,6 +75,8 @@ export const LAMPORTS_PER_SOL = 1_000_000_000;
 export interface ChainEnv {
   SOLANA_CLUSTER?: string;
   DIGGO_RPC_URL?: string;
+  /** Comma-separated fallback RPC endpoints, tried after DIGGO_RPC_URL. */
+  DIGGO_RPC_URLS?: string;
   DIGGO_PROGRAM_ID: string;
   /** Present in deployed and local Wrangler runtimes when the version_metadata binding exists. */
   CF_VERSION_METADATA?: { id: string; tag: string; timestamp: string };
@@ -90,6 +95,7 @@ export interface ResolvedChainConfig {
   cluster: SolanaCluster;
   programId: Address;
   rpcUrl: string;
+  rpcUrls: string[];
 }
 
 function isValidBase58Address(value: string): boolean {
@@ -107,6 +113,51 @@ function isValidHttpUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function rpcUrlsFromEnv(primary: string | undefined, fallbacks: string | undefined): string[] {
+  const values = [primary, ...(fallbacks ?? "").split(/[\s,]+/)]
+    .map((value) => value?.trim() ?? "")
+    .filter((value) => value.length > 0);
+  const urls: string[] = [];
+  for (const value of values) {
+    if (!isValidHttpUrl(value)) throw new ChainConfigurationError("RPC endpoints must be absolute HTTP(S) URLs without embedded credentials");
+    if (!urls.includes(value)) urls.push(value);
+  }
+  return urls;
+}
+
+function isFailoverError(error: unknown): boolean {
+  const candidate = error as { context?: { statusCode?: number }; statusCode?: number; message?: string };
+  const status = candidate?.context?.statusCode ?? candidate?.statusCode;
+  if (status === 403 || status === 429 || (typeof status === "number" && status >= 500)) return true;
+  const message = String(candidate?.message ?? error ?? "").toLowerCase();
+  return /http (403|429|5\d\d)|too many requests|rate limit|server error|service unavailable|bad gateway|gateway timeout|fetch failed|network error/.test(message);
+}
+
+function isFailoverResponse(response: unknown): boolean {
+  const error = (response as { error?: { code?: number; message?: string } } | null)?.error;
+  if (!error) return false;
+  if (error.code === 429 || error.code === -32005) return true;
+  return isFailoverError(error);
+}
+
+function createFailoverTransport(urls: string[]): RpcTransport {
+  const transports = urls.map((url) => createDefaultRpcTransport({ url: url as never }) as RpcTransport);
+  return async function failoverTransport<TResponse>(config: Parameters<RpcTransport>[0]): Promise<TResponse> {
+    let lastError: unknown;
+    for (const transport of transports) {
+      try {
+        const response = await transport(config);
+        if (!isFailoverResponse(response)) return response as TResponse;
+        lastError = response;
+      } catch (error) {
+        if (!isFailoverError(error)) throw error;
+        lastError = error;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("all Solana RPC endpoints failed");
+  };
 }
 
 /**
@@ -155,20 +206,20 @@ export function resolveChainConfig(env: ChainEnv, options: { deployed?: boolean 
   }
 
   const configuredRpc = env.DIGGO_RPC_URL?.trim();
-  if (configuredRpc && !isValidHttpUrl(configuredRpc)) {
-    throw new ChainConfigurationError("DIGGO_RPC_URL must be an absolute HTTP(S) URL without embedded credentials");
-  }
-  if (cluster === "mainnet-beta" && !configuredRpc) {
+  const configuredRpcUrls = rpcUrlsFromEnv(configuredRpc, env.DIGGO_RPC_URLS);
+  if (cluster === "mainnet-beta" && configuredRpcUrls.length === 0) {
     throw new ChainConfigurationError("DIGGO_RPC_URL is required for mainnet-beta");
   }
-  if (options.deployed && !configuredRpc) {
+  if (options.deployed && configuredRpcUrls.length === 0) {
     throw new ChainConfigurationError("DIGGO_RPC_URL is required for deployed environments");
   }
 
+  const rpcUrls = configuredRpcUrls.length > 0 ? configuredRpcUrls : [DEFAULT_DEVNET_RPC];
   return {
     cluster,
     programId: address(programId),
-    rpcUrl: configuredRpc || DEFAULT_DEVNET_RPC,
+    rpcUrl: rpcUrls[0]!,
+    rpcUrls,
   };
 }
 
@@ -176,10 +227,13 @@ let cachedRpc: Rpc<SolanaRpcApi> | null = null;
 let cachedRpcUrl: string | null = null;
 
 export function getChainRpc(env: ChainEnv): Rpc<SolanaRpcApi> {
-  const url = resolveChainConfig(env, { deployed: !isLocalChainRuntime(env) }).rpcUrl;
-  if (cachedRpc && cachedRpcUrl === url) return cachedRpc;
-  cachedRpc = createSolanaRpc(url);
-  cachedRpcUrl = url;
+  const config = resolveChainConfig(env, { deployed: !isLocalChainRuntime(env) });
+  const key = config.rpcUrls.join("\n");
+  if (cachedRpc && cachedRpcUrl === key) return cachedRpc;
+  cachedRpc = config.rpcUrls.length === 1
+    ? createSolanaRpc(config.rpcUrls[0] as never)
+    : createSolanaRpcFromTransport(createFailoverTransport(config.rpcUrls));
+  cachedRpcUrl = key;
   return cachedRpc;
 }
 
