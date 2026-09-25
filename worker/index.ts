@@ -73,7 +73,7 @@ import {
 } from "./tokens";
 import type { IndexerJob } from "./v2/types";
 import { officialMintFromEnv } from "../shared/officialMint";
-import { handleMeteoraGameRoute, meteoraBootstrap, meteoraConfig, meteoraMineInfo, meteoraPlayerProfile, meteoraPortfolio, runMeteoraScheduled } from "./modes/meteora";
+import { handleMeteoraGameRoute, meteoraBootstrap, meteoraConfig, meteoraMineInfo, meteoraPlayerProfile, meteoraPortfolio, meteoraTokenBySlug, runMeteoraScheduled } from "./modes/meteora";
 import { registerMeteoraPool } from "./meteora/registration";
 
 // The TokenMarket Durable Object is exported from the entry module so the MARKETS binding in
@@ -92,6 +92,8 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
       if (request.method === "GET" && pathname === "/api/config") return json(meteoraConfig(env));
       if (request.method === "GET" && pathname === "/api/bootstrap") return meteoraBootstrap(env, ctx);
       if (request.method === "GET" && pathname === "/api/tokens") return meteoraBootstrap(env, ctx);
+      const meteoraTokenMatch = pathname.match(/^\/api\/tokens\/([^/]+)$/);
+      if (request.method === "GET" && meteoraTokenMatch) return meteoraTokenBySlug(env, meteoraTokenMatch[1]!);
       if (request.method === "POST" && pathname === "/api/meteora/pools/register") return registerMeteoraPool(request, env);
       const meteoraPlayerMatch = pathname.match(/^\/api\/player\/([^/]+)$/);
       if (request.method === "GET" && meteoraPlayerMatch) return meteoraPlayerProfile(env, meteoraPlayerMatch[1]!);
