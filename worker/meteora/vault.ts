@@ -285,7 +285,7 @@ async function withdrawPoolLeftover(
 export async function runVaultSweep(env: MeteoraRpcEnv): Promise<{ checked: number; withdrawn: number; failed: number; balances: number }> {
   const signer = await loadMiningVaultSigner(env);
   const rawLimit = optionalEnv(env, "MINING_VAULT_SWEEP_LIMIT");
-  const limit = rawLimit && /^\d+$/.test(rawLimit) ? Math.min(50, Math.max(1, Number(rawLimit))) : 10;
+  const limit = rawLimit && /^\d+$/.test(rawLimit) ? Math.min(50, Math.max(1, Number(rawLimit))) : 50;
   const rows = await env.DB.prepare(
     "SELECT pool, base_mint, config, creator, base_vault, is_migrated, is_leftover_withdrawn FROM meteora_pools" +
     " WHERE is_graduated=1 AND is_leftover_withdrawn=0 ORDER BY indexed_at ASC LIMIT ?1",

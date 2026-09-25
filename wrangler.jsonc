@@ -29,7 +29,7 @@
     "MINING_VAULT_PUBLIC_KEY": "6i6EuPmUrg8R6zehqQKFd2XoE5A3mYjZQhm9u6ocBo7d",
     "MINING_CLAIM_PER_CLAIM": "250000000",
     "MINING_CLAIM_PER_DAY": "1000000000",
-    "MINING_VAULT_SWEEP_LIMIT": "10",
+    "MINING_VAULT_SWEEP_LIMIT": "50",
     // diggo.fun is intentionally still on devnet. DIGGO_RPC_URL is a deployed Worker secret;
     // DIGGO_RPC_URLS remains the ordered free fallback list. Change cluster, program id, treasury
     // and RPC endpoint together when moving networks.
@@ -47,9 +47,10 @@
     // turns the bot off without removing the secret.
     "CRANK_ENABLED": "1",
     // Indexer tuning. Bounded so one cron pass cannot run past its budget on a busy program.
-    "INDEXER_SIGNATURE_LIMIT": "100",
+    // The per-pass limits preserve the previous per-minute throughput on a five-minute cadence.
+    "INDEXER_SIGNATURE_LIMIT": "500",
     "INDEXER_MAX_PAGES": "3",
-    "INDEXER_COIN_LIMIT": "200",
+    "INDEXER_COIN_LIMIT": "1000",
     // Price oracle (worker/oracle.ts, docs/SECURITY.md "Price oracle"). Every one of these has a
     // working default - the public Jupiter and Pyth endpoints and the published SOL/USD feed id -
     // so they are listed rather than set: an empty string is not an override, it just falls back.
@@ -121,7 +122,7 @@
   "triggers": {
     // Indexing runs on a short cadence because the index is what the read API serves; the
     // advisory sweeps (social, risk, crank) ride along on the same tick and are all idempotent.
-    "crons": ["* * * * *"]
+    "crons": ["*/5 * * * *"]
   },
   // Analytics Engine is deliberately NOT bound: the Cloudflare account this Worker deploys to
   // has Analytics Engine disabled, and a deploy that declares an analytics_engine_datasets
@@ -179,7 +180,7 @@
         "MINING_VAULT_PUBLIC_KEY": "6i6EuPmUrg8R6zehqQKFd2XoE5A3mYjZQhm9u6ocBo7d",
         "MINING_CLAIM_PER_CLAIM": "250000000",
         "MINING_CLAIM_PER_DAY": "1000000000",
-        "MINING_VAULT_SWEEP_LIMIT": "10",
+        "MINING_VAULT_SWEEP_LIMIT": "50",
         // Staging is also a deployed devnet environment and provides DIGGO_RPC_URL as a secret.
         "DIGGO_RPC_URLS": "https://api.devnet.solana.com https://solana-devnet.gateway.tatum.io",
         "POSTHOG_API_KEY": "phc_rUmzX7ft4ue8iLqACMEe8NgaJphvWYVD9WtwRGfC6nQK",
@@ -190,9 +191,9 @@
         "DIGGO_TREASURY": "3YwWHow5jFCtE3vQGadPiLi83eNRwDaEmCZebuEx71PQ",
         "VANITY_SUFFIX": "diggo",
         "CRANK_ENABLED": "0",
-        "INDEXER_SIGNATURE_LIMIT": "100",
+        "INDEXER_SIGNATURE_LIMIT": "500",
         "INDEXER_MAX_PAGES": "3",
-        "INDEXER_COIN_LIMIT": "200",
+        "INDEXER_COIN_LIMIT": "1000",
         // Same oracle and RNG knobs as production, listed for discoverability. Staging keeps the
         // day-long epoch so its commitment schedule matches production; only the API keys differ,
         // and those are per-environment secrets.
@@ -261,7 +262,7 @@
       },
       "triggers": {
         // Staging runs the same cadence so cron paths are exercised before production.
-        "crons": ["* * * * *"]
+        "crons": ["*/5 * * * *"]
       },
       // Same account-level Analytics Engine restriction as production; see the comment above
       // the production block. Staging metrics stay in the staging D1 database.

@@ -62,9 +62,9 @@ npm run db:local
 # or: npm run db:production
 ```
 
-The scheduled handler runs every minute (`* * * * *`). In Meteora mode it runs the Meteora pool
-indexer, vault sweep (when the secret exists), game mine registration/graduation propagation, and
-referral settlement. It does not run the native crank or native index/reconciliation jobs. In
+The scheduled handler runs every five minutes (`*/5 * * * *`). In Meteora mode it runs the Meteora
+pool indexer, vault sweep (when the secret exists), game mine registration/graduation propagation,
+and referral settlement. It does not run the native crank or native index/reconciliation jobs. In
 native mode those native jobs remain the scheduled path.
 
 For a local devnet smoke run:
@@ -302,7 +302,7 @@ moment the binding is restored.
    a risky change, use `npx wrangler versions upload` followed by `npx wrangler versions deploy
    <version-id>@10%` and ramp 10% → 50% → 100% while watching error rates and the cron log lines.
 7. **Verify after deploy.** `/api/config` and `/api/status`; the `indexer.cron` log line every
-   two minutes showing accounts and events; `/api/discovery/seeds` returning a seed for the running
+   five minutes showing accounts and events; `/api/discovery/seeds` returning a seed for the running
    epoch; then one full devnet pass driven from the client - launch, buy, activate, assign,
    advance, seed commit, roll, settle, sweep and graduate - with the index following along. If the
    crank is enabled, `/api/status` should show its recent runs.
@@ -331,9 +331,9 @@ moment the binding is restored.
 - **The Durable Object mutex is retired** by its own migration tag (`v3`,
   `deleted_classes: ["PlayerLock"]`), so a deployment that already applied `v2` still converges.
   There is no server-side mutation left to serialise.
-- **The cron cadence is two minutes**, down from five, because the index is what the read API
-  serves. Every step in the tick is idempotent and independently guarded, so one failing step never
-  costs the pass its chain reads.
+- **The cron cadence is five minutes.** The bounded indexer and vault-sweep limits are sized to keep
+  up with the longer interval. Every step in the tick is idempotent and independently guarded, so one
+  failing step never costs the pass its chain reads.
 
 ### Fresh devnet deploy, step by step
 

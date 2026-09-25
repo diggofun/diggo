@@ -13,6 +13,7 @@ import type { RuntimeEnv } from "./env";
 import {
   coinSlug,
   ensurePlayerRow,
+  recordJobRun,
   writeCoin,
   writePlayerAccount,
   writePosition,
@@ -77,6 +78,18 @@ const OWNER = address(bs58.encode(new Uint8Array(32).fill(9)));
 const COIN = address(bs58.encode(new Uint8Array(32).fill(11)));
 const MINT = address(bs58.encode(new Uint8Array(32).fill(12)));
 const PLAYER = address(bs58.encode(new Uint8Array(32).fill(13)));
+
+describe("recordJobRun", () => {
+  it("upserts one stable row so idle scheduled jobs still advance", async () => {
+    const { env, calls } = recordingDb();
+    await recordJobRun(env, "cron:meteora", "OK", { accounts: 2, events: 1 });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.sql).toContain("ON CONFLICT(id) DO UPDATE");
+    expect(calls[0]!.args.slice(0, 3)).toEqual(["job:cron:meteora", "cron:meteora", expect.any(Number)]);
+    expect(calls[0]!.args.slice(3)).toEqual([2, 1, "OK", null]);
+  });
+});
 
 const playerAccount: DecodedPlayerAccount = {
   createdSlot: 1_234n,

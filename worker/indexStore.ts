@@ -88,6 +88,28 @@ export async function finishRun(
     .run();
 }
 
+/**
+ * Records the latest completion of an operational job. One stable row per kind keeps dashboard
+ * health independent of whether the job had work to do, without growing a run log every tick.
+ */
+export async function recordJobRun(
+  env: RuntimeEnv,
+  kind: string,
+  status: "OK" | "FAILED",
+  result: IndexerRunResult = { accounts: 0, events: 0 },
+): Promise<void> {
+  const now = nowSeconds();
+  await env.DB.prepare(
+    "INSERT INTO indexer_runs (id, kind, started_at, finished_at, accounts, events, status, detail)" +
+      " VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6, ?7)" +
+      " ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, started_at=excluded.started_at," +
+      " finished_at=excluded.finished_at, accounts=excluded.accounts, events=excluded.events," +
+      " status=excluded.status, detail=excluded.detail",
+  )
+    .bind(`job:${kind}`, kind, now, result.accounts, result.events, status, result.detail ?? null)
+    .run();
+}
+
 /** One advisory alert. It can inform support and rate limit an HTTP surface; that is all. */
 export async function recordAdvisory(
   env: RuntimeEnv,

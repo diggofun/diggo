@@ -175,9 +175,9 @@ Pool discovery does not depend on providers allowing `getProgramAccounts`. On ev
 launch, the client posts the derived pool address to `/api/meteora/pools/register`; the Worker
 reads that account with `getAccountInfo`, requires the DBC pool discriminator and config field to
 match `METEORA_DBC_CONFIG`, requires the on-chain creator to equal the authenticated wallet, and
-only then inserts it. Independently, cron scans signatures on the configured PoolConfig account,
-extracts DBC `EvtInitialize` records, and verifies each candidate pool the same way. This covers
-pools created outside the Diggo client as well as the smoke pool already on devnet.
+only then inserts it. Independently, the five-minute cron scans signatures on the configured
+PoolConfig account, extracts DBC `EvtInitialize` records, and verifies each candidate pool the same
+way. This covers pools created outside the Diggo client as well as the smoke pool already on devnet.
 
 The local Wrangler smoke harness cannot prove the anonymous path end to end from this machine:
 `getAccountInfo` and `getSignaturesForAddress` succeed with direct HTTP requests, but the Worker

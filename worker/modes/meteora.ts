@@ -18,6 +18,7 @@ import { apiError, checkRateLimit, checkWalletRateLimit, isBase58Address, json }
 import { getChainRpc, LAMPORTS_PER_SOL } from "../chainV2";
 import { payMiningClaim, runMeteoraIndexer, runVaultSweep } from "../meteora";
 import { readSignatures } from "../meteora/rpc";
+import { recordJobRun } from "../indexStore";
 
 const METEORA_RPC_FALLBACK = "https://api.devnet.solana.com";
 type RuntimeEnvLike = GameEnv;
@@ -201,7 +202,17 @@ export function meteoraGameContext(env: RuntimeEnvLike): GameHandlerContext {
 }
 
 export async function runMeteoraScheduled(env: RuntimeEnvLike) {
-  const indexed = await runMeteoraIndexer(rpcEnv(env));
+  let indexed: Awaited<ReturnType<typeof runMeteoraIndexer>>;
+  try {
+    indexed = await runMeteoraIndexer(rpcEnv(env));
+    await recordJobRun(env, "meteora:index", "OK", {
+      accounts: indexed.pools,
+      events: indexed.events,
+    });
+  } catch (error) {
+    await recordJobRun(env, "meteora:index", "FAILED", { accounts: 0, events: 0, detail: String(error) });
+    throw error;
+  }
   const now = nowSeconds();
   const config = String(env.METEORA_DBC_CONFIG || "");
   await env.DB.prepare(
@@ -213,9 +224,19 @@ export async function runMeteoraScheduled(env: RuntimeEnvLike) {
     "UPDATE game_mines SET graduated=(SELECT is_graduated FROM meteora_pools WHERE meteora_pools.base_mint=game_mines.mint AND meteora_pools.config=?1), updated_at=?2 " +
     "WHERE EXISTS (SELECT 1 FROM meteora_pools WHERE meteora_pools.base_mint=game_mines.mint AND meteora_pools.config=?1)",
   ).bind(config, now).run();
-  const sweep = String(env.MINING_VAULT_SECRET || "")
-    ? await runVaultSweep(rpcEnv(env))
-    : { checked: 0, withdrawn: 0, failed: 0, balances: 0, skipped: true as const };
+  let sweep: Awaited<ReturnType<typeof runVaultSweep>> | { checked: number; withdrawn: number; failed: number; balances: number; skipped: true };
+  try {
+    sweep = String(env.MINING_VAULT_SECRET || "")
+      ? await runVaultSweep(rpcEnv(env))
+      : { checked: 0, withdrawn: 0, failed: 0, balances: 0, skipped: true as const };
+    await recordJobRun(env, "meteora:vault-sweep", "OK", {
+      accounts: sweep.checked,
+      events: sweep.withdrawn,
+    });
+  } catch (error) {
+    await recordJobRun(env, "meteora:vault-sweep", "FAILED", { accounts: 0, events: 0, detail: String(error) });
+    throw error;
+  }
   return { indexed, sweep };
 }
 

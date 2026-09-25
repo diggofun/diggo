@@ -31,6 +31,7 @@ import {
   refreshCoin,
   refreshPlayer,
 } from "./indexing";
+import { recordJobRun } from "./indexStore";
 import { leaderboards } from "./leaderboard";
 import { chainReachable, mineInfo, mineReport } from "./mine";
 import { getNotifications, markNotificationsRead, runSocialCron } from "./notifications";
@@ -313,10 +314,12 @@ export default {
     ctx: ExecutionContext,
   ): Promise<void> {
     if (String(env.CHAIN_MODE || "meteora") !== "native") {
+      let cronStatus: "OK" | "FAILED" = "OK";
       try {
         const result = await runMeteoraScheduled(env);
         console.log(JSON.stringify({ event: "meteora.cron", ...result }));
       } catch (error) {
+        cronStatus = "FAILED";
         console.error(JSON.stringify({ event: "meteora.cron_failed", error: String(error) }));
         ctx.waitUntil(reportError(env, error, { trigger: "scheduled", step: "meteora" }));
       }
@@ -324,7 +327,17 @@ export default {
         const referrals = await sweepMeteoraReferralOre(env);
         console.log(JSON.stringify({ event: "referrals.meteora", ...referrals }));
       } catch (error) {
+        cronStatus = "FAILED";
         console.error(JSON.stringify({ event: "referrals.meteora_failed", error: String(error) }));
+      }
+      try {
+        await recordJobRun(env, "cron:meteora", cronStatus, {
+          accounts: 0,
+          events: 0,
+          detail: cronStatus === "FAILED" ? "one or more Meteora scheduled steps failed" : undefined,
+        });
+      } catch (error) {
+        console.error(JSON.stringify({ event: "cron.bookkeeping_failed", error: String(error) }));
       }
       return;
     }

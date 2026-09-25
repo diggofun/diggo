@@ -163,7 +163,7 @@ function boundedInt(raw: string | undefined, fallback: number, min: number, max:
 
 /** Signatures per RPC page. Helius caps this at 1,000. */
 export const signatureLimit = (env: RuntimeEnv): number =>
-  boundedInt(env.INDEXER_SIGNATURE_LIMIT, 100, 1, 1_000);
+  boundedInt(env.INDEXER_SIGNATURE_LIMIT, 500, 1, 1_000);
 
 /** Pages of signatures per pass, so a backlog is worked off over several passes. */
 export const maxSignaturePages = (env: RuntimeEnv): number =>
@@ -171,7 +171,7 @@ export const maxSignaturePages = (env: RuntimeEnv): number =>
 
 /** Coin accounts re-read per pass. */
 export const coinLimit = (env: RuntimeEnv): number =>
-  boundedInt(env.INDEXER_COIN_LIMIT, 200, 1, 2_000);
+  boundedInt(env.INDEXER_COIN_LIMIT, 1_000, 1, 2_000);
 
 /**
  * Whether the optional crank bot should run. Off unless a key is present and nothing explicitly
