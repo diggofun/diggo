@@ -15,6 +15,7 @@ import {
 } from "./types";
 
 export const METEORA_CONFIG_OFFSET = 72;
+export const MAX_SUPPORTED_TRANSACTION_VERSION = 1;
 export const VIRTUAL_POOL_DISCRIMINATOR = Uint8Array.of(213, 224, 5, 209, 98, 69, 119, 92);
 export const TRANSFER_HOOK_POOL_DISCRIMINATOR = Uint8Array.of(237, 219, 184, 23, 42, 189, 169, 35);
 // PoolConfig is a fixed-layout bytemuck account. These offsets include the
@@ -157,7 +158,8 @@ export async function readProgramAccounts(
     encoding: "base64",
     filters: memcmp ? [{ memcmp }] : [],
   } as never).send();
-  const entries = (response as { value?: unknown[] }).value ?? [];
+  // Without `withContext` the RPC returns a bare array; with it, `{ context, value }`.
+  const entries = Array.isArray(response) ? response as unknown[] : (response as { value?: unknown[] }).value ?? [];
   return entries.map((item) => {
     const entry = item as { pubkey: string; account: { lamports: number | bigint; data: unknown; owner?: string } };
     return {
@@ -237,7 +239,9 @@ async function readTransactionAtCommitment(
   const response = await getChainRpc(meteoraRpcEnv(env)).getTransaction(signature as never, {
     commitment,
     encoding: "json",
-    maxSupportedTransactionVersion: 0,
+    // Mainnet now carries version 1 transactions (for example DBC swaps routed through
+    // aggregators). Requesting only version 0 makes the RPC reject the whole call.
+    maxSupportedTransactionVersion: MAX_SUPPORTED_TRANSACTION_VERSION,
   } as never).send();
   const value = response as unknown as {
     slot: number | bigint;
@@ -245,6 +249,7 @@ async function readTransactionAtCommitment(
     meta?: {
       err?: unknown;
       logMessages?: string[] | null;
+      loadedAddresses?: { writable?: string[] | null; readonly?: string[] | null } | null;
       innerInstructions?: Array<{ instructions?: unknown[] }> | null;
       preTokenBalances?: Array<{ accountIndex?: unknown; mint?: unknown; owner?: unknown; uiTokenAmount?: { amount?: unknown } }> | null;
       postTokenBalances?: Array<{ accountIndex?: unknown; mint?: unknown; owner?: unknown; uiTokenAmount?: { amount?: unknown } }> | null;
@@ -252,7 +257,12 @@ async function readTransactionAtCommitment(
     transaction?: { signatures?: string[]; message?: { accountKeys?: Array<string | { pubkey: string }>; instructions?: unknown[] } };
   } | null;
   if (!value) return null;
-  const keys = value.transaction?.message?.accountKeys ?? [];
+  // Instruction and token-balance indexes address static keys followed by lookup-table keys.
+  const keys: Array<string | { pubkey: string }> = [
+    ...(value.transaction?.message?.accountKeys ?? []),
+    ...(value.meta?.loadedAddresses?.writable ?? []),
+    ...(value.meta?.loadedAddresses?.readonly ?? []),
+  ];
   const topLevel = value.transaction?.message?.instructions ?? [];
   const inner = (value.meta?.innerInstructions ?? []).flatMap((group) => group.instructions ?? []);
   const accountAt = (value: unknown): string => {
@@ -314,7 +324,7 @@ async function readTransactionWireAtCommitment(
   const response = await getChainRpc(meteoraRpcEnv(env)).getTransaction(signature as never, {
     commitment,
     encoding: "base64",
-    maxSupportedTransactionVersion: 0,
+    maxSupportedTransactionVersion: MAX_SUPPORTED_TRANSACTION_VERSION,
   } as never).send();
   const value = response as unknown as { transaction?: unknown } | null;
   return value ? wireBase64(value.transaction) : null;
