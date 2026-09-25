@@ -38,6 +38,7 @@ import bs58 from "bs58";
 import { DEVICE_HEADER, deviceId } from "./device";
 import type { ChainMode } from "../shared/meteora";
 import { normalizeMeteoraConfigPubkey } from "../shared/meteora";
+import { normalizeTokenSummaries, normalizeTokenSummary } from "./tokenSummary";
 import { officialMintFromEnv } from "../shared/officialMint";
 import type { AdminDashboardPayload } from "../shared/adminDashboard";
 
@@ -237,7 +238,7 @@ export async function getBootstrap(): Promise<Bootstrap> {
       vanitySuffix: data.vanitySuffix ?? "diggo",
     };
     void startAnalytics(config);
-    return { tokens: data.tokens ?? [], config };
+    return { tokens: normalizeTokenSummaries(data.tokens), config };
   } catch {
     return {
       tokens: [],
@@ -255,8 +256,10 @@ export async function getBootstrap(): Promise<Bootstrap> {
 }
 
 export async function getToken(mintOrSlug: string): Promise<TokenSummary> {
-  const data = await getJson<{ token: TokenSummary }>("/api/tokens/" + encodeURIComponent(mintOrSlug));
-  return data.token;
+  const data = await getJson<{ token: unknown }>("/api/tokens/" + encodeURIComponent(mintOrSlug));
+  const token = normalizeTokenSummary(data.token);
+  if (!token) throw new Error("Token not found");
+  return token;
 }
 
 export async function getChallenge(wallet: string): Promise<{ nonce: string; message: string }> {
