@@ -17,7 +17,10 @@ import { isMeteoraConfigPubkey } from "../../shared/meteora";
 export const METEORA_RPC_ENDPOINT = RPC_ENDPOINT;
 
 export function createMeteoraConnection(): Connection {
-  return new Connection(METEORA_RPC_ENDPOINT, "confirmed");
+  // Web3.js requires an absolute HTTP(S) endpoint; the proxy path is relative so it stays
+  // on the current origin without putting a provider URL or API key in the browser bundle.
+  const endpoint = new URL(METEORA_RPC_ENDPOINT, globalThis.location.href).toString();
+  return new Connection(endpoint, "confirmed");
 }
 
 export function createMeteoraClient(connection = createMeteoraConnection()): DynamicBondingCurveClient {
