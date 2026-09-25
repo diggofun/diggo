@@ -1,9 +1,3 @@
--- Keep already-migrated databases aligned with the native program's 1..=250 ORE per-credit rule.
+-- The 1..=250 ORE rule is now a table CHECK in 0029. Remove the legacy trigger shape because
+-- Wrangler's remote migration splitter cannot ingest semicolons inside trigger bodies.
 DROP TRIGGER IF EXISTS game_referral_credit_limit;
-
-CREATE TRIGGER game_referral_credit_limit
-BEFORE INSERT ON game_referral_credits
-WHEN CAST(NEW.ore_amount AS INTEGER) < 1 OR CAST(NEW.ore_amount AS INTEGER) > 250
-BEGIN
-  SELECT RAISE(ABORT, 'game referral credit must be between 1 and 250 ORE');
-END;

@@ -100,7 +100,7 @@ describe("D1 game store", () => {
     expect((await store.getMine(MINT))?.paid).toBe(10n);
   });
 
-  it("dispatches discovery through the migration trigger and preserves idempotency", async () => {
+  it("dispatches discovery atomically and preserves idempotency", async () => {
     const store = harness();
     await store.ensureMine(MINT, 0, 1, 1);
     const record = { id: "discovery-1", wallet: WALLET, mint: MINT, amount: 1_000_000n, claimId: "discovery-claim-1", epoch: 1, createdAt: 2 };
@@ -118,6 +118,7 @@ describe("D1 game store", () => {
     }
     expect(await store.applyReferralCredit({ id: "ref-25", referrer: REFERRER, referee: "referee-25", amount: 250, week: 1, createdAt: 25 })).toBe(false);
     expect(await store.applyReferralCredit({ id: "ref-3", referrer: REFERRER, referee: "referee-3", amount: 250, week: 1, createdAt: 11 })).toBe(false);
+    expect(await store.applyReferralCredit({ id: "ref-3-new", referrer: REFERRER, referee: "referee-3", amount: 250, week: 1, createdAt: 12 })).toBe(false);
     expect(await store.applyReferralCredit({ id: "ref-over", referrer: REFERRER, referee: "referee-over", amount: 251, week: 2, createdAt: 26 })).toBe(false);
     expect(await store.referralWeekTotals(REFERRER, 1)).toEqual({ count: 25, ore: 6250 });
     expect((await store.getPlayer(REFERRER))?.oreBalance).toBe(6250);
