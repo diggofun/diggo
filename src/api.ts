@@ -38,7 +38,7 @@ import bs58 from "bs58";
 import { DEVICE_HEADER, deviceId } from "./device";
 import type { ChainMode } from "../shared/meteora";
 import { normalizeMeteoraConfigPubkey } from "../shared/meteora";
-import { normalizeTokenSummaries, normalizeTokenSummary } from "./tokenSummary";
+import { normalizeMineInfo, normalizeTokenSummaries, normalizeTokenSummary } from "./tokenSummary";
 import { officialMintFromEnv } from "../shared/officialMint";
 import type { AdminDashboardPayload } from "../shared/adminDashboard";
 
@@ -366,8 +366,10 @@ export async function registerLaunchedToken(
  * through the Worker has no endpoint to call, because the Worker has no way to decide either. */
 
 export async function getMineInfo(mint: string): Promise<MineInfo> {
-  const data = await getJson<{ mine: MineInfo }>("/api/mines/" + encodeURIComponent(mint) + "/info");
-  return data.mine;
+  const data = await getJson<{ mine: unknown }>("/api/mines/" + encodeURIComponent(mint) + "/info");
+  const mine = normalizeMineInfo(data.mine);
+  if (!mine) throw new Error("Mine not found");
+  return mine;
 }
 
 /**

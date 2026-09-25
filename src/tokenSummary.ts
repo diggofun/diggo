@@ -1,4 +1,4 @@
-import type { CurveMiningSummary, TokenStatus, TokenSummary } from "../shared/types";
+import type { CurveMiningSummary, MineInfo, TokenStatus, TokenSummary } from "../shared/types";
 
 const TOKEN_STATUSES: readonly TokenStatus[] = ["LAUNCHING", "MINING_ACTIVE", "FULLY_MINED", "CURVE_CAP_REACHED"];
 
@@ -81,4 +81,46 @@ export function normalizeTokenSummary(input: unknown): TokenSummary | null {
 export function normalizeTokenSummaries(input: unknown): TokenSummary[] {
   if (!Array.isArray(input)) return [];
   return input.map(normalizeTokenSummary).filter((token): token is TokenSummary => token !== null);
+}
+
+
+/**
+ * Completes a mine info payload the same way. The Meteora /api/mines/:mint/info route serves a slim
+ * row without curveMining or accounting, which MineInfoPanel dereferences directly.
+ */
+export function normalizeMineInfo(input: unknown): MineInfo | null {
+  if (!input || typeof input !== "object") return null;
+  const raw = input as Partial<Record<keyof MineInfo, unknown>> & { graduated?: unknown };
+  if (typeof raw.mint !== "string" || raw.mint === "") return null;
+  const graduated = raw.graduated === true;
+  const accounting = (raw.accounting && typeof raw.accounting === "object" ? raw.accounting : null) as MineInfo["accounting"] | null;
+  const nullable = (value: unknown): number | null => (value === null || value === undefined ? null : finite(value, Number.NaN)) as number | null;
+  const share = nullable(raw.estimatedShare);
+  const perBlock = nullable(raw.estimatedRewardPerBlock);
+  const days = nullable(raw.curveMiningDaysRemaining);
+  const power = nullable(raw.playerPower);
+  const clean = (value: number | null) => (value === null || Number.isNaN(value) ? null : value);
+  return {
+    ...(input as object),
+    mint: raw.mint,
+    symbol: text(raw.symbol, raw.mint.slice(0, 6).toUpperCase()),
+    status: status(raw.status),
+    blockReward: finite(raw.blockReward),
+    totalMiningPower: finite(raw.totalMiningPower),
+    remainingReserve: finite(raw.remainingReserve),
+    reserveTotal: finite(raw.reserveTotal),
+    estimatedShare: clean(share),
+    estimatedRewardPerBlock: clean(perBlock),
+    estimateLabel: typeof raw.estimateLabel === "string" ? raw.estimateLabel : "Estimate only, not a guaranteed return.",
+    reductionSchedule: Array.isArray(raw.reductionSchedule) ? raw.reductionSchedule.map((value) => finite(value)) : [],
+    fullyMinedProgress: finite(raw.fullyMinedProgress),
+    curveMining: curveMining(raw.curveMining, graduated),
+    emissionSource: raw.emissionSource === "RESERVE" || raw.emissionSource === "CURVE" ? raw.emissionSource : graduated ? "RESERVE" : "CURVE",
+    curveMiningDaysRemaining: clean(days),
+    nextBlockAt: finite(raw.nextBlockAt),
+    epoch: finite(raw.epoch),
+    epochEndsAt: finite(raw.epochEndsAt),
+    playerPower: clean(power),
+    accounting: accounting && typeof accounting.label === "string" ? accounting : { source: "ONCHAIN_INDEXED", authoritative: false, label: "Indexed from the Meteora pool" },
+  } as MineInfo;
 }
