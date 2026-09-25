@@ -75,6 +75,7 @@ import type { IndexerJob } from "./v2/types";
 import { officialMintFromEnv } from "../shared/officialMint";
 import { handleMeteoraGameRoute, meteoraBootstrap, meteoraConfig, meteoraMineInfo, meteoraPlayerProfile, meteoraPortfolio, meteoraTokenBySlug, runMeteoraScheduled } from "./modes/meteora";
 import { registerMeteoraPool } from "./meteora/registration";
+import { meteoraCandles } from "./candles";
 
 // The TokenMarket Durable Object is exported from the entry module so the MARKETS binding in
 // wrangler.jsonc resolves; it is defined in ./market.
@@ -94,6 +95,8 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
       if (request.method === "GET" && pathname === "/api/tokens") return meteoraBootstrap(env, ctx);
       const meteoraTokenMatch = pathname.match(/^\/api\/tokens\/([^/]+)$/);
       if (request.method === "GET" && meteoraTokenMatch) return meteoraTokenBySlug(env, meteoraTokenMatch[1]!);
+      const meteoraCandlesMatch = pathname.match(/^\/api\/tokens\/([^/]+)\/candles$/);
+      if (request.method === "GET" && meteoraCandlesMatch) return meteoraCandles(env, meteoraCandlesMatch[1]!, url.searchParams.get("interval"));
       if (request.method === "POST" && pathname === "/api/meteora/pools/register") return registerMeteoraPool(request, env);
       const meteoraPlayerMatch = pathname.match(/^\/api\/player\/([^/]+)$/);
       if (request.method === "GET" && meteoraPlayerMatch) return meteoraPlayerProfile(env, meteoraPlayerMatch[1]!);

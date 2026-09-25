@@ -38,6 +38,7 @@ import bs58 from "bs58";
 import { DEVICE_HEADER, deviceId } from "./device";
 import type { ChainMode } from "../shared/meteora";
 import { normalizeMeteoraConfigPubkey } from "../shared/meteora";
+import type { Candle, CandleInterval } from "../shared/candles";
 import { normalizeMineInfo, normalizeTokenSummaries, normalizeTokenSummary } from "./tokenSummary";
 import { officialMintFromEnv } from "../shared/officialMint";
 import type { AdminDashboardPayload } from "../shared/adminDashboard";
@@ -253,6 +254,41 @@ export async function getBootstrap(): Promise<Bootstrap> {
       },
     };
   }
+}
+
+export interface CandlesResponse {
+  mint: string;
+  interval: CandleInterval;
+  candles: Candle[];
+  /** Priced swaps behind the candles. */
+  trades: number;
+  /** True when the endpoint reached its recent-swap cap. */
+  truncated: boolean;
+  /** Current SOL/USD display quote, or null when the oracle has no quote. */
+  solUsd: number | null;
+}
+
+/** OHLCV candles built from the coin's indexed swaps. */
+export async function getCandles(mint: string, interval: CandleInterval): Promise<CandlesResponse> {
+  const data = await getJson<Partial<CandlesResponse>>(
+    "/api/tokens/" + encodeURIComponent(mint) + "/candles?interval=" + encodeURIComponent(interval),
+  );
+  const candles = Array.isArray(data.candles) ? data.candles.filter((candle) =>
+    candle && Number.isInteger(candle.time) &&
+    Number.isFinite(candle.open) && candle.open > 0 &&
+    Number.isFinite(candle.high) && candle.high >= candle.open && candle.high >= candle.close &&
+    Number.isFinite(candle.low) && candle.low > 0 && candle.low <= candle.open && candle.low <= candle.close &&
+    Number.isFinite(candle.close) && candle.close > 0 &&
+    Number.isFinite(candle.volumeSol) && candle.volumeSol >= 0,
+  ) : [];
+  return {
+    mint,
+    interval,
+    candles,
+    trades: Number.isInteger(data.trades) && Number(data.trades) >= 0 ? Number(data.trades) : candles.reduce((sum, candle) => sum + (candle.trades || 0), 0),
+    truncated: data.truncated === true,
+    solUsd: typeof data.solUsd === "number" && Number.isFinite(data.solUsd) && data.solUsd > 0 ? data.solUsd : null,
+  };
 }
 
 export async function getToken(mintOrSlug: string): Promise<TokenSummary> {
