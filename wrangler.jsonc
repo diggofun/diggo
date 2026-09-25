@@ -34,7 +34,7 @@
     // on /diggo. Not a secret - it is a public mint address - but also not a constant: the coin has
     // not launched yet, so it ships empty. An empty or malformed value reads as "not launched" and
     // the UI shows its empty state rather than a fabricated market (shared/officialMint.ts).
-    "DIGGO_OFFICIAL_MINT": "",
+    "DIGGO_OFFICIAL_MINT": "12cens35GKeZH8is6R1gdbJ1faktyLrXgHvHyBB6veb7",
     // DIGGO_RPC_URL is a deployed Worker secret and must be a mainnet endpoint. The public
     // fallbacks below are only a last-resort availability path; browser RPC always uses /api/rpc.
     "DIGGO_RPC_URLS": "https://api.mainnet-beta.solana.com",
