@@ -73,7 +73,7 @@ export function WatchlistPanel({ tokens = [], onSelectCoin, onConnect }: Watchli
   const full = watchlist.mints.length >= watchlist.limit;
 
   return (
-    <section className="watchlist-panel" id="watchlist" aria-labelledby="watchlist-title">
+    <section className="watchlist-panel page-shell" id="watchlist" aria-labelledby="watchlist-title">
       <div className="section-heading">
         <div>
           <div className="eyebrow">

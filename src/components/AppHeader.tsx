@@ -102,6 +102,15 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
 const ALL_ITEMS = NAV_GROUPS.flatMap((group) => group.items);
 const MOBILE_ITEMS: PageId[] = ["home", "mine", "crew", "explore", "trade"];
 
+/**
+ * The tab bar gets one line for five labels inside 360px, so any label longer than a word or two
+ * has a short form for it. The full text stays on `aria-label` and in the title, so the link still
+ * announces "Explore coins" to a screen reader even though the bar reads "Explore".
+ */
+const TAB_BAR_SHORT_LABELS: Partial<Record<PageId, string>> = {
+  explore: "Explore",
+};
+
 export function BrandMark() {
   return (
     <a className="brand" href="/" aria-label="Diggo.fun home">
@@ -258,10 +267,18 @@ export function AppHeader({ page, session, signedIn, summary, game, solBalance, 
             ? { page: "home" as const, href: "/", label: "Home", icon: IconHome }
             : ALL_ITEMS.find((candidate) => candidate.page === id)!;
           const Icon = item.icon;
+          const shortLabel = TAB_BAR_SHORT_LABELS[id];
           return (
-            <a key={id} href={item.href} className={page === id ? "active" : ""} aria-current={page === id ? "page" : undefined}>
+            <a
+              key={id}
+              href={item.href}
+              className={page === id ? "active" : ""}
+              aria-current={page === id ? "page" : undefined}
+              aria-label={shortLabel ? item.label : undefined}
+              title={item.label}
+            >
               {Icon ? <Icon size={22} /> : null}
-              <span>{item.label}</span>
+              <span>{shortLabel ?? item.label}</span>
             </a>
           );
         })}
