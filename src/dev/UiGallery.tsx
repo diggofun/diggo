@@ -7,11 +7,6 @@
 import { useState } from "react";
 import type { MineInfo, MiningReport, PlayerProfile, TokenSummary } from "../../shared/types";
 import type { DiscoveryRecord } from "../../shared/types";
-import {
-  LAUNCH_RENT_SOL,
-  LAUNCH_TOTAL_SOL,
-  LAUNCH_TX_FEE_SOL,
-} from "../constants";
 import { DIGGO_CONFIG } from "../../shared/economics";
 import { discoveryVisualEvent } from "../../shared/discoveryVisual";
 import { CrewScreen } from "../components/CrewScreen";
@@ -308,8 +303,7 @@ export function UiGallery() {
       )}
       {/*
         The v2 surfaces, in their disconnected state. That is the first thing a new visitor sees,
-        so it is the state worth reviewing: the two ways to play, what each costs, and the exact
-        launch figure before a creator signs anything.
+        so it is the state worth reviewing: the two ways to play and what each costs.
       */}
       {show("v2") && (
         <>
@@ -319,23 +313,6 @@ export function UiGallery() {
               {PLAY_SUMMARY}
             </p>
             <PlayerOnboarding programAddress={GALLERY_PROGRAM_ID} wallet={null} onChanged={noop} />
-          </section>
-          <section className="page-shell ui-gallery-tiers">
-            <h2>Launch cost</h2>
-            <div className="launch-cost">
-              <div className="launch-cost-head">
-                <span className="launch-cost-label">You pay to launch</span>
-                <strong className="launch-cost-total">{LAUNCH_TOTAL_SOL.toFixed(6)} SOL</strong>
-              </div>
-              <dl className="launch-cost-breakdown">
-                <div><dt>Mint, coin account and vault rent</dt><dd>{LAUNCH_RENT_SOL.toFixed(6)} SOL</dd></div>
-                <div><dt>Network fee (estimated)</dt><dd>{LAUNCH_TX_FEE_SOL.toFixed(6)} SOL</dd></div>
-              </dl>
-              <p className="launch-sponsored">
-                Sponsored — event #0 pays the rent from its vault, so you
-                pay the network fee only.
-              </p>
-            </div>
           </section>
           <section className="page-shell ui-gallery-tiers">
             <h2>Sponsor console — no vault yet</h2>
