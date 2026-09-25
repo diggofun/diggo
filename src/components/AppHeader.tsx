@@ -82,7 +82,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       // The official coin sits at the top of Explore: it is a market, not a mining destination.
       // Its icon is the brand mark, rendered as an <img> by NavItem.image below rather than an
       // icon-pack glyph, so the sidebar reuses the shipped logo rather than a lookalike.
-      { page: "diggo", href: "/diggo", label: "Trade Diggo", image: "/assets/brand/mark-trim-512.png" },
+      { page: "diggo", href: "/diggo", label: "Trade Diggo", image: "/assets/brand/mark-trim-512.png?v=2" },
       { page: "explore", href: "/explore", label: "Explore coins", icon: IconSearch },
       { page: "mines", href: "/mines", label: "Mines", icon: IconMines },
       { page: "trade", href: "/trade", label: "Trade", icon: IconSwap },
@@ -116,7 +116,7 @@ export function BrandMark() {
     <a className="brand" href="/" aria-label="Diggo.fun home">
       {/* Transparent mark, not the square icon: the header sits on translucent paper, so an
           opaque white tile would read as a pale box around the pickaxe. */}
-      <img className="brand-art brand-art-icon" src="/assets/brand/mark-trim-512.png" alt="" width={512} height={512} />
+      <img className="brand-art brand-art-icon" src="/assets/brand/mark-trim-512.png?v=2" alt="" width={512} height={512} />
       <strong>Diggo</strong>
     </a>
   );

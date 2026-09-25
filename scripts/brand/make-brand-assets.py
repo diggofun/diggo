@@ -10,17 +10,20 @@ Run it with no arguments to regenerate everything, or name one output to rebuild
 Writes, all in place, under public/:
    assets/brand/mark-1024.png        transparent mark, trimmed and padded square
    assets/brand/mark-512.png         the same mark at half size
-   assets/brand/icon-192.png         PWA / manifest icon
+   assets/brand/mark-trim-512.png    transparent mark cropped tight, used by the site header
+   assets/brand/icon-192.png         transparent PWA / manifest icon
    assets/brand/icon-512.png
-   assets/brand/maskable-512.png     the same mark inside the 80% safe zone
-   assets/brand/apple-touch-icon.png
-   assets/brand/favicon-16.png       raster favicons, for the browsers that prefer them
+   assets/brand/maskable-512.png     the mark inside the 80% safe zone, on the paper colour
+   assets/brand/apple-touch-icon.png on the paper colour (iOS paints transparency black)
+   assets/brand/favicon-16.png       transparent raster favicons, mark filling ~90%
    assets/brand/favicon-32.png
    assets/brand/favicon-48.png
-   assets/brand/favicon.svg          the mark embedded, so the old filename keeps working
+   assets/brand/favicon.svg          the transparent mark embedded, so the old filename works
+   favicon.svg, favicon.ico          root copies (the .ico holds 16/32/48)
    brand/diggo-token.png             1024 square token icon on white
    og-image-v2.png                   1200x630 social card: mark, wordmark, tagline
 and the same token icon at ~/.diggo-mainnet/diggo-token.png.
+The token icon is the immutable on-chain coin image: only rebuild it on purpose (`token`).
 """
 
 import base64
@@ -44,7 +47,9 @@ from brandart import (
     padded,
     resize,
     tile,
+    transparent_icon,
     trim_square,
+    trim_tight,
 )
 
 SOURCE = Path(r"C:\Users\Jurek\Downloads\image.png")
@@ -132,35 +137,45 @@ def social_card(mark):
     return card
 
 
-def build_marks(mark):
+def build_marks(mark, tight):
     write(padded(mark, 1024, 0.03), BRAND / "mark-1024.png")
     write(padded(mark, 512, 0.03), BRAND / "mark-512.png")
+    write(transparent_icon(tight, 512, 0.01), BRAND / "mark-trim-512.png")
 
 
-def build_icons(mark):
-    # The square app icons carry the mark a little larger, at 78% of the canvas edge.
-    write(tile(mark, 192, 0.11), BRAND / "icon-192.png")
-    write(tile(mark, 512, 0.11), BRAND / "icon-512.png")
-    # A maskable icon has to survive an aggressive circular crop, so the mark sits well inside.
+def build_icons(mark, tight):
+    # "any"-purpose manifest icons stay transparent; the launcher draws its own backdrop.
+    write(transparent_icon(tight, 192, 0.05), BRAND / "icon-192.png")
+    write(transparent_icon(tight, 512, 0.05), BRAND / "icon-512.png")
+    # A maskable icon must be opaque and survive a circular crop, so the mark sits well inside.
     write(tile(mark, 512, 0.22), BRAND / "maskable-512.png")
-    # iOS rounds the icon itself, so the mark brings its own inset to survive the corners.
+    # iOS fills transparency with black and rounds the corners itself.
     write(tile(mark, 180, 0.11), BRAND / "apple-touch-icon.png")
-    for size, inset in ((16, 0.03), (32, 0.04), (48, 0.05)):
-        # Rasterised well above the target and then box-filtered down: at 16px the thin
-        # handle is only a couple of pixels wide, and a single-step downscale either drops it
-        # or smears the whole mark into a blob. Supersampling keeps the silhouette legible.
-        # The inset stays a fraction of the canvas edge, so only the supersample factor is
-        # scaled, never the padding itself.
-        big = tile(mark, size * 8, inset)
-        write(big.resize((size, size), Image.LANCZOS), BRAND / ("favicon-%d.png" % size))
+    favicons = {}
+    for size, inset in ((16, 0.07), (32, 0.05), (48, 0.05)):
+        # Tiny sizes need the mark as large as possible: ~90% of the canvas edge. The mark is
+        # rendered at 512px and downscaled in premultiplied space, so edges stay clean. At
+        # 16px the inset is a touch larger so the handle tip clears the corner pixel.
+        favicons[size] = transparent_icon(tight, size, inset)
+        write(favicons[size], BRAND / ("favicon-%d.png" % size))
+    favicons[48].save(
+        REPO / "public" / "favicon.ico",
+        format="ICO",
+        sizes=[(16, 16), (32, 32), (48, 48)],
+        append_images=[favicons[16], favicons[32]],
+    )
+    print("  wrote public/favicon.ico (16, 32, 48)")
 
     # favicon.svg is still referenced by index.html and by the wallet-connect icon list, and
-    # the artwork is raster. Rather than hand-draw a vector that would only approximate the
-    # mark, the exact rendered icon is embedded in the same filename.
-    encoded = base64.b64encode((BRAND / "icon-512.png").read_bytes()).decode("ascii")
+    # the artwork is raster, so the exact transparent mark is embedded in the same filename.
+    import io
+
+    buffer = io.BytesIO()
+    transparent_icon(tight, 256, 0.05).save(buffer, format="PNG", optimize=True)
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
     markup = (
-        '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" '
-        'viewBox="0 0 512 512"><image width="512" height="512" '
+        '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" '
+        'viewBox="0 0 256 256"><image width="256" height="256" '
         'xlink:href="data:image/png;base64,' + encoded + '" '
         'xmlns:xlink="http://www.w3.org/1999/xlink"/></svg>\n'
     )
@@ -179,11 +194,13 @@ def main():
     if not SOURCE.exists():
         raise SystemExit("source artwork is missing: " + str(SOURCE))
     only = set(sys.argv[1:])
-    mark = trim_square(cut_out(SOURCE))
+    cut = cut_out(SOURCE)
+    mark = trim_square(cut)
+    tight = trim_tight(cut)
     print("mark trimmed to", mark.size)
     steps = {
-        "marks": lambda: build_marks(mark),
-        "icons": lambda: build_icons(mark),
+        "marks": lambda: build_marks(mark, tight),
+        "icons": lambda: build_icons(mark, tight),
         "token": lambda: build_token(mark),
         "og": lambda: write(social_card(mark), REPO / "public" / "og-image-v2.png"),
     }

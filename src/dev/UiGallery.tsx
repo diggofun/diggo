@@ -231,9 +231,9 @@ const WIDE_ART_FILES: readonly { name: string; width: number; height: number; cl
 
 /** The raster brand marks available for the gallery. */
 const BRAND_FILES: readonly { src: string; alt: string; className?: string }[] = [
-  { src: "/assets/brand/apple-touch-icon.png", alt: "Diggo mark" },
-  { src: "/assets/brand/icon-192.png", alt: "Diggo mark at 192 pixels" },
-  { src: "/assets/brand/icon-512.png", alt: "Diggo mark at 512 pixels", className: "is-mark" },
+  { src: "/assets/brand/apple-touch-icon.png?v=2", alt: "Diggo mark" },
+  { src: "/assets/brand/icon-192.png?v=2", alt: "Diggo mark at 192 pixels" },
+  { src: "/assets/brand/icon-512.png?v=2", alt: "Diggo mark at 512 pixels", className: "is-mark" },
 ];
 
 const RARITIES = ["common", "uncommon", "rare", "epic", "legendary", "mythic"] as const;
