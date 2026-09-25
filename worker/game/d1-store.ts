@@ -285,23 +285,40 @@ export class D1GameStore implements GameStore {
   }
 
   async applyReferralCredit(record: ReferralCreditRecord): Promise<boolean> {
-    const result = await this.db.prepare(
-      "INSERT OR IGNORE INTO game_referral_credits (id, referrer_wallet, referee_wallet, week_index, ore_amount, created_at)" +
-        " SELECT ?1, ?2, ?3, ?4, ?5, ?6 WHERE CAST(?5 AS INTEGER) BETWEEN 1 AND ?7" +
-        " AND CAST(?5 AS INTEGER) BETWEEN 1 AND ?7" +
-        " AND NOT EXISTS (SELECT 1 FROM game_referral_weekly_caps WHERE referrer_wallet = ?2 AND week_index = ?4 AND (credited_count >= ?8 OR CAST(ore_amount AS INTEGER) + CAST(?5 AS INTEGER) > ?9))" +
-        " AND EXISTS (SELECT 1 FROM game_players WHERE wallet = ?2)",
-    ).bind(
-      record.id, record.referrer, record.referee, record.week, record.amount, record.createdAt,
-      250, 25, 6250,
-    ).run();
-    if (result.meta.changes !== 1) return false;
-    const applied = await this.db.prepare(
-      "SELECT 1 AS ok FROM game_referral_weekly_caps WHERE referrer_wallet = ?1 AND week_index = ?2" +
-        " AND CAST(credited_count AS INTEGER) = (SELECT COUNT(*) FROM game_referral_credits WHERE referrer_wallet = ?1 AND week_index = ?2)" +
-        " AND CAST(ore_amount AS INTEGER) = (SELECT SUM(CAST(ore_amount AS INTEGER)) FROM game_referral_credits WHERE referrer_wallet = ?1 AND week_index = ?2)",
-    ).bind(record.referrer, record.week).first<{ ok: number }>();
-    return number(applied?.ok) === 1;
+    const results = await this.db.batch([
+      this.db.prepare(
+        "INSERT OR IGNORE INTO game_referral_credits (id, referrer_wallet, referee_wallet, week_index, ore_amount, created_at)" +
+          " SELECT ?1, ?2, ?3, ?4, ?5, ?6 WHERE CAST(?5 AS INTEGER) BETWEEN 1 AND ?7" +
+          " AND NOT EXISTS (SELECT 1 FROM game_referral_weekly_caps WHERE referrer_wallet = ?2 AND week_index = ?4 AND (credited_count >= ?8 OR CAST(ore_amount AS INTEGER) + CAST(?5 AS INTEGER) > ?9))" +
+          " AND EXISTS (SELECT 1 FROM game_players WHERE wallet = ?2)",
+      ).bind(record.id, record.referrer, record.referee, record.week, record.amount, record.createdAt, 250, 25, 6250),
+      this.db.prepare(
+        "INSERT INTO game_referral_weekly_caps (referrer_wallet, week_index, credited_count, ore_amount, last_credit_id)" +
+          " VALUES (?1, ?2, 1, ?3, ?4) ON CONFLICT(referrer_wallet, week_index) DO UPDATE SET" +
+          " credited_count = game_referral_weekly_caps.credited_count + 1," +
+          " ore_amount = CAST(game_referral_weekly_caps.ore_amount AS INTEGER) + CAST(?3 AS INTEGER)," +
+          " last_credit_id = ?4" +
+          " WHERE game_referral_weekly_caps.credited_count < ?5" +
+          " AND CAST(game_referral_weekly_caps.ore_amount AS INTEGER) + CAST(?3 AS INTEGER) <= ?6" +
+          " AND game_referral_weekly_caps.last_credit_id <> ?4" +
+          " AND EXISTS (SELECT 1 FROM game_referral_credits WHERE id = ?4)",
+      ).bind(record.referrer, record.week, record.amount, record.id, 25, 6250),
+      this.db.prepare(
+        "UPDATE game_players SET ore_balance = CAST(ore_balance AS INTEGER) + CAST(?3 AS INTEGER)," +
+          " ore_earned = CAST(ore_earned AS INTEGER) + CAST(?3 AS INTEGER), version = version + 1," +
+          " updated_at = CAST(strftime('%s', 'now') AS INTEGER)" +
+          " WHERE wallet = ?2 AND EXISTS (SELECT 1 FROM game_referral_credits c" +
+          " WHERE c.id = ?1 AND c.applied_to_player = 0 AND c.referrer_wallet = ?2 AND c.week_index = ?4" +
+          " AND EXISTS (SELECT 1 FROM game_referral_weekly_caps w WHERE w.referrer_wallet = ?2 AND w.week_index = ?4 AND w.last_credit_id = ?1" +
+          " AND CAST(w.credited_count AS INTEGER) = (SELECT COUNT(*) FROM game_referral_credits WHERE referrer_wallet = ?2 AND week_index = ?4)" +
+          " AND CAST(w.ore_amount AS INTEGER) = (SELECT SUM(CAST(ore_amount AS INTEGER)) FROM game_referral_credits WHERE referrer_wallet = ?2 AND week_index = ?4)))",
+      ).bind(record.id, record.referrer, record.amount, record.week),
+      this.db.prepare(
+        "UPDATE game_referral_credits SET applied_to_player = 1 WHERE id = ?1 AND applied_to_player = 0" +
+          " AND EXISTS (SELECT 1 FROM game_referral_weekly_caps WHERE referrer_wallet = ?2 AND week_index = ?3 AND last_credit_id = ?1)",
+      ).bind(record.id, record.referrer, record.week),
+    ]);
+    return (results[0]?.meta.changes ?? 0) === 1 && (results[2]?.meta.changes ?? 0) === 1;
   }
 
   async createDiscovery(record: DiscoveryRecord, expectedReserveRemaining: bigint): Promise<GameClaim | null> {
@@ -311,9 +328,20 @@ export class D1GameStore implements GameStore {
     if (!mine || mine.remaining !== expectedReserveRemaining || mine.remaining < record.amount) return null;
     const results = await this.db.batch([
       this.db.prepare(
+        "UPDATE game_mines SET released = MIN(CAST(initial_reserve AS INTEGER), CAST(released AS INTEGER) + CAST(?2 AS INTEGER))," +
+          " committed = CAST(committed AS INTEGER) + CAST(?2 AS INTEGER), remaining = CAST(remaining AS INTEGER) - CAST(?2 AS INTEGER)," +
+          " version = version + 1, updated_at = ?5, last_discovery_id = ?4" +
+          " WHERE mint = ?1 AND remaining = CAST(?3 AS TEXT) AND CAST(remaining AS INTEGER) >= CAST(?2 AS INTEGER)" +
+          " AND NOT EXISTS (SELECT 1 FROM game_claims WHERE id = ?4)",
+      ).bind(record.mint, record.amount, expectedReserveRemaining, record.claimId, record.createdAt),
+      this.db.prepare(
         "INSERT OR IGNORE INTO game_discoveries (id, claim_id, wallet, mint, epoch_index, amount, created_at)" +
-          " SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE EXISTS (SELECT 1 FROM game_mines WHERE mint = ?4 AND remaining = CAST(?8 AS TEXT))",
-      ).bind(record.id, record.claimId, record.wallet, record.mint, record.epoch, record.amount, record.createdAt, expectedReserveRemaining),
+          " SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE EXISTS (SELECT 1 FROM game_mines WHERE mint = ?4 AND last_discovery_id = ?8)",
+      ).bind(record.id, record.claimId, record.wallet, record.mint, record.epoch, record.amount, record.createdAt, record.claimId),
+      this.db.prepare(
+        "INSERT OR IGNORE INTO game_claims (id, wallet, mint, kind, amount, status, idempotency_key, created_at)" +
+          " SELECT claim_id, wallet, mint, 'DISCOVERY', amount, 'PENDING', claim_id, created_at FROM game_discoveries WHERE id = ?1",
+      ).bind(record.id),
     ]);
     if ((results[0]?.meta.changes ?? 0) !== 1) return this.getClaim(record.claimId);
     return this.getClaim(record.claimId);

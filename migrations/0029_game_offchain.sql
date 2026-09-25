@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS game_mines (
   committed TEXT NOT NULL DEFAULT '0',
   paid TEXT NOT NULL DEFAULT '0',
   total_eligible_power INTEGER NOT NULL DEFAULT 0,
+  last_discovery_id TEXT,
   graduated INTEGER NOT NULL DEFAULT 0,
   version INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL DEFAULT 0,
@@ -78,8 +79,10 @@ CREATE TABLE IF NOT EXISTS game_referral_credits (
   referee_wallet TEXT NOT NULL,
   week_index INTEGER NOT NULL,
   ore_amount TEXT NOT NULL,
+  applied_to_player INTEGER NOT NULL DEFAULT 0 CHECK (applied_to_player IN (0, 1)),
   created_at INTEGER NOT NULL,
-  UNIQUE (referrer_wallet, referee_wallet)
+  UNIQUE (referrer_wallet, referee_wallet),
+  CHECK (CAST(ore_amount AS INTEGER) BETWEEN 1 AND 250)
 );
 
 CREATE TABLE IF NOT EXISTS game_referral_weekly_caps (
@@ -87,16 +90,9 @@ CREATE TABLE IF NOT EXISTS game_referral_weekly_caps (
   week_index INTEGER NOT NULL,
   credited_count INTEGER NOT NULL DEFAULT 0,
   ore_amount TEXT NOT NULL DEFAULT '0',
+  last_credit_id TEXT,
   PRIMARY KEY (referrer_wallet, week_index)
 );
-
--- Match the native program's per-credit ceiling before the weekly trigger records the credit.
-CREATE TRIGGER IF NOT EXISTS game_referral_credit_limit
-BEFORE INSERT ON game_referral_credits
-WHEN CAST(NEW.ore_amount AS INTEGER) < 1 OR CAST(NEW.ore_amount AS INTEGER) > 250
-BEGIN
-  SELECT RAISE(ABORT, 'game referral credit must be between 1 and 250 ORE');
-END;
 
 CREATE TABLE IF NOT EXISTS game_discoveries (
   id TEXT PRIMARY KEY,
@@ -108,56 +104,3 @@ CREATE TABLE IF NOT EXISTS game_discoveries (
   created_at INTEGER NOT NULL,
   UNIQUE (wallet, epoch_index)
 );
-
--- A referral row is both the idempotency record and the transaction trigger. The unique
--- constraint means a replay cannot fire these statements twice; the aggregate checks in the
--- player update make a capped referral a complete no-op.
-CREATE TRIGGER IF NOT EXISTS game_referral_credit_apply
-AFTER INSERT ON game_referral_credits
-BEGIN
-  INSERT INTO game_referral_weekly_caps (referrer_wallet, week_index, credited_count, ore_amount)
-  VALUES (NEW.referrer_wallet, NEW.week_index, 1, NEW.ore_amount)
-  ON CONFLICT(referrer_wallet, week_index) DO UPDATE SET
-    credited_count = game_referral_weekly_caps.credited_count + 1,
-    ore_amount = CAST(game_referral_weekly_caps.ore_amount AS INTEGER) + CAST(NEW.ore_amount AS INTEGER)
-  WHERE CAST(game_referral_weekly_caps.ore_amount AS INTEGER) + CAST(NEW.ore_amount AS INTEGER) <= 25 * 250
-    AND game_referral_weekly_caps.credited_count < 25;
-
-  UPDATE game_players
-    SET ore_balance = CAST(ore_balance AS INTEGER) + CAST(NEW.ore_amount AS INTEGER),
-      ore_earned = CAST(ore_earned AS INTEGER) + CAST(NEW.ore_amount AS INTEGER),
-      version = version + 1,
-      updated_at = CAST(strftime('%s', 'now') AS INTEGER)
-  WHERE wallet = NEW.referrer_wallet
-    AND COALESCE(CAST((SELECT credited_count FROM game_referral_weekly_caps
-         WHERE referrer_wallet = NEW.referrer_wallet AND week_index = NEW.week_index)
-        AS INTEGER), 0) = (SELECT COUNT(*) FROM game_referral_credits
-           WHERE referrer_wallet = NEW.referrer_wallet AND week_index = NEW.week_index)
-    AND COALESCE(CAST((SELECT ore_amount FROM game_referral_weekly_caps
-         WHERE referrer_wallet = NEW.referrer_wallet AND week_index = NEW.week_index)
-        AS INTEGER), 0) = (SELECT SUM(CAST(ore_amount AS INTEGER)) FROM game_referral_credits
-           WHERE referrer_wallet = NEW.referrer_wallet AND week_index = NEW.week_index);
-END;
-
--- Discovery dispatch is one insert: the trigger creates the claim and debits the mine, and an
--- over-reserve insert aborts the whole transaction instead of leaving a claim behind.
-CREATE TRIGGER IF NOT EXISTS game_discovery_dispatch
-AFTER INSERT ON game_discoveries
-BEGIN
-  SELECT CASE
-    WHEN NOT EXISTS (SELECT 1 FROM game_mines WHERE mint = NEW.mint AND CAST(remaining AS INTEGER) >= CAST(NEW.amount AS INTEGER))
-    THEN RAISE(ABORT, 'game discovery reserve exhausted')
-  END;
-  INSERT INTO game_claims (id, wallet, mint, kind, amount, status, idempotency_key, created_at)
-  VALUES (NEW.claim_id, NEW.wallet, NEW.mint, 'DISCOVERY', NEW.amount, 'PENDING', NEW.claim_id, NEW.created_at);
-  UPDATE game_mines
-  SET released = MIN(
-        CAST(initial_reserve AS INTEGER),
-        CAST(released AS INTEGER) + CAST(NEW.amount AS INTEGER)
-      ),
-      committed = CAST(committed AS INTEGER) + CAST(NEW.amount AS INTEGER),
-      remaining = CAST(remaining AS INTEGER) - CAST(NEW.amount AS INTEGER),
-      version = version + 1,
-      updated_at = NEW.created_at
-  WHERE mint = NEW.mint;
-END;
