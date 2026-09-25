@@ -22,7 +22,7 @@ import {
   listDiscoveries,
   listEpochSeeds,
 } from "./discovery";
-import type { RuntimeEnv } from "./env";
+import { optionalBinding, type RuntimeEnv } from "./env";
 import { apiError, checkRateLimit, isBase58Address, json, sameSecret } from "./http";
 import {
   heliusWebhook,
@@ -65,6 +65,7 @@ import {
   uploadMedia,
 } from "./tokens";
 import type { IndexerJob } from "./v2/types";
+import { officialMintFromEnv } from "../shared/officialMint";
 import { handleMeteoraGameRoute, meteoraBootstrap, meteoraConfig, meteoraMineInfo, meteoraPlayerProfile, meteoraPortfolio, runMeteoraScheduled } from "./modes/meteora";
 import { registerMeteoraPool } from "./meteora/registration";
 
@@ -103,6 +104,8 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
         turnstileSiteKey: env.TURNSTILE_SITE_KEY,
         programId: chain.programId ?? "",
         vanitySuffix: env.VANITY_SUFFIX,
+        // Validated, not passed through: a blank or mistyped var reads as "not launched" (null).
+        officialMint: officialMintFromEnv(optionalBinding<string>(env, "DIGGO_OFFICIAL_MINT")),
       });
     }
     // The read API. Every payload shape below is WS-E's, and the frontend consumes it as-is.

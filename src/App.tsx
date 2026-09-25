@@ -83,6 +83,8 @@ const LeaderboardsScreen = lazy(() => import("./components/LeaderboardsScreen").
 const MineInfoPanel = lazy(() => import("./components/MineInfoPanel").then((module) => ({ default: module.MineInfoPanel })));
 const MiningReportModal = lazy(() => import("./components/MiningReportModal").then((module) => ({ default: module.MiningReportModal })));
 const SwapPanel = lazy(() => import("./components/SwapPanel").then((module) => ({ default: module.SwapPanel })));
+/** The official coin's trade page. Lazy for the same reason: it pulls in the swap terminal. */
+const DiggoTradePage = lazy(() => import("./components/DiggoTradePage").then((module) => ({ default: module.DiggoTradePage })));
 const RentReclaimPanel = lazy(() => import("./components/RentReclaimPanel").then((module) => ({ default: module.RentReclaimPanel })));
 /** Terms, Privacy, Risk and Cookies: their own chunk, because most visits never open one. */
 const LegalRoute = lazy(() => import("./components/legal/LegalPage").then((module) => ({ default: module.LegalRoute })));
@@ -95,6 +97,7 @@ const ROUTES: Record<string, PageId> = {
   "/": "home",
   "/mine": "mine",
   "/explore": "explore",
+  "/diggo": "diggo",
   "/trade": "trade",
   "/leaderboards": "leaderboards",
   "/mines": "mines",
@@ -114,6 +117,7 @@ const PAGE_TITLES: Partial<Record<PageId, string>> = {
   crew: "Crew",
   discoveries: "Discoveries",
   explore: "Explore mines",
+  diggo: "Trade $DIGGO",
   trade: "Trade",
   leaderboards: "Leaderboards",
   mines: "Mine details",
@@ -156,6 +160,8 @@ export default function App() {
     cluster: "mainnet-beta",
     chainMode: "meteora",
     meteoraConfigPubkey: "",
+    // No official mint until the Worker publishes one: /diggo shows its "launches soon" state.
+    officialMint: null,
     turnstileSiteKey: "",
     programId: "",
     vanitySuffix: "diggo",
@@ -1028,6 +1034,18 @@ export default function App() {
           )}
 
           {page === "leaderboards" && <LeaderboardsScreen tokens={tokens} onSelectMine={openTokenPage} />}
+
+          {page === "diggo" && (
+            <DiggoTradePage
+              officialMint={config.officialMint}
+              programAddress={config.programId}
+              cluster={config.cluster}
+              chainMode={config.chainMode}
+              meteoraConfigPubkey={config.meteoraConfigPubkey}
+              signer={connected?.wallet ?? null}
+              onTraded={() => void fetchBootstrap()}
+            />
+          )}
 
           {page === "mines" && (featured ? (
             <>
