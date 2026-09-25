@@ -84,6 +84,25 @@ describe("proxyRpc", () => {
     expect(await response.json()).toEqual({ jsonrpc: "2.0", id: 1, result: 42 });
   });
 
+  it("allows a bounded getBlockTime read used by Meteora quotes", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: 1_790_360_500 })));
+    const payload = { jsonrpc: "2.0", id: 1, method: "getBlockTime", params: [350_000_000] };
+    const response = await proxyRpc(request(payload), runtime());
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ jsonrpc: "2.0", id: 1, result: 1_790_360_500 });
+    expect(JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))).toEqual(payload);
+  });
+
+  it.each([[], [-1], [1.5], ["350000000"], [Number.MAX_SAFE_INTEGER + 1], [350_000_000, {}]])(
+    "rejects invalid getBlockTime slot params %j before forwarding",
+    async (...params) => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      const response = await proxyRpc(request({ jsonrpc: "2.0", id: 1, method: "getBlockTime", params }), runtime());
+      expect(response.status).toBe(403);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    },
+  );
+
   it("forwards normal bounded read calls and their supported configs", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify([
