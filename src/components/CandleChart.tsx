@@ -17,7 +17,7 @@ import {
 } from "lightweight-charts";
 import { CANDLE_INTERVALS, DEFAULT_CANDLE_INTERVAL, chartMinMove, formatChartPrice, type Candle, type CandleInterval } from "../../shared/candles";
 import { getCandles, type CandlesResponse } from "../api";
-import { compact } from "../format";
+import { solAmount } from "../format";
 
 const POLL_MS = 15_000;
 const INTERVALS = Object.keys(CANDLE_INTERVALS) as CandleInterval[];
@@ -199,7 +199,7 @@ export function CandleChart({ mint, symbol }: { mint: string; symbol: string }) 
             <span>H <b>{prefix}{formatChartPrice(shownLegend.high)}</b></span>
             <span>L <b>{prefix}{formatChartPrice(shownLegend.low)}</b></span>
             <span>C <b className={shownLegend.close >= shownLegend.open ? "up" : "down"}>{prefix}{formatChartPrice(shownLegend.close)}{suffix}</b></span>
-            <span>VOL <b>{prefix}{compact(shownLegend.volumeSol)}{suffix}</b></span>
+            <span>VOL <b>{prefix}{solAmount(shownLegend.volumeSol)}{suffix}</b></span>
           </>
         ) : (
           <span>{"$" + symbol + " / " + unit}</span>

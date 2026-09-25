@@ -29,6 +29,7 @@ const RPC_READ_METHOD_ALLOWLIST = new Set([
   "getTokenAccountsByOwner",
   "getMinimumBalanceForRentExemption",
   "getSlot",
+  "getBlockTime",
   "getVersion",
 ]);
 
@@ -277,6 +278,13 @@ function validateReadParams(method: string, params: unknown[] | undefined): void
     case "getSlot": {
       requireParamCount(method, args, 0, 1);
       readConfig(args[0], basicConfig, `${method} config`);
+      return;
+    }
+    case "getBlockTime": {
+      requireParamCount(method, args, 1, 1);
+      if (typeof args[0] !== "number" || !Number.isSafeInteger(args[0]) || args[0] < 0) {
+        throw new Error("Invalid block time slot");
+      }
       return;
     }
     case "getSignatureStatuses": {
