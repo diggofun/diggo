@@ -135,9 +135,9 @@ export function decodeVirtualPool(addressValue: string, data: Uint8Array): Meteo
   };
 }
 
-export function decodeTokenMint(data: Uint8Array): { decimals: number; owner: string | null } {
+export function decodeTokenMint(data: Uint8Array): { decimals: number; owner: string | null; supply: bigint } {
   const owner = data.length >= 78 ? readAddress(data, 46) : null;
-  return { decimals: data.length >= 45 ? data[44] : 9, owner };
+  return { decimals: data.length >= 45 ? data[44] : 9, owner, supply: data.length >= 44 ? readU64(data, 36) : 0n };
 }
 
 export function decodeTokenAccountAmount(data: Uint8Array): bigint {
@@ -188,6 +188,67 @@ export async function readMint(env: MeteoraRpcEnv, mint: string) {
 }
 
 export async function readPoolMetadata(env: MeteoraRpcEnv, pool: string): Promise<{ name: string | null; symbol: string | null; uri: string | null }> {
+  return readDbcPoolMetadata(env, pool);
+}
+
+export const TOKEN_METADATA_PROGRAM_ID = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s";
+const METAPLEX_METADATA_V1_KEY = 4;
+
+export interface MintMetadata {
+  name: string | null;
+  symbol: string | null;
+  uri: string | null;
+}
+
+/**
+ * Decodes the name/symbol/uri head of a Metaplex Token Metadata account: key (1), update
+ * authority (32), mint (32), then three borsh strings that the program pads with NUL bytes.
+ */
+export function decodeMetaplexMetadata(data: Uint8Array): MintMetadata | null {
+  if (data.length < 65 + 12 || data[0] !== METAPLEX_METADATA_V1_KEY) return null;
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let offset = 65;
+  const readString = (): string | null => {
+    if (offset + 4 > data.length) return null;
+    const length = view.getUint32(offset, true);
+    const start = offset + 4;
+    if (start + length > data.length) return null;
+    offset = start + length;
+    const value = new TextDecoder().decode(data.subarray(start, start + length)).replace(/\0+$/u, "").trim();
+    return value || null;
+  };
+  const name = readString();
+  const symbol = readString();
+  const uri = readString();
+  return { name, symbol, uri };
+}
+
+export function mintMetadataAddress(mint: string): string {
+  return findProgramAddressSync(
+    [new TextEncoder().encode("metadata"), seedAddress(address(TOKEN_METADATA_PROGRAM_ID)), seedAddress(address(mint))],
+    address(TOKEN_METADATA_PROGRAM_ID),
+  );
+}
+
+/** The mint's Metaplex metadata; null when the mint has none or the account is not Metaplex's. */
+export async function readMintMetadata(env: MeteoraRpcEnv, mint: string): Promise<MintMetadata | null> {
+  const account = await readAccount(env, mintMetadataAddress(mint));
+  if (!account || (account.owner && account.owner !== TOKEN_METADATA_PROGRAM_ID)) return null;
+  return decodeMetaplexMetadata(account.data);
+}
+
+/** The `image` of an off-chain token JSON, restricted to https and a small, time-boxed read. */
+export async function readMetadataImage(uri: string, fetcher: typeof fetch = fetch): Promise<string | null> {
+  if (!/^https:\/\//iu.test(uri)) return null;
+  const response = await fetcher(uri, { signal: AbortSignal.timeout(3_000), headers: { accept: "application/json" } });
+  if (!response.ok) return null;
+  const text = await response.text();
+  if (text.length > 64_000) return null;
+  const body = JSON.parse(text) as { image?: unknown };
+  return typeof body.image === "string" && /^https:\/\//iu.test(body.image) ? body.image : null;
+}
+
+async function readDbcPoolMetadata(env: MeteoraRpcEnv, pool: string): Promise<{ name: string | null; symbol: string | null; uri: string | null }> {
   const metadataAddress = findProgramAddressSync(
     [new TextEncoder().encode("virtual_pool_metadata"), seedAddress(address(pool))],
     address(METEORA_DBC_PROGRAM_ID),

@@ -3,6 +3,8 @@ import {
   decodeTokenMint,
   decodePoolConfig,
   readMint,
+  readMintMetadata,
+  readMetadataImage,
   readPoolMetadata,
   TRANSFER_HOOK_POOL_DISCRIMINATOR,
   VIRTUAL_POOL_DISCRIMINATOR,
@@ -204,10 +206,14 @@ async function hydratePool(env: MeteoraRpcEnv, accountAddress: string, accountDa
     const config = configAddress(env);
     if (!poolBelongsToConfig(accountData, config)) throw new Error("Meteora pool does not belong to the configured DBC config");
     const pool = decodeVirtualPool(accountAddress, accountData);
-    const [configAccount, mint, metadata] = await Promise.all([
+    const [configAccount, mint, metadata, mintMetadata] = await Promise.all([
       readAccount(env, pool.config),
       readMint(env, pool.baseMint),
       readPoolMetadata(env, pool.pool),
+      readMintMetadata(env, pool.baseMint).catch((error: unknown) => {
+        console.warn(JSON.stringify({ event: "meteora.mint_metadata_failed", mint: pool.baseMint, error: String(error) }));
+        return null;
+      }),
     ]);
     if (!configAccount) throw new Error(`Meteora PoolConfig not found: ${pool.config}`);
     const poolConfig = decodePoolConfig(configAccount.data);
@@ -215,8 +221,11 @@ async function hydratePool(env: MeteoraRpcEnv, accountAddress: string, accountDa
     pool.migrationQuoteThreshold = poolConfig.migrationQuoteThreshold;
     pool.decimals = mint?.decimals ?? pool.decimals;
     pool.isGraduated = isGraduated(pool, pool.quoteReserve, pool.migrationQuoteThreshold);
-    pool.name = metadata.name;
-    pool.uri = metadata.uri;
+    // The mint's Metaplex metadata is what wallets and explorers show, and it is the only place a
+    // DBC coin's symbol lives. The DBC pool metadata contributes its logo URL as the image.
+    pool.name = mintMetadata?.name ?? metadata.name;
+    pool.symbol = mintMetadata?.symbol ?? metadata.symbol;
+    pool.uri = metadata.uri ?? (mintMetadata?.uri ? await readMetadataImage(mintMetadata.uri).catch(() => null) : null);
     return pool;
 }
 

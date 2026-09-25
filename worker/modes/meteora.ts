@@ -20,7 +20,8 @@ import { getSolUsd } from "../oracle";
 import { apiError, checkRateLimit, checkWalletRateLimit, isBase58Address, json } from "../http";
 import { getChainRpc, LAMPORTS_PER_SOL } from "../chainV2";
 import { confirmClaimBatch, confirmMiningClaim, prepareClaimBatch, prepareMiningClaim, runMeteoraIndexer, runVaultSweep } from "../meteora";
-import { decodeTokenAccountAmount, deriveAssociatedTokenAddress, readAccount, readSignatures } from "../meteora/rpc";
+import { decodeTokenAccountAmount, decodeTokenMint, deriveAssociatedTokenAddress, readAccount, readSignatures } from "../meteora/rpc";
+import type { TokenSummary } from "../../shared/types";
 import { recordJobRun } from "../indexStore";
 import { optionalBinding } from "../env";
 import { officialMintFromEnv } from "../../shared/officialMint";
@@ -303,13 +304,14 @@ export function meteoraConfig(env: RuntimeEnvLike) {
 
 export async function meteoraBootstrap(env: RuntimeEnvLike, ctx: ExecutionContext) {
   const result = await env.DB.prepare(
-    "SELECT pool, base_mint, name, symbol, created_at, quote_reserve, migration_quote_threshold, is_graduated FROM meteora_pools WHERE config=?1 ORDER BY created_at DESC",
+    "SELECT pool, base_mint, name, symbol, uri, created_at, quote_reserve, migration_quote_threshold, is_graduated FROM meteora_pools WHERE config=?1 ORDER BY created_at DESC",
   ).bind(String(env.METEORA_DBC_CONFIG || "")).all<Record<string, unknown>>();
   ctx.waitUntil(Promise.resolve());
   return json({
     tokens: (result.results ?? []).map((row) => ({
       mint: String(row.base_mint), pool: String(row.pool), name: String(row.name || row.symbol || row.base_mint),
       symbol: String(row.symbol || String(row.base_mint).slice(0, 6)), slug: String(row.base_mint),
+      imageUrl: imageUrl(row.uri),
       createdAt: Number(row.created_at) || 0, status: Number(row.is_graduated) === 1 ? "graduated" : "active",
       venue: "meteora", graduated: Number(row.is_graduated) === 1,
       quoteReserve: String(row.quote_reserve), migrationQuoteThreshold: String(row.migration_quote_threshold),
@@ -368,6 +370,71 @@ export async function meteoraSwitchMine(request: Request, env: RuntimeEnvLike) {
     mine,
     changed: settled.activeMine !== player.activeMine || settled.activeMiningPower !== player.activeMiningPower,
   });
+}
+
+function imageUrl(value: unknown): string | null {
+  return typeof value === "string" && /^https:\/\//iu.test(value) ? value : null;
+}
+
+type SwapPriceRow = { side: string; amount_in: string; amount_out: string };
+
+/** SOL per whole token paid in one indexed swap; 0 when the row cannot price anything. */
+export function swapPriceSol(row: SwapPriceRow | null, decimals: number): number {
+  if (!row) return 0;
+  const buy = row.side === "buy";
+  const lamports = Number(buy ? row.amount_in : row.amount_out);
+  const tokens = Number(buy ? row.amount_out : row.amount_in) / 10 ** decimals;
+  return lamports > 0 && tokens > 0 ? lamports / LAMPORTS_PER_SOL / tokens : 0;
+}
+
+/**
+ * One Meteora coin as the shared TokenSummary, from indexed pools and swaps.
+ *
+ * Price is the latest indexed trade, the 24h change compares it with the last trade at least a
+ * day old (null when there is none), and USD values use the SOL/USD oracle only when it is
+ * available. The live curve price is still quoted by the swap panel from the chain.
+ */
+export async function meteoraTokenBySlug(env: RuntimeEnvLike, slug: string): Promise<Response> {
+  const row = await env.DB.prepare("SELECT * FROM meteora_pools WHERE config=?1 AND (base_mint=?2 OR pool=?2)")
+    .bind(String(env.METEORA_DBC_CONFIG || ""), slug).first<Record<string, unknown>>();
+  if (!row) return apiError("Token not found", 404);
+  const mint = String(row.base_mint);
+  const pool = String(row.pool);
+  const decimals = Number(row.decimals) || 9;
+  const since = nowSeconds() - 86_400;
+  const priceSql = "SELECT side, amount_in, amount_out FROM meteora_swaps WHERE pool=?1";
+  const order = " ORDER BY CAST(slot AS INTEGER) DESC, event_index DESC LIMIT 1";
+  const [latest, baseline, window, solUsd, mintAccount] = await Promise.all([
+    env.DB.prepare(priceSql + order).bind(pool).first<SwapPriceRow>(),
+    env.DB.prepare(priceSql + " AND block_time <= ?2" + order).bind(pool, since).first<SwapPriceRow>(),
+    env.DB.prepare("SELECT COUNT(*) AS trades, COALESCE(SUM(CAST(sol_amount_lamports AS INTEGER)), 0) AS lamports FROM meteora_swaps WHERE pool=?1 AND block_time > ?2")
+      .bind(pool, since).first<{ trades: number; lamports: number }>(),
+    getSolUsd(env as never).catch(() => null),
+    readAccount(rpcEnv(env), mint).catch(() => null),
+  ]);
+  const priceSol = swapPriceSol(latest, decimals);
+  const basePrice = swapPriceSol(baseline, decimals);
+  const usd = solUsd?.available ? solUsd.priceUsd : 0;
+  const supply = mintAccount ? Number(decodeTokenMint(mintAccount.data).supply) / 10 ** decimals : 0;
+  const graduated = Number(row.is_graduated) === 1;
+  const createdAt = Number(row.created_at) || 0;
+  const token: TokenSummary = {
+    mint, slug: mint,
+    name: String(row.name || row.symbol || mint), symbol: String(row.symbol || mint.slice(0, 6)),
+    description: "", creator: String(row.creator || ""), imageUrl: imageUrl(row.uri),
+    status: graduated ? "CURVE_CAP_REACHED" : "MINING_ACTIVE",
+    priceSol, priceUsd: priceSol * usd,
+    change24h: priceSol > 0 && basePrice > 0 ? (priceSol / basePrice - 1) * 100 : null,
+    volume24hUsd: (Number(window?.lamports ?? 0) / LAMPORTS_PER_SOL) * usd,
+    trades24h: Number(window?.trades ?? 0),
+    curveMining: { open: false, disabled: true, onCurve: !graduated, cap: 0, mined: 0, remaining: 0, progress: 0, blockReward: 0, unpaid: 0 },
+    sellCapacity: { sol: graduated ? 0 : Number(row.quote_reserve ?? 0) / LAMPORTS_PER_SOL, tokens: null },
+    marketCapUsd: priceSol * usd * supply,
+    reserveRemaining: 0, reserveTotal: 0, rewardPerBlock: 0, networkPower: 0, nextBlockAt: 0, nextEpochAt: 0,
+    createdAt, decimals, venue: "meteora",
+    quoteReserve: String(row.quote_reserve ?? "0"), migrationQuoteThreshold: String(row.migration_quote_threshold ?? "0"),
+  };
+  return json({ token });
 }
 
 export async function handleMeteoraGameRoute(request: Request, env: RuntimeEnvLike, pathname: string): Promise<Response | null> {

@@ -9,6 +9,7 @@ type SignatureRow = { signature: string };
 const chain = vi.hoisted(() => ({
   listedSignatures: [] as SignatureRow[],
   unreadable: new Set<string>(),
+  missingAccounts: new Set<string>(),
   transactionReads: [] as string[],
 }));
 
@@ -38,7 +39,9 @@ vi.mock("../chainV2", async (importOriginal) => {
         }
         return transaction;
       }),
-      getAccountInfo: (account: string) => send(() => ({ value: (fixture.accounts as Record<string, unknown>)[account] ?? null })),
+      getAccountInfo: (account: string) => send(() => ({
+        value: chain.missingAccounts.has(account) ? null : (fixture.accounts as Record<string, unknown>)[account] ?? null,
+      })),
       getProgramAccounts: (_program: string, options: { filters: unknown[] }) => send(() => (
         JSON.stringify(options.filters) === JSON.stringify(fixture.programAccounts.filters) ? fixture.programAccounts.value : []
       )),
@@ -47,6 +50,7 @@ vi.mock("../chainV2", async (importOriginal) => {
 });
 
 const { discoverMeteoraPools } = await import("./indexer");
+const { decodeMetaplexMetadata, mintMetadataAddress } = await import("./rpc");
 
 function memoryDb(configCursor: string | null) {
   const state = { configCursor, pools: new Map<string, unknown[]>() };
@@ -75,6 +79,7 @@ describe("Meteora pool discovery on mainnet", () => {
   beforeEach(() => {
     chain.listedSignatures = [...fixture.signatures];
     chain.unreadable.clear();
+    chain.missingAccounts.clear();
     chain.transactionReads = [];
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -88,6 +93,34 @@ describe("Meteora pool discovery on mainnet", () => {
     expect(state.configCursor).toBe(fixture.signatures[0].signature);
     // The reverted transaction is skipped from the signature list without a transaction read.
     expect(chain.transactionReads).not.toContain(fixture.signatures[0].signature);
+  });
+
+  it("takes the symbol from the mint's Metaplex metadata and the image from the DBC logo", async () => {
+    const { db } = memoryDb(fixture.cursorBeforeCreate);
+    const [pool] = await discoverMeteoraPools(env(db));
+    expect(mintMetadataAddress(fixture.mint)).toBe(fixture.mintMetadata);
+    expect([pool.name, pool.symbol, pool.uri]).toEqual(["Diggo", "DIGGO", "https://diggo.fun/media/official-diggo-logo-v1.png"]);
+  });
+
+  it("falls back to the image in the Metaplex JSON when the DBC pool has no logo", async () => {
+    chain.missingAccounts.add(fixture.dbcPoolMetadata);
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ image: "https://diggo.fun/media/from-json.png" })));
+    vi.stubGlobal("fetch", fetcher);
+    try {
+      const { db } = memoryDb(fixture.cursorBeforeCreate);
+      const [pool] = await discoverMeteoraPools(env(db));
+      expect([pool.symbol, pool.uri]).toEqual(["DIGGO", "https://diggo.fun/media/from-json.png"]);
+      expect(fetcher).toHaveBeenCalledWith("https://diggo.fun/media/official-diggo-metadata-v1.json", expect.anything());
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("decodes Metaplex metadata only from a MetadataV1 account", () => {
+    const [data] = (fixture.accounts as Record<string, { data: string[] }>)[fixture.mintMetadata].data;
+    const bytes = Uint8Array.from(atob(data), (character) => character.charCodeAt(0));
+    expect(decodeMetaplexMetadata(bytes)).toEqual({ name: "Diggo", symbol: "DIGGO", uri: "https://diggo.fun/media/official-diggo-metadata-v1.json" });
+    expect(decodeMetaplexMetadata(Uint8Array.of(7, ...bytes.subarray(1)))).toBeNull();
   });
 
   it("reconciles a pool whose create transaction never appears in the signature scan", async () => {
