@@ -25,7 +25,7 @@ import { SwapPanel } from "./SwapPanel";
 import { EmptyState } from "./StatusViews";
 
 /** The brand mark, shipped as a raster asset. Decorative here: the name is already in the heading. */
-const DIGGO_MARK = "/assets/brand/mark-trim-512.png";
+const DIGGO_MARK = "/assets/brand/mark-trim-512.png?v=2";
 
 export interface DiggoTradePageProps {
   /** The validated official mint, or null while $DIGGO has not launched. */
@@ -159,7 +159,7 @@ function DiggoHeader({
   return (
     <div className="diggo-hero page-shell">
       <img
-        className="diggo-hero-mark"
+        className={imageUrl ? "diggo-hero-mark" : "diggo-hero-mark is-brand"}
         src={imageUrl || DIGGO_MARK}
         alt=""
         width={512}

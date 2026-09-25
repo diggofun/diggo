@@ -27,6 +27,11 @@ INK = (23, 24, 19)
 ACID = (215, 255, 63)
 WHITE = (255, 255, 255)
 
+# Alpha levels applied after unmixing: below the floor is background noise, above the solid
+# point is the ink body.
+ALPHA_FLOOR = 0.06
+ALPHA_SOLID = 0.86
+
 DISPLAY_FONT = r"C:\Windows\Fonts\ariblk.ttf"   # --font-display: Arial Black
 BOLD_FONT = r"C:\Windows\Fonts\arialbd.ttf"
 MONO_FONT = r"C:\Windows\Fonts\consolab.ttf"
@@ -51,27 +56,42 @@ def cut_out(source):
         alpha = np.where(wins, candidate, alpha)
         colour = np.where(wins[:, :, None], flat, colour)
 
-    alpha[alpha < 0.004] = 0.0
+    # JPEG noise leaves the white field a few levels off pure white and the solid inks a few
+    # levels short of opaque. A levels pass maps the noise floor to fully transparent and the
+    # speckled ink body to fully opaque, keeping the soft ramp only across the real edge.
+    alpha = np.clip((alpha - ALPHA_FLOOR) / (ALPHA_SOLID - ALPHA_FLOOR), 0.0, 1.0)
     out = np.dstack([colour, alpha * 255.0])
     # Fully transparent pixels keep an ink colour, never white, so a later premultiply of a
     # downscaled edge can never drag a white halo in.
     return Image.fromarray(out.astype(np.uint8), "RGBA")
 
 
-def resize(image, size):
-    """Resample in premultiplied space, so a new edge never picks up a dark fringe."""
+def resize(image, size, method=Image.LANCZOS):
+    """Resample in premultiplied float space, so an edge never picks up a fringe.
+
+    Each channel is resampled as a 32-bit float image: rounding premultiplied values to 8 bits
+    before dividing by alpha again is what used to tint faint edge pixels at favicon sizes.
+    """
     side = int(size)
     data = np.asarray(image).astype(np.float64)
     alpha = data[:, :, 3:4] / 255.0
     premultiplied = np.dstack([data[:, :, :3] * alpha, data[:, :, 3:4]])
-    resized = Image.fromarray(premultiplied.astype(np.uint8), "RGBA").resize(
-        (side, side), Image.LANCZOS
-    )
-    out = np.asarray(resized).astype(np.float64)
+    out = np.dstack([
+        np.asarray(
+            Image.fromarray(premultiplied[:, :, c].astype(np.float32), "F").resize(
+                (side, side), method
+            )
+        ).astype(np.float64)
+        for c in range(4)
+    ])
     out_alpha = np.clip(out[:, :, 3:4] / 255.0, 0.0, 1.0)
-    safe = np.where(out_alpha > 0.0001, out_alpha, 1.0)
-    straight = np.dstack([np.clip(out[:, :, :3] / safe, 0, 255), out_alpha * 255.0])
-    return Image.fromarray(straight.astype(np.uint8), "RGBA")
+    out_alpha[out_alpha < 2.0 / 255.0] = 0.0
+    # Lanczos overshoot can leave premultiplied colour outside [0, alpha]; clamping it there
+    # is what stops a faint edge pixel from unpremultiplying into a bright white speck.
+    colour = np.clip(out[:, :, :3], 0.0, out_alpha * 255.0)
+    safe = np.where(out_alpha > 0.0, out_alpha, 1.0)
+    straight = np.dstack([np.clip(colour / safe, 0, 255), out_alpha * 255.0])
+    return Image.fromarray(np.rint(straight).astype(np.uint8), "RGBA")
 
 
 def trim_square(mark):
@@ -79,6 +99,20 @@ def trim_square(mark):
     box = mark.getchannel("A").point(lambda v: 255 if v > 2 else 0).getbbox()
     mark = mark.crop(box)
     return square_centred(mark)
+
+
+def trim_tight(mark):
+    """The mark cropped to its visible pixels and centred on the smallest enclosing square.
+
+    Used where the mark has to fill as much of a tiny canvas as possible (favicons, the
+    header logo); trim_square keeps the round-crop margin that wallets need instead.
+    """
+    box = mark.getchannel("A").point(lambda v: 255 if v > 8 else 0).getbbox()
+    mark = mark.crop(box)
+    side = max(mark.size)
+    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    canvas.paste(mark, ((side - mark.width) // 2, (side - mark.height) // 2))
+    return canvas
 
 
 def square_centred(mark):
@@ -145,20 +179,30 @@ def fit(mark, size, max_radius=None, fraction=None):
 def padded(mark, size, fraction):
     """The mark on a transparent square, with fraction of the side empty on each edge."""
     inner = max(1, round(size * (1.0 - 2.0 * fraction)))
-    canvas = Image.new("RGBA", (size, size), (255, 255, 255, 0))
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     scaled = resize(mark, inner)
-    canvas.paste(scaled, ((size - inner) // 2, (size - inner) // 2), scaled)
+    # No paste mask: masking blends the edge colour toward the canvas colour, which is exactly
+    # the white halo this must avoid. The canvas is empty, so a straight copy is correct.
+    canvas.paste(scaled, ((size - inner) // 2, (size - inner) // 2))
     return canvas
 
 
 def tile(mark, size, inset):
-    """A full-bleed opaque white tile, used where the platform paints its own mask.
+    """A full-bleed opaque tile in the site's paper colour, for platforms that need one.
 
-    Full bleed on purpose: iOS and Android round and crop the icon themselves, so a corner
-    that is already rounded here would only end up rounded twice.
+    Only the apple-touch and maskable icons use this: iOS fills transparency with black and a
+    maskable icon must be opaque. Full bleed on purpose, since the platform rounds the corners.
     """
     inner = max(1, round(size * (1.0 - 2.0 * inset)))
-    canvas = Image.new("RGB", (size, size), WHITE)
+    canvas = Image.new("RGB", (size, size), PAPER)
     scaled = resize(mark, inner)
     canvas.paste(scaled, ((size - inner) // 2, (size - inner) // 2), scaled)
     return canvas
+
+
+def transparent_icon(mark, size, inset):
+    """The mark on a transparent square, supersampled so thin strokes survive tiny sizes."""
+    factor = max(1, 512 // size)
+    big = padded(mark, size * factor, inset)
+    # A box filter is an exact area average at an integer factor: no ringing, no halo.
+    return big if factor == 1 else resize(big, size, Image.BOX)
