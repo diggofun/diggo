@@ -54,7 +54,13 @@ import { TurnstileBox } from "./TurnstileBox";
 import { useDialog } from "./useDialog";
 import { usePendingTransaction } from "../onchain";
 import { launchMeteoraCoin } from "../meteora";
-import { estimatedMeteoraLaunchCostLamports, METEORA_POOL_CREATION_FEE_LAMPORTS } from "../../shared/meteora";
+import {
+  estimatedMeteoraLaunchCostLamports,
+  isMeteoraConfigPubkey,
+  METEORA_MIGRATION_THRESHOLD_SOL,
+  METEORA_POOL_CREATION_FEE_LAMPORTS,
+  normalizeMeteoraCluster,
+} from "../../shared/meteora";
 
 export function LaunchModal({
   onClose,
@@ -130,6 +136,8 @@ export function LaunchModal({
 
   const cost = launchCostLamports({ sponsored: sponsor !== null });
   const meteoraCost = estimatedMeteoraLaunchCostLamports();
+  const meteoraCluster = normalizeMeteoraCluster(config.cluster);
+  const launchReady = config.chainMode === "native" || isMeteoraConfigPubkey(config.meteoraConfigPubkey);
 
   async function authenticate(): Promise<void> {
     if (!connected) throw new Error("Connect a wallet that supports message signing");
@@ -138,11 +146,15 @@ export function LaunchModal({
     const referralCode = new URLSearchParams(window.location.search).get("ref");
     const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature), referralCode);
     onAuthenticated(verified.wallet);
-    track("wallet_signed_in", { network: "solana-devnet" });
+    track("wallet_signed_in", { network: config.cluster });
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (!launchReady) {
+      setMessage("Launching soon");
+      return;
+    }
     if (!connected) {
       setMessage("Connect a wallet that can sign transactions before launching.");
       return;
@@ -222,7 +234,7 @@ export function LaunchModal({
       track("launch_submitted", {
         has_artwork: Boolean(file),
         sponsored: launch.sponsored,
-        network: "solana-devnet",
+        network: config.cluster,
       });
 
       setMessage("Registering your launch…");
@@ -254,7 +266,7 @@ export function LaunchModal({
       const token = await registerLaunchedToken(recoveryMint.trim(), {});
       onLaunched(token);
       setRecoveryMessage(`${token.symbol} is now indexed and live in Diggo.`);
-      track("launch_recovered", { network: "solana-devnet" });
+      track("launch_recovered", { network: config.cluster });
     } catch (error) {
       setRecoveryMessage(error instanceof Error ? error.message : "Could not recover this launch");
     } finally {
@@ -319,11 +331,12 @@ export function LaunchModal({
             </label>
             <div className="launch-allocation">
               <span>1B SPL supply · 9 decimals</span><span>20% mining-vault leftover</span><span>Creator trading fee 0%</span><span>Dynamic fee on · anti-sniper 3%→1% / 60 min</span>
+              {config.chainMode === "meteora" && <span>Migration threshold {METEORA_MIGRATION_THRESHOLD_SOL[meteoraCluster]} SOL</span>}
             </div>
             <TurnstileBox siteKey={TURNSTILE_SITE_KEY} onToken={onTurnstileToken} />
             {message && <p className="form-message">{message}</p>}
-            <button className="primary-button launch-submit" disabled={state === "working" || !turnstileToken || !pendingTransaction.canSubmit()}>
-              {state === "working" ? "Launching on-chain…" : "Launch on-chain"} <IconRocket size={17} />
+            <button className="primary-button launch-submit" disabled={!launchReady || state === "working" || !turnstileToken || !pendingTransaction.canSubmit()}>
+              {!launchReady ? "Launching soon" : state === "working" ? "Launching on-chain…" : "Launch on-chain"} <IconRocket size={17} />
             </button>
           </form>
           <details className="recover-launch">

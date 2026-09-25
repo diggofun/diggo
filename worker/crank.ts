@@ -23,7 +23,7 @@ import {
 import bs58 from "bs58";
 import { crankEnabled, type RuntimeEnv } from "./env";
 import { nowSeconds } from "./indexStore";
-import { sendWithFeePayer, type ChainEnv } from "./chainV2";
+import { getProgramAddress, sendWithFeePayer, type ChainEnv } from "./chainV2";
 
 /** Instructions one crank pass may send. Bounded so a pass cannot run past its budget. */
 export const CRANK_MAX_INSTRUCTIONS = 12;
@@ -142,7 +142,7 @@ interface CrankAction {
  * sweep. A coin with nothing to do costs one D1 row read and no transaction at all.
  */
 async function planActions(env: RuntimeEnv, target: CrankTarget, now: number): Promise<CrankAction[]> {
-  const program = address(env.DIGGO_PROGRAM_ID);
+  const program = env.DIGGO_PROGRAM_ID ? address(env.DIGGO_PROGRAM_ID) : getProgramAddress(env as ChainEnv);
   const mint = address(target.mint);
   const {
     buildAdvanceMineInstruction,

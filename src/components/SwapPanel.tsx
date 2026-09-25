@@ -59,6 +59,11 @@ function formatFeeBps(bps: number): string {
   return Number.isInteger(percent) ? String(percent) : percent.toFixed(2).replace(/0+$/, "");
 }
 
+function explorerTxUrl(signature: string, cluster: string): string {
+  const base = `https://explorer.solana.com/tx/${encodeURIComponent(signature)}`;
+  return cluster === "devnet" ? `${base}?cluster=devnet` : base;
+}
+
 function MeteoraSwapPanel({
   token,
   cluster,
@@ -139,7 +144,7 @@ function MeteoraSwapPanel({
           <label>{side === "buy" ? "Pay (SOL)" : `Sell ($${token.symbol})`}<input type="number" min="0" step="any" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" /></label>
           <div className="swap-quote"><span>YOU RECEIVE (EST., 1% SLIPPAGE FLOOR)</span><strong>{output === null ? "—" : side === "buy" ? `${formatTokenAmount(output, token.decimals)} $${token.symbol}` : `${(Number(output) / 1_000_000_000).toFixed(6)} SOL`}</strong></div>
           {error && <p className="form-message" role="alert">{error}</p>}
-          {signature && <a className="tx-success" href={`https://explorer.solana.com/tx/${signature}?cluster=${cluster === "mainnet-beta" ? "mainnet-beta" : "devnet"}`} target="_blank" rel="noreferrer">View transaction</a>}
+          {signature && <a className="tx-success" href={explorerTxUrl(signature, cluster)} target="_blank" rel="noreferrer">View transaction</a>}
           {signer ? <button className="primary-button swap-submit" disabled={busy || !quote || quote.minimumAmountOut <= 0n || !pendingTransaction.canSubmit()}>{busy ? "Confirming…" : side === "buy" ? "Buy on Meteora" : "Sell on Meteora"}</button> : <button type="button" className="primary-button swap-submit" onClick={requestWalletMenu}>Connect wallet <IconWallet size={16} /></button>}
           <p className="swap-note">Mining rewards unlock at graduation. Dynamic fees and the Meteora anti-sniper schedule are active.</p>
         </form></div></section>
@@ -149,7 +154,7 @@ function MeteoraSwapPanel({
 export function SwapPanel({
   token,
   programAddress,
-  cluster = "devnet",
+  cluster = "mainnet-beta",
   chainMode = "native",
   meteoraConfigPubkey = "",
   signer,
@@ -351,7 +356,7 @@ function NativeSwapPanel({ token, programAddress, cluster, signer, onTraded }: {
         amount: execution.recordedAmount,
       });
       setLastSignature(execution.signature);
-      track(side === "buy" ? "swap_buy" : "swap_sell", { network: "solana-devnet" });
+      track(side === "buy" ? "swap_buy" : "swap_sell", { network: cluster });
       setAmount("");
       onTraded();
     } catch (tradeError) {
@@ -390,7 +395,7 @@ function NativeSwapPanel({ token, programAddress, cluster, signer, onTraded }: {
                 <b className={trade.side}>{trade.side}</b>
                 <span>{trade.priceSol.toExponential(4)}</span>
                 <span>{compact(trade.amount)}</span>
-                <a href={`https://explorer.solana.com/tx/${trade.signature}?cluster=devnet`} target="_blank" rel="noreferrer">{trade.signature.slice(0, 5)}…</a>
+                <a href={explorerTxUrl(trade.signature, cluster)} target="_blank" rel="noreferrer">{trade.signature.slice(0, 5)}…</a>
               </div>
             ))}
           </div>
@@ -437,7 +442,7 @@ function NativeSwapPanel({ token, programAddress, cluster, signer, onTraded }: {
             </div>
           )}
           {error && <p className="form-message" role="alert">{error}</p>}
-          {lastSignature && <a className="tx-success" href={`https://explorer.solana.com/tx/${lastSignature}?cluster=devnet`} target="_blank" rel="noreferrer">Confirmed on devnet · View transaction</a>}
+          {lastSignature && <a className="tx-success" href={explorerTxUrl(lastSignature, cluster)} target="_blank" rel="noreferrer">Confirmed on Solana · View transaction</a>}
           {signer ? (
             <button className="primary-button swap-submit" disabled={busy || !quoteReady || !pendingTransaction.canSubmit()}>
               {busy ? "Confirming…" : side === "buy" ? "Buy on-chain" : "Sell on-chain"}

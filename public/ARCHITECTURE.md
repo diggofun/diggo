@@ -334,4 +334,4 @@ Stated plainly, because the difference matters:
   it is verifiable today, not trustless.
 - The vanity-mint worker pool is not implemented.
 
-The website therefore labels itself as a devnet MVP.
+The website therefore presents a limited initial product experience.

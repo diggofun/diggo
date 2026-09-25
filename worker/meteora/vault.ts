@@ -1,7 +1,15 @@
 import {
   AccountRole,
   address,
+  appendTransactionMessageInstructions,
+  compileTransaction,
   createKeyPairSignerFromBytes,
+  createTransactionMessage,
+  getBase64EncodedWireTransaction,
+  partiallySignTransactionWithSigners,
+  pipe,
+  setTransactionMessageFeePayer,
+  setTransactionMessageLifetimeUsingBlockhash,
   type Instruction,
   type KeyPairSigner,
 } from "@solana/kit";
@@ -13,7 +21,10 @@ import {
   deriveAssociatedTokenAddress,
   meteoraRpcEnv,
   readAccount,
+  readTransaction,
+  type MeteoraTransaction,
 } from "./rpc";
+import { getChainRpc } from "../chainV2";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   METEORA_DBC_PROGRAM_ID,
@@ -22,6 +33,7 @@ import {
   SYSTEM_PROGRAM_ID,
   type MeteoraClaimParams,
   type MeteoraRpcEnv,
+  type PreparedMiningClaim,
   type MeteoraVaultOperation,
   type MeteoraVaultRow,
 } from "./types";
@@ -29,8 +41,10 @@ import {
 export const METEORA_EVENT_AUTHORITY = "8Ks12pbrD6PXxfty1hVQiE9sc289zgU1zHkvXhrSdriF";
 export const WITHDRAW_LEFTOVER_DISCRIMINATOR = Uint8Array.of(20, 198, 202, 237, 235, 243, 183, 66);
 export const SPL_TRANSFER_INSTRUCTION = 3;
+export const CREATE_ASSOCIATED_TOKEN_ACCOUNT_IDEMPOTENT_INSTRUCTION = 1;
 
 const MAX_U64 = (1n << 64n) - 1n;
+const MINING_CLAIM_TRANSACTION_TTL_SECONDS = 90;
 
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
@@ -124,6 +138,45 @@ export function buildSplTokenTransferInstruction(params: {
   };
 }
 
+export async function buildPreparedMiningClaimTransaction(params: {
+  vault: KeyPairSigner;
+  player: string;
+  blockhash: Parameters<typeof setTransactionMessageLifetimeUsingBlockhash>[0];
+  source: string;
+  mint: string;
+  destination: string;
+  amount: bigint;
+}) {
+  return partiallySignTransactionWithSigners(
+    [params.vault],
+    compileTransaction(pipe(
+      createTransactionMessage({ version: "legacy" }),
+      (message) => setTransactionMessageFeePayer(address(params.player), message),
+      (message) => setTransactionMessageLifetimeUsingBlockhash(params.blockhash, message),
+      (message) => appendTransactionMessageInstructions(
+        [
+          // This is always included. CreateIdempotent succeeds when the player's ATA already exists,
+          // and the player pays the rent and the transaction fee when it needs to be created.
+          buildAssociatedTokenAccountInstruction({
+            payer: params.player,
+            owner: params.player,
+            mint: params.mint,
+            associatedToken: params.destination,
+          }),
+          buildSplTokenTransferInstruction({
+            source: params.source,
+            mint: params.mint,
+            destination: params.destination,
+            amount: params.amount,
+            authority: params.vault.address,
+          }),
+        ],
+        message,
+      ),
+    )),
+  );
+}
+
 export async function loadMiningVaultSigner(env: MeteoraRpcEnv): Promise<KeyPairSigner> {
   const raw = optionalEnv(env, "MINING_VAULT_SECRET");
   if (!raw) throw new Error("MINING_VAULT_SECRET is required");
@@ -207,6 +260,22 @@ async function updateClaimStatus(
   await env.DB.prepare(
     "UPDATE meteora_vault_operations SET status=?2, signature=?3, error=?4, updated_at=?5 WHERE id=?1",
   ).bind(id, status, signature, error, now).run();
+}
+
+function capSettlement(
+  env: MeteoraRpcEnv,
+  mint: string,
+  wallet: string,
+  amount: bigint,
+  dayIndex: number,
+  settled: bigint,
+  reserved: bigint,
+  revision: number,
+) {
+  return env.DB.prepare(
+    "UPDATE meteora_daily_claim_caps SET settled=?4, revision=revision+1 " +
+    "WHERE mint=?1 AND wallet=?2 AND day_index=?3 AND settled=?5 AND reserved=?6 AND revision=?7",
+  ).bind(mint, wallet, dayIndex, (settled + amount).toString(), settled.toString(), reserved.toString(), revision);
 }
 
 async function ensureTokenAccount(params: {
@@ -300,47 +369,225 @@ export async function runVaultSweep(env: MeteoraRpcEnv): Promise<{ checked: numb
   return { checked: (rows.results ?? []).length, withdrawn, failed, balances: withdrawn };
 }
 
-export async function payMiningClaim(params: MeteoraClaimParams): Promise<MeteoraVaultOperation> {
+export async function prepareMiningClaim(params: MeteoraClaimParams): Promise<PreparedMiningClaim> {
   const { env, amount } = params;
   if (amount <= 0n || amount > MAX_U64) throw new Error("claim amount must be a positive u64");
   const mint = requireAddress(params.mint, "mint");
   const wallet = requireAddress(params.wallet, "wallet");
   const idempotencyKey = params.idempotencyKey.trim();
   if (!idempotencyKey) throw new Error("idempotencyKey is required");
-  const existing = await existingOperation(env, idempotencyKey);
-  if (existing) return existing;
-
+  const existing = await env.DB.prepare(
+    "SELECT id, mint, wallet, amount, status, prepared_transaction, prepared_expires_at FROM meteora_vault_claims WHERE id=?1",
+  ).bind(idempotencyKey).first<{
+    id: string;
+    mint: string;
+    wallet: string;
+    amount: string;
+    status: string;
+    prepared_transaction: string | null;
+    prepared_expires_at: number | null;
+  }>();
+  if (existing?.status === "SETTLED") throw new Error("claim is already settled");
+  if (existing?.status === "FAILED") throw new Error("claim preparation failed; retry this claim after resolving the error");
+  if (existing?.prepared_transaction) {
+    if (existing.mint !== mint || existing.wallet !== wallet || BigInt(existing.amount) !== amount) {
+      throw new Error("claim idempotency key does not match the prepared payout");
+    }
+    if (!existing.prepared_expires_at || existing.prepared_expires_at <= nowSeconds()) {
+      throw new Error("prepared claim transaction has expired; create a new claim to retry");
+    }
+    const signer = await loadMiningVaultSigner(env);
+    return {
+      id: existing.id,
+      mint: existing.mint,
+      wallet: existing.wallet,
+      amount: existing.amount,
+      source: deriveAssociatedTokenAddress(existing.mint, signer.address),
+      destination: deriveAssociatedTokenAddress(existing.mint, existing.wallet),
+      transaction: existing.prepared_transaction,
+      expiresAt: existing.prepared_expires_at,
+    };
+  }
   const perClaim = configuredU64(env, "MINING_CLAIM_PER_CLAIM", amount);
   const perDay = configuredU64(env, "MINING_CLAIM_PER_DAY", perClaim);
   validateClaimCaps(amount, perClaim, perDay);
-
   const dayIndex = Math.floor(nowSeconds() / 86400);
-  if (!(await recordAttempt(env, idempotencyKey, "MINING_CLAIM", mint, wallet, amount))) {
-    const concurrent = await existingOperation(env, idempotencyKey);
-    if (!concurrent) throw new Error("claim is already being processed");
-    return concurrent;
-  }
-  if (!(await reserveDailyCap(env, mint, wallet, amount, dayIndex, perDay))) {
-    await updateClaimStatus(env, idempotencyKey, "FAILED", null, "claim exceeds daily cap or idempotency key is being processed");
-    throw new Error("claim exceeds daily cap or idempotency key is being processed");
+  if (!existing) {
+    if (!(await recordAttempt(env, idempotencyKey, "MINING_CLAIM", mint, wallet, amount))) {
+      throw new Error("claim is already being processed");
+    }
+    if (!(await reserveDailyCap(env, mint, wallet, amount, dayIndex, perDay))) {
+      await updateClaimStatus(env, idempotencyKey, "FAILED", null, "claim exceeds daily cap or idempotency key is being processed");
+      throw new Error("claim exceeds daily cap or idempotency key is being processed");
+    }
   }
   try {
     const signer = await loadMiningVaultSigner(env);
     const source = deriveAssociatedTokenAddress(mint, signer.address);
     const destination = deriveAssociatedTokenAddress(mint, wallet);
-    const createAccount = await ensureTokenAccount({ env, payer: signer.address, owner: wallet, mint, account: destination });
-    const instructions = [buildSplTokenTransferInstruction({ source, mint, destination, amount, authority: signer.address })];
-    if (createAccount) instructions.unshift(createAccount);
-    await updateClaimStatus(env, idempotencyKey, "SENT", null, null);
-    const signature = await sendAndConfirmWithFeePayer(meteoraRpcEnv(env), signer, instructions);
-    await updateClaimStatus(env, idempotencyKey, "SETTLED", signature, null);
-    await updateVaultBalance(env, mint, source);
-    return { id: idempotencyKey, kind: "MINING_CLAIM", pool: null, mint, status: "SETTLED", signature, amount: amount.toString(), error: null };
+    const [sourceAccount, blockhash] = await Promise.all([
+      readAccount(env, source),
+      getChainRpc(meteoraRpcEnv(env)).getLatestBlockhash({ commitment: "confirmed" }).send(),
+    ]);
+    if (!sourceAccount) throw new Error("mining vault token account does not exist");
+    const transaction = await buildPreparedMiningClaimTransaction({
+      vault: signer,
+      player: wallet,
+      blockhash: blockhash.value,
+      source,
+      mint,
+      destination,
+      amount,
+    });
+    const wireTransaction = getBase64EncodedWireTransaction(transaction);
+    const now = nowSeconds();
+    const expiresAt = now + MINING_CLAIM_TRANSACTION_TTL_SECONDS;
+    const saved = await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE meteora_vault_claims SET status='SENT', prepared_transaction=?2, prepared_expires_at=?3, error=NULL, updated_at=?4 " +
+        "WHERE id=?1 AND status='PENDING' AND prepared_transaction IS NULL",
+      ).bind(idempotencyKey, wireTransaction, expiresAt, now),
+      env.DB.prepare(
+        "UPDATE meteora_vault_operations SET status='SENT', error=NULL, updated_at=?2 " +
+        "WHERE id=?1 AND status='PENDING'",
+      ).bind(idempotencyKey, now),
+    ]);
+    if ((saved[0]?.meta.changes ?? 0) !== 1) {
+      const concurrent = await env.DB.prepare(
+        "SELECT mint, wallet, amount, prepared_transaction, prepared_expires_at FROM meteora_vault_claims WHERE id=?1 AND status='SENT'",
+      ).bind(idempotencyKey).first<{
+        mint: string;
+        wallet: string;
+        amount: string;
+        prepared_transaction: string | null;
+        prepared_expires_at: number | null;
+      }>();
+      if (!concurrent?.prepared_transaction) throw new Error("claim preparation is still in progress");
+      if (!concurrent.prepared_expires_at || concurrent.prepared_expires_at <= now) {
+        throw new Error("prepared claim transaction has expired; create a new claim to retry");
+      }
+      return {
+        id: idempotencyKey,
+        mint: concurrent.mint,
+        wallet: concurrent.wallet,
+        amount: concurrent.amount,
+        source,
+        destination,
+        transaction: concurrent.prepared_transaction,
+        expiresAt: concurrent.prepared_expires_at,
+      };
+    }
+    return {
+      id: idempotencyKey,
+      mint,
+      wallet,
+      amount: amount.toString(),
+      source,
+      destination,
+      transaction: wireTransaction,
+      expiresAt,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await updateClaimStatus(env, idempotencyKey, "FAILED", null, message);
     throw error;
   }
+}
+
+function tokenDelta(transaction: MeteoraTransaction, account: string): bigint | null {
+  const before = transaction.preTokenBalances.find((row) => transaction.accountKeys[row.accountIndex] === account)?.amount;
+  const after = transaction.postTokenBalances.find((row) => transaction.accountKeys[row.accountIndex] === account)?.amount;
+  return before === undefined || after === undefined ? null : BigInt(after) - BigInt(before);
+}
+
+export function verifyMiningClaimTransfer(
+  transaction: MeteoraTransaction | null,
+  expected: { mint: string; wallet: string; vault: string; source: string; destination: string; amount: bigint },
+): boolean {
+  if (!transaction || transaction.failed) return false;
+  if (transaction.signatures.length !== 2 || transaction.signatures[0] !== transaction.signature || !transaction.signatures[1]) return false;
+  if (transaction.accountKeys[0] !== expected.wallet) return false;
+  if (!transaction.accountKeys.includes(expected.vault)) return false;
+  if (!transaction.accountKeys.includes(expected.source) || !transaction.accountKeys.includes(expected.destination)) return false;
+  const topLevel = transaction.topLevelInstructions ?? transaction.instructions;
+  if (topLevel.length !== 2) return false;
+  const createsPlayerAta = topLevel.filter((instruction) =>
+    instruction.programId === ASSOCIATED_TOKEN_PROGRAM_ID &&
+    instruction.data === bs58.encode(Uint8Array.of(CREATE_ASSOCIATED_TOKEN_ACCOUNT_IDEMPOTENT_INSTRUCTION)) &&
+    instruction.accounts[0] === expected.wallet &&
+    instruction.accounts[1] === expected.destination &&
+    instruction.accounts[2] === expected.wallet &&
+    instruction.accounts[3] === expected.mint &&
+    instruction.accounts[4] === SYSTEM_PROGRAM_ID &&
+    instruction.accounts[5] === METEORA_TOKEN_PROGRAM_ID);
+  if (createsPlayerAta.length !== 1) return false;
+  const transfers = topLevel.filter((instruction) =>
+    instruction.programId === METEORA_TOKEN_PROGRAM_ID &&
+    instruction.accounts[0] === expected.source &&
+    instruction.accounts[1] === expected.mint &&
+    instruction.accounts[2] === expected.destination &&
+    instruction.accounts[3] === expected.vault);
+  const transferData = (() => {
+    try {
+      return bs58.decode(transfers[0]?.data ?? "");
+    } catch {
+      return new Uint8Array();
+    }
+  })();
+  if (transferData.length !== 9 || transferData[0] !== SPL_TRANSFER_INSTRUCTION) return false;
+  let transferAmount = 0n;
+  for (let index = 1; index < transferData.length; index += 1) transferAmount |= BigInt(transferData[index]) << BigInt((8 - index) * 8);
+  if (transferAmount !== expected.amount) return false;
+  const sourceOwner = transaction.preTokenBalances.find((row) => transaction.accountKeys[row.accountIndex] === expected.source)?.owner;
+  const destinationOwner = transaction.postTokenBalances.find((row) => transaction.accountKeys[row.accountIndex] === expected.destination)?.owner;
+  return sourceOwner === expected.vault && destinationOwner === expected.wallet &&
+    tokenDelta(transaction, expected.source) === -expected.amount &&
+    tokenDelta(transaction, expected.destination) === expected.amount;
+}
+
+export async function confirmMiningClaim(env: MeteoraRpcEnv, claimId: string, signature: string): Promise<boolean> {
+  const id = claimId.trim();
+  if (!id) throw new Error("claimId is required");
+  const operation = await env.DB.prepare(
+    "SELECT id, mint, wallet, amount, day_index, status, signature FROM meteora_vault_claims WHERE id=?1",
+  ).bind(id).first<{ id: string; mint: string; wallet: string; amount: string; day_index: number; status: string; signature: string | null }>();
+  if (!operation) throw new Error("claim not found");
+  if (operation.status === "SETTLED") return operation.signature === signature;
+  if (operation.signature && operation.signature !== signature) throw new Error("signature does not match the prepared claim");
+  if (operation.status !== "SENT") throw new Error("claim is not awaiting confirmation");
+  const signer = await loadMiningVaultSigner(env);
+  const source = deriveAssociatedTokenAddress(operation.mint, signer.address);
+  const destination = deriveAssociatedTokenAddress(operation.mint, operation.wallet);
+  const transaction = await readTransaction(env, signature);
+  if (!verifyMiningClaimTransfer(transaction, {
+    mint: operation.mint,
+    wallet: operation.wallet,
+    vault: signer.address,
+    source,
+    destination,
+    amount: BigInt(operation.amount),
+  })) return false;
+  const cap = await env.DB.prepare(
+    "SELECT settled, reserved, revision FROM meteora_daily_claim_caps WHERE mint=?1 AND wallet=?2 AND day_index=?3",
+  ).bind(operation.mint, operation.wallet, operation.day_index)
+    .first<{ settled: string; reserved: string; revision: number }>();
+  if (!cap || BigInt(cap.settled) + BigInt(operation.amount) > BigInt(cap.reserved)) {
+    throw new Error("daily claim reservation is missing or insufficient");
+  }
+  const now = nowSeconds();
+  const settled = await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE meteora_vault_claims SET status='SETTLED', signature=?2, error=NULL, updated_at=?3 " +
+      "WHERE id=?1 AND status='SENT' AND signature IS NULL",
+    ).bind(id, signature, now),
+    env.DB.prepare("UPDATE meteora_vault_operations SET status='SETTLED', signature=?2, error=NULL, updated_at=?3 WHERE id=?1").bind(id, signature, now),
+    capSettlement(env, operation.mint, operation.wallet, BigInt(operation.amount), operation.day_index, BigInt(cap.settled), BigInt(cap.reserved), cap.revision),
+  ]);
+  if ((settled[0]?.meta.changes ?? 0) !== 1 || (settled[2]?.meta.changes ?? 0) !== 1) {
+    throw new Error("claim settlement changed concurrently; retry confirmation");
+  }
+  await updateVaultBalance(env, operation.mint, source);
+  return true;
 }
 
 export { ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID };

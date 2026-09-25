@@ -101,7 +101,7 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
         posthogApiKey: env.POSTHOG_API_KEY,
         posthogHost: env.POSTHOG_HOST,
         turnstileSiteKey: env.TURNSTILE_SITE_KEY,
-        programId: chain.programId,
+        programId: chain.programId ?? "",
         vanitySuffix: env.VANITY_SUFFIX,
       });
     }

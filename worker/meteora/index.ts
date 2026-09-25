@@ -10,11 +10,14 @@ export {
 export { decodeMeteoraEventData } from "./indexer";
 export {
   buildSplTokenTransferInstruction,
+  buildPreparedMiningClaimTransaction,
   buildWithdrawLeftoverInstruction,
+  confirmMiningClaim,
   loadMiningVaultSigner,
-  payMiningClaim,
+  prepareMiningClaim,
   runVaultSweep,
   validateClaimCaps,
+  verifyMiningClaimTransfer,
 } from "./vault";
 export {
   decodeTokenAccountAmount,

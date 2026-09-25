@@ -42,7 +42,10 @@ export interface MeteoraTransaction {
   blockTime: number | null;
   failed: boolean;
   accountKeys: string[];
+  signatures: string[];
   instructions: { programId: string; accounts: string[]; data: string }[];
+  /** Top-level message instructions, before inner CPI instructions are appended. */
+  topLevelInstructions?: { programId: string; accounts: string[]; data: string }[];
   logs: string[];
   preTokenBalances: { accountIndex: number; mint: string; owner: string | null; amount: string }[];
   postTokenBalances: { accountIndex: number; mint: string; owner: string | null; amount: string }[];
@@ -231,7 +234,7 @@ export async function readTransaction(env: MeteoraRpcEnv, signature: string): Pr
       preTokenBalances?: Array<{ accountIndex?: unknown; mint?: unknown; owner?: unknown; uiTokenAmount?: { amount?: unknown } }> | null;
       postTokenBalances?: Array<{ accountIndex?: unknown; mint?: unknown; owner?: unknown; uiTokenAmount?: { amount?: unknown } }> | null;
     } | null;
-    transaction?: { message?: { accountKeys?: Array<string | { pubkey: string }>; instructions?: unknown[] } };
+    transaction?: { signatures?: string[]; message?: { accountKeys?: Array<string | { pubkey: string }>; instructions?: unknown[] } };
   } | null;
   if (!value) return null;
   const keys = value.transaction?.message?.accountKeys ?? [];
@@ -274,7 +277,9 @@ export async function readTransaction(env: MeteoraRpcEnv, signature: string): Pr
     blockTime: rpcNumber(value.blockTime),
     failed: Boolean(value.meta?.err),
     accountKeys: keys.map((key) => typeof key === "string" ? key : key.pubkey),
+    signatures: value.transaction?.signatures ?? [],
     instructions,
+    topLevelInstructions: instructions.slice(0, topLevel.length),
     logs: value.meta?.logMessages ?? [],
     preTokenBalances: tokenBalances(value.meta?.preTokenBalances),
     postTokenBalances: tokenBalances(value.meta?.postTokenBalances),

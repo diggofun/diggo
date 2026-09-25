@@ -203,23 +203,6 @@ async function settleMining(
   return player;
 }
 
-async function payoutPendingClaims(
-  context: GameHandlerContext,
-  mint: string,
-  wallet: string,
-): Promise<void> {
-  const store = contextStore(context);
-  for (const pending of await store.listPendingClaims(MAX_CLAIM_ATTEMPTS)) {
-    if (pending.mint !== mint || pending.wallet !== wallet) continue;
-    try {
-      const result = await context.services.payout.pay(mint, wallet, pending.amount, pending.id);
-      await store.markClaimPaid(pending.id, result.signature);
-    } catch {
-      return;
-    }
-  }
-}
-
 export async function handleClaim(context: GameHandlerContext, request: Request): Promise<Response> {
   if (gameChainMode(context.env) !== "meteora") return apiError("Claims are handled by the native path");
   const wallet = await authenticatedWallet(context, request, "claim");
@@ -230,8 +213,19 @@ export async function handleClaim(context: GameHandlerContext, request: Request)
   const player = await ensurePlayer(context, wallet);
   const coin = await context.services.coins.getMine(mint);
   if (!coin) return apiError("Mine not found", 404);
-  if (coin.graduated) await payoutPendingClaims(context, mint, wallet);
   const settled = await settleMining(context, player, coin);
+  if (coin.graduated) {
+    const pending = (await store.listPendingClaims(MAX_CLAIM_ATTEMPTS))
+      .find((claim) => claim.kind === "MINING" && claim.mint === mint && claim.wallet === wallet);
+    if (pending) {
+      try {
+        const payout = await context.services.payout.prepare(mint, wallet, pending.amount, pending.id);
+        return json({ claim: serializeClaim(pending), payout, status: "PENDING", settled });
+      } catch {
+        return json({ claim: serializeClaim(pending), status: "PENDING", settlement: "payout_failed" });
+      }
+    }
+  }
   let balance = await store.getBalance(wallet, mint);
   if (balance.claimable <= 0n) return apiError("No claimable mining balance", 409);
   for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt += 1) {
@@ -254,8 +248,8 @@ export async function handleClaim(context: GameHandlerContext, request: Request)
     }
     if (coin.graduated) {
       try {
-        const result = await context.services.payout.pay(mint, wallet, created.amount, created.id);
-        if (await store.markClaimPaid(created.id, result.signature)) return json({ claim: serializeClaim((await store.getClaim(created.id)) ?? created), status: "PAID", settled });
+        const payout = await context.services.payout.prepare(mint, wallet, created.amount, created.id);
+        return json({ claim: serializeClaim(created), payout, status: "PENDING", settled });
       } catch {
         return json({ claim: serializeClaim(created), status: "PENDING", settlement: "payout_failed" });
       }
@@ -263,6 +257,31 @@ export async function handleClaim(context: GameHandlerContext, request: Request)
     return json({ claim: serializeClaim(created), status: "PENDING" });
   }
   return apiError("Mining state changed; retry claim", 409);
+}
+
+export async function handleClaimConfirmation(context: GameHandlerContext, request: Request): Promise<Response> {
+  if (gameChainMode(context.env) !== "meteora") return apiError("Claims are handled by the native path");
+  const wallet = await authenticatedWallet(context, request, "claim-confirm");
+  if (!wallet) return apiError("Wallet authentication required", 401);
+  const body = await readJson<{ claimId?: string; signature?: string }>(request);
+  const claimId = body.claimId?.trim() ?? "";
+  const signature = body.signature?.trim() ?? "";
+  if (!claimId || !isBase58Address(signature)) return apiError("Claim id and a valid transaction signature are required");
+  const store = contextStore(context);
+  const claim = await store.getClaim(claimId);
+  if (!claim || claim.wallet !== wallet || claim.mint.length === 0) return apiError("Claim not found", 404);
+  if (claim.status === "PAID") {
+    if (claim.signature !== signature) return apiError("Transaction signature does not match the claim", 409);
+    return json({ claim: serializeClaim(claim), status: "PAID" });
+  }
+  if (!(await context.services.payout.confirm(claim.id, signature))) {
+    return json({ claim: serializeClaim(claim), status: "PENDING" });
+  }
+  if (!(await store.markClaimPaid(claim.id, signature))) {
+    const settled = await store.getClaim(claim.id);
+    if (settled?.status !== "PAID") throw new Error("claim payout settled but the game ledger could not be updated; retry confirmation");
+  }
+  return json({ claim: serializeClaim((await store.getClaim(claim.id)) ?? claim), status: "PAID" });
 }
 
 export async function handleDiscovery(context: GameHandlerContext, request: Request): Promise<Response> {

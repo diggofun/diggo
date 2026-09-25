@@ -315,9 +315,9 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
       const referralCode = new URLSearchParams(window.location.search).get("ref");
       const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature), referralCode);
       onAuthenticated(verified.wallet);
-      track("wallet_signed_in", { network: "solana-devnet" });
+      track("wallet_signed_in", { network: "solana-mainnet" });
     } catch {
-      track("wallet_sign_in_failed", { network: "solana-devnet" });
+      track("wallet_sign_in_failed", { network: "solana-mainnet" });
     } finally {
       setSigningIn(false);
     }
@@ -396,7 +396,7 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
               onClick={() => {
                 connect.dispatch(wallet);
                 setOpen(false);
-                track("wallet_connected", { network: "solana-devnet" });
+                track("wallet_connected", { network: "solana-mainnet" });
               }}
             >
               {wallet.icon && <img src={wallet.icon} alt="" />} {wallet.name}
@@ -406,7 +406,7 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
             type="button"
             className="wallet-walletconnect-button"
             onClick={() => {
-              track("walletconnect_opened", { network: "solana-devnet" });
+              track("walletconnect_opened", { network: "solana-mainnet" });
               void openWalletConnect().then((opened) => {
                 setWalletConnectError(opened ? "" : "Could not load WalletConnect. Check your connection and try again.");
                 if (opened) setOpen(false);

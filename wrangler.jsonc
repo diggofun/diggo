@@ -23,22 +23,20 @@
   ],
   "vars": {
     "ENVIRONMENT": "production",
-    "SOLANA_CLUSTER": "devnet",
+    "SOLANA_CLUSTER": "mainnet-beta",
     "CHAIN_MODE": "meteora",
-    "METEORA_DBC_CONFIG": "5Dtu9MNLM1k4asZgYos2Dm7CU75zkY4QqQSMkt8GGRar",
-    "MINING_VAULT_PUBLIC_KEY": "6i6EuPmUrg8R6zehqQKFd2XoE5A3mYjZQhm9u6ocBo7d",
+    "METEORA_DBC_CONFIG": "SET_AFTER_CREATE",
+    "MINING_VAULT_PUBLIC_KEY": "H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgTtzdELT",
     "MINING_CLAIM_PER_CLAIM": "250000000",
     "MINING_CLAIM_PER_DAY": "1000000000",
     "MINING_VAULT_SWEEP_LIMIT": "50",
-    // diggo.fun is intentionally still on devnet. DIGGO_RPC_URL is a deployed Worker secret;
-    // DIGGO_RPC_URLS remains the ordered free fallback list. Change cluster, program id, treasury
-    // and RPC endpoint together when moving networks.
-    "DIGGO_RPC_URLS": "https://api.devnet.solana.com https://solana-devnet.gateway.tatum.io",
+    // DIGGO_RPC_URL is a deployed Worker secret and must be a mainnet endpoint. The public
+    // fallbacks below are only a last-resort availability path; browser RPC always uses /api/rpc.
+    "DIGGO_RPC_URLS": "https://api.mainnet-beta.solana.com",
     "POSTHOG_API_KEY": "phc_rUmzX7ft4ue8iLqACMEe8NgaJphvWYVD9WtwRGfC6nQK",
     "POSTHOG_HOST": "https://us.i.posthog.com",
     "SUPABASE_URL": "https://mtkvvcybpasehmscueox.supabase.co",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAEzwvf6nnwXvXdMc",
-    "DIGGO_PROGRAM_ID": "H3Y8GgTnvwv5U1bajfzj386YSPC48vvwjFroXYyHZFj5",
     "DIGGO_TREASURY": "3YwWHow5jFCtE3vQGadPiLi83eNRwDaEmCZebuEx71PQ",
     "VANITY_SUFFIX": "diggo",
     // The optional crank bot (worker/crank.ts). It holds no authority: every instruction it sends

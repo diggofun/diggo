@@ -6,6 +6,7 @@ import {
   handleActivate,
   handleActivationChallenge,
   handleClaim,
+  handleClaimConfirmation,
   handleDiscovery,
   handleUpgrade,
   type GameHandlerContext,
@@ -16,16 +17,15 @@ import { accrueMining, playerCrewPower, releasedMiningAllocation } from "../game
 import { getSolUsd } from "../oracle";
 import { apiError, checkRateLimit, checkWalletRateLimit, isBase58Address, json } from "../http";
 import { getChainRpc, LAMPORTS_PER_SOL } from "../chainV2";
-import { payMiningClaim, runMeteoraIndexer, runVaultSweep } from "../meteora";
+import { confirmMiningClaim, prepareMiningClaim, runMeteoraIndexer, runVaultSweep } from "../meteora";
 import { readSignatures } from "../meteora/rpc";
 import { recordJobRun } from "../indexStore";
 
-const METEORA_RPC_FALLBACK = "https://api.devnet.solana.com";
 type RuntimeEnvLike = GameEnv;
 const lastGoodStates = new Map<string, PlayerGameState>();
 
 function stateCacheKey(env: RuntimeEnvLike, wallet: string): string {
-  return [String(env.SOLANA_CLUSTER || "devnet"), String(env.METEORA_DBC_CONFIG || ""), wallet].join(":");
+  return [String(env.SOLANA_CLUSTER || "mainnet-beta"), String(env.METEORA_DBC_CONFIG || ""), wallet].join(":");
 }
 
 function offlineContext(env: RuntimeEnvLike): GameHandlerContext {
@@ -107,8 +107,7 @@ function nowSeconds(): number {
 }
 
 function rpcEnv(env: RuntimeEnvLike) {
-  const cluster = String(env.SOLANA_CLUSTER || "devnet");
-  return { ...env, DIGGO_RPC_URL: String(env.DIGGO_RPC_URL || (cluster === "mainnet-beta" ? "" : METEORA_RPC_FALLBACK)) };
+  return { ...env, DIGGO_RPC_URL: String(env.DIGGO_RPC_URL || "") };
 }
 
 function poolRow(row: Record<string, unknown>): GameCoin {
@@ -146,10 +145,12 @@ export function meteoraCoinSource(env: GameEnv): GameCoinSource {
 
 export function meteoraPayout(env: GameEnv): MiningPayout {
   return {
-    async pay(mint, wallet, amount, idempotencyKey) {
-      const result = await payMiningClaim({ env: rpcEnv(env), mint, wallet, amount, idempotencyKey });
-      if (!result.signature) throw new Error(result.error || "Meteora payout has no signature");
-      return { signature: result.signature };
+    async prepare(mint, wallet, amount, idempotencyKey) {
+      const result = await prepareMiningClaim({ env: rpcEnv(env), mint, wallet, amount, idempotencyKey });
+      return { transaction: result.transaction, expiresAt: result.expiresAt };
+    },
+    async confirm(claimId, signature) {
+      return confirmMiningClaim(rpcEnv(env), claimId, signature);
     },
   };
 }
@@ -243,7 +244,7 @@ export async function runMeteoraScheduled(env: RuntimeEnvLike) {
 export function meteoraConfig(env: RuntimeEnvLike) {
   return {
     chainMode: gameChainMode(env),
-    cluster: String(env.SOLANA_CLUSTER || "devnet"),
+    cluster: String(env.SOLANA_CLUSTER || "mainnet-beta"),
     meteoraConfig: String(env.METEORA_DBC_CONFIG || "") || null,
     meteoraDbcConfig: String(env.METEORA_DBC_CONFIG || "") || null,
     miningVault: String(env.MINING_VAULT_PUBLIC_KEY || "") || null,
@@ -343,6 +344,7 @@ export async function handleMeteoraGameRoute(request: Request, env: RuntimeEnvLi
   if (request.method === "POST" && pathname === "/api/game/activate") return mutationResponse(() => handleActivate(context, request));
   if (request.method === "POST" && pathname === "/api/game/upgrade") return mutationResponse(() => handleUpgrade(context, request));
   if (request.method === "POST" && pathname === "/api/game/claim") return mutationResponse(() => handleClaim(context, request));
+  if (request.method === "POST" && pathname === "/api/game/claim/confirm") return mutationResponse(() => handleClaimConfirmation(context, request));
   if (request.method === "POST" && pathname === "/api/game/discovery") return mutationResponse(() => handleDiscovery(context, request));
   if (request.method === "POST" && pathname === "/api/game/mine") return mutationResponse(() => meteoraSwitchMine(request, env));
   if (request.method === "GET" && pathname.startsWith("/api/game/player/")) return meteoraPlayerProfile(env, pathname.slice("/api/game/player/".length));

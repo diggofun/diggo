@@ -1,4 +1,9 @@
-import { AccountRole } from "@solana/kit";
+import {
+  AccountRole,
+  createKeyPairSignerFromPrivateKeyBytes,
+  decompileTransactionMessage,
+  getCompiledTransactionMessageDecoder,
+} from "@solana/kit";
 import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
 import {
@@ -22,12 +27,19 @@ import {
 } from "./rpc";
 import {
   buildSplTokenTransferInstruction,
+  buildPreparedMiningClaimTransaction,
   buildWithdrawLeftoverInstruction,
   METEORA_EVENT_AUTHORITY,
   validateClaimCaps,
+  verifyMiningClaimTransfer,
   WITHDRAW_LEFTOVER_DISCRIMINATOR,
 } from "./vault";
-import { METEORA_DBC_PROGRAM_ID, METEORA_TOKEN_PROGRAM_ID } from "./types";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  METEORA_DBC_PROGRAM_ID,
+  METEORA_TOKEN_PROGRAM_ID,
+  SYSTEM_PROGRAM_ID,
+} from "./types";
 
 const keys = {
   pool: bs58.encode(Uint8Array.from({ length: 32 }, (_, index) => index + 1)),
@@ -38,6 +50,9 @@ const keys = {
   quoteVault: bs58.encode(Uint8Array.from({ length: 32 }, (_, index) => index + 161)),
   receiver: bs58.encode(Uint8Array.from({ length: 32 }, (_, index) => index + 193)),
   trader: bs58.encode(Uint8Array.from({ length: 32 }, (_, index) => index + 225)),
+  vault: bs58.encode(Uint8Array.from({ length: 32 }, (_, index) => index + 257)),
+  source: bs58.encode(Uint8Array.from({ length: 32 }, (_, index) => index + 289)),
+  destination: bs58.encode(Uint8Array.from({ length: 32 }, (_, index) => index + 321)),
 };
 
 function putAddress(data: Uint8Array, offset: number, value: string): void {
@@ -275,6 +290,116 @@ describe("Meteora vault instructions", () => {
     expect(data).toHaveLength(9);
     expect(data[0]).toBe(3);
     expect(BigInt("0x" + Array.from(data.slice(1)).map((byte) => byte.toString(16).padStart(2, "0")).reverse().join(""))).toBe(1_000_000_001n);
+  });
+
+  it("prepares a player-paid legacy claim signed by the vault", async () => {
+    const vaultBytes = Uint8Array.from({ length: 32 }, (_, index) => (index + 11) % 251);
+    const vault = await createKeyPairSignerFromPrivateKeyBytes(vaultBytes);
+    const source = deriveAssociatedTokenAddress(keys.mint, vault.address);
+    const destination = deriveAssociatedTokenAddress(keys.mint, keys.trader);
+    const blockhash = bs58.encode(Uint8Array.from({ length: 32 }, (_, index) => index + 71));
+    const prepared = await buildPreparedMiningClaimTransaction({
+      vault,
+      player: keys.trader,
+      blockhash: { blockhash, lastValidBlockHeight: 100n } as never,
+      source,
+      mint: keys.mint,
+      destination,
+      amount: 10n,
+    });
+    const message = decompileTransactionMessage(getCompiledTransactionMessageDecoder().decode(prepared.messageBytes));
+    const [createAta, transfer] = message.instructions;
+
+    expect(message.feePayer.address).toBe(keys.trader);
+    expect(message.instructions).toHaveLength(2);
+    expect(createAta?.programAddress).toBe(ASSOCIATED_TOKEN_PROGRAM_ID);
+    expect(createAta?.data).toEqual(Uint8Array.of(1));
+    expect(Array.from(createAta?.accounts ?? [], (key: any) => key.address)).toEqual([
+      keys.trader,
+      destination,
+      keys.trader,
+      keys.mint,
+      SYSTEM_PROGRAM_ID,
+      METEORA_TOKEN_PROGRAM_ID,
+    ]);
+    expect(Array.from(createAta?.accounts ?? [])[0]?.role).toBe(AccountRole.WRITABLE_SIGNER);
+    expect(transfer?.programAddress).toBe(METEORA_TOKEN_PROGRAM_ID);
+    expect(Array.from(transfer?.accounts ?? [], (key: any) => key.address)).toEqual([
+      source,
+      keys.mint,
+      destination,
+      vault.address,
+    ]);
+    expect(transfer?.data).toEqual(Uint8Array.of(3, 10, 0, 0, 0, 0, 0, 0, 0));
+    expect(prepared.signatures[keys.trader as never]).toBeNull();
+    expect(prepared.signatures[vault.address as never]).toBeDefined();
+  });
+
+  it("verifies the exact vault-to-player transfer and rejects tampering", () => {
+    const wallet = keys.trader;
+    const vault = keys.vault;
+    const source = keys.source;
+    const destination = keys.destination;
+    const signature = bs58.encode(Uint8Array.from({ length: 64 }, (_, index) => index + 151));
+    const instructionData = bs58.encode(Uint8Array.of(1));
+    const base = {
+      signature,
+      slot: 1n,
+      blockTime: 1,
+      failed: false,
+      accountKeys: [wallet, vault, source, destination, keys.mint, SYSTEM_PROGRAM_ID, METEORA_TOKEN_PROGRAM_ID],
+      signatures: [signature, signature],
+      instructions: [
+        {
+          programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+          accounts: [wallet, destination, wallet, keys.mint, SYSTEM_PROGRAM_ID, METEORA_TOKEN_PROGRAM_ID],
+          data: instructionData,
+        },
+        {
+          programId: METEORA_TOKEN_PROGRAM_ID,
+          accounts: [source, keys.mint, destination, vault],
+          data: bs58.encode(Uint8Array.of(3, 0, 0, 0, 0, 0, 0, 0, 10)),
+        },
+      ],
+      logs: [],
+      preTokenBalances: [
+        { accountIndex: 2, mint: keys.mint, owner: vault, amount: "20" },
+        { accountIndex: 3, mint: keys.mint, owner: wallet, amount: "5" },
+      ],
+      postTokenBalances: [
+        { accountIndex: 2, mint: keys.mint, owner: vault, amount: "10" },
+        { accountIndex: 3, mint: keys.mint, owner: wallet, amount: "15" },
+      ],
+    };
+    const expected = { mint: keys.mint, wallet, vault, source, destination, amount: 10n };
+    expect(verifyMiningClaimTransfer(base, expected)).toBe(true);
+    expect(verifyMiningClaimTransfer({ ...base, failed: true }, expected)).toBe(false);
+    expect(verifyMiningClaimTransfer({ ...base, signatures: [signature] }, expected)).toBe(false);
+    expect(verifyMiningClaimTransfer({ ...base, accountKeys: [vault, ...base.accountKeys.slice(1)] }, expected)).toBe(false);
+    expect(verifyMiningClaimTransfer({
+      ...base,
+      instructions: [{ ...base.instructions[0], accounts: [wallet, keys.quoteVault, wallet, keys.mint, SYSTEM_PROGRAM_ID, METEORA_TOKEN_PROGRAM_ID] }, base.instructions[1]],
+    }, expected)).toBe(false);
+    expect(verifyMiningClaimTransfer({
+      ...base,
+      instructions: [base.instructions[0], { ...base.instructions[1], accounts: [keys.quoteVault, keys.mint, destination, vault] }],
+    }, expected)).toBe(false);
+    expect(verifyMiningClaimTransfer({
+      ...base,
+      instructions: [base.instructions[0], { ...base.instructions[1], data: bs58.encode(Uint8Array.of(3, 0, 0, 0, 0, 0, 0, 0, 9)) }],
+    }, expected)).toBe(false);
+    expect(verifyMiningClaimTransfer({
+      ...base,
+      postTokenBalances: [
+        { accountIndex: 2, mint: keys.mint, owner: vault, amount: "10" },
+        { accountIndex: 3, mint: keys.mint, owner: keys.creator, amount: "15" },
+      ],
+    }, expected)).toBe(false);
+    expect(verifyMiningClaimTransfer({ ...base, instructions: [base.instructions[0]] }, expected)).toBe(false);
+    expect(verifyMiningClaimTransfer({
+      ...base,
+      instructions: [base.instructions[0], base.instructions[1], { ...base.instructions[1] }],
+    }, expected)).toBe(false);
   });
 
   it("keeps website and logo cursors independent", () => {

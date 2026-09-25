@@ -9,6 +9,7 @@ import type { RuntimeEnv } from "./env";
 import { apiError, isBase58Address, json } from "./http";
 import { address } from "@solana/kit";
 import { derivePlayerPda } from "./v2/program";
+import { getProgramAddress, type ChainEnv } from "./chainV2";
 import type {
   ActivationState,
   CrewLevelsView,
@@ -270,7 +271,10 @@ export async function playerAccountView(
   const [row, profile] = await Promise.all([loadPlayerAccount(env, wallet), loadPlayerRow(env, wallet)]);
   const levels = crewLevelsOf(row ?? NO_CREW_ROW);
   const player =
-    row?.player ?? (await derivePlayerPda(address(env.DIGGO_PROGRAM_ID), address(wallet)));
+    row?.player ?? (await derivePlayerPda(
+      env.DIGGO_PROGRAM_ID ? address(env.DIGGO_PROGRAM_ID) : getProgramAddress(env as ChainEnv),
+      address(wallet),
+    ));
   const bond = bondView(row, now);
   const crew = crewStatsOf(levels, row !== null);
   return {

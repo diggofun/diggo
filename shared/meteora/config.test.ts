@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   estimatedMeteoraLaunchCostLamports,
+  isMeteoraConfigPubkey,
   migrationThresholdLamports,
   normalizeChainMode,
   normalizeMeteoraCluster,
@@ -8,10 +9,11 @@ import {
 } from "./config";
 
 describe("Meteora configuration", () => {
-  it("defaults to the temporary Meteora mode and devnet", () => {
+  it("defaults to the temporary Meteora mode and mainnet", () => {
     expect(normalizeChainMode(undefined)).toBe("meteora");
     expect(normalizeChainMode("native")).toBe("native");
-    expect(normalizeMeteoraCluster(undefined)).toBe("devnet");
+    expect(normalizeMeteoraCluster(undefined)).toBe("mainnet-beta");
+    expect(normalizeMeteoraCluster("devnet")).toBe("devnet");
     expect(normalizeMeteoraCluster("mainnet-beta")).toBe("mainnet-beta");
   });
 
@@ -34,5 +36,10 @@ describe("Meteora configuration", () => {
     expect(requireMeteoraConfigPubkey("11111111111111111111111111111111")).toBe(
       "11111111111111111111111111111111",
     );
+  });
+
+  it("rejects the launch placeholder as a pubkey", () => {
+    expect(isMeteoraConfigPubkey("SET_AFTER_CREATE")).toBe(false);
+    expect(() => requireMeteoraConfigPubkey("SET_AFTER_CREATE")).toThrow(/config pubkey/i);
   });
 });

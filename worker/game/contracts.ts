@@ -25,17 +25,21 @@ export interface GameCoinSource {
 }
 
 export interface MiningPayoutResult {
-  signature: string;
+  /** Legacy serialized transaction containing the vault signature and the player's empty signature slot. */
+  transaction: string;
+  /** Unix seconds after which the client should not ask the wallet to sign this transaction. */
+  expiresAt: number;
 }
 
 /** The sole abstraction permitted to move real mine tokens. */
 export interface MiningPayout {
-  pay(
+  prepare(
     mint: string,
     wallet: string,
     amount: bigint,
     idempotencyKey: string,
   ): Promise<MiningPayoutResult>;
+  confirm(claimId: string, signature: string): Promise<boolean>;
 }
 
 /** Portfolio valuation is an integration input, not a value invented by the game engine. */

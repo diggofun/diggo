@@ -9,7 +9,7 @@
  *
  * Two ways out, both offered here:
  *
- * - **Direct**, when the vault owner is a single hot key — which is what a devnet deploy looks
+ * - **Direct**, when the vault owner is a single hot key — which is what a temporary deploy looks
  *   like. The transaction is signed and sent immediately.
  * - **As a proposal**, when the owner is a multisig. The same instructions are serialized into a
  *   base64 legacy message, which is the form Squads v4's import accepts; nothing here is signed,
@@ -140,7 +140,7 @@ export function SponsorEventsPanel({
         await refresh();
         onChanged?.();
       }
-      track("sponsor_action", { action: label, mode, network: "solana-devnet" });
+      track("sponsor_action", { action: label, mode, network: "solana-mainnet" });
     } catch (failure) {
       if (!pendingTransaction.record(failure, done.replace(/\.$/, "") || "Sponsor action")) {
         setError(failure instanceof Error ? failure.message : "That sponsor action failed.");

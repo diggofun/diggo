@@ -53,9 +53,23 @@ if (cluster === "mainnet" && option("allow-mainnet", args, 0) === undefined) {
   // top-level SystemProgram.createAccount instruction to inspect. The pinned SDK's live
   // config account is 1,048 bytes (the 8-byte account discriminator is included).
   const allocation = await connection.getMinimumBalanceForRentExemption(1_048);
+  const payerRent = await connection.getMinimumBalanceForRentExemption(0);
+  const transactionFee = await connection.getFeeForMessage(transaction.compileMessage(), "confirmed");
+  if (transactionFee.value === null) {
+    throw new Error("Could not determine the mainnet transaction fee");
+  }
+  const priorityFee = 0n;
+  const configCost = BigInt(allocation) + BigInt(transactionFee.value) + priorityFee;
+  const exactFunding = configCost + BigInt(payerRent);
+  const recommendedFunding = 10_000_000n > exactFunding ? 10_000_000n : exactFunding;
   console.log(`Mainnet simulation: ${JSON.stringify(simulation.value)}`);
   console.log(`Config account rent exemption (1,048 bytes): ${allocation} lamports`);
-  console.log(`Estimated one-time cost before priority fees: ${BigInt(allocation) + 10_000n} lamports`);
+  console.log(`New payer account rent exemption: ${payerRent} lamports`);
+  console.log(`Transaction fee: ${transactionFee.value} lamports`);
+  console.log(`Priority fee: ${priorityFee} lamports (none attached)`);
+  console.log(`Estimated one-time config cost: ${configCost} lamports`);
+  console.log(`Exact first-funding minimum (payer rent + config cost): ${exactFunding} lamports`);
+  console.log(`Recommended payer funding: ${recommendedFunding} lamports (${solString(recommendedFunding)})`);
   console.log("Refusing mainnet create-config: pass --allow-mainnet after reviewing simulation and rent cost.");
   throw new Error("Refusing mainnet create-config: pass --allow-mainnet after review");
 }

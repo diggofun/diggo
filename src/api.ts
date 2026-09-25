@@ -37,6 +37,7 @@ import { startAnalytics } from "./analytics";
 import bs58 from "bs58";
 import { DEVICE_HEADER, deviceId } from "./device";
 import type { ChainMode } from "../shared/meteora";
+import { normalizeMeteoraConfigPubkey } from "../shared/meteora";
 import type { AdminDashboardPayload } from "../shared/adminDashboard";
 
 /** An HTTP failure carrying the Worker's status and machine-readable code. */
@@ -153,6 +154,8 @@ interface BootstrapPayload {
   cluster?: string;
   chainMode?: ChainMode;
   meteoraConfigPubkey?: string;
+  meteoraConfig?: string | null;
+  meteoraDbcConfig?: string | null;
   programId?: string;
   posthogApiKey?: string;
   posthogHost?: string;
@@ -164,9 +167,11 @@ export async function getBootstrap(): Promise<Bootstrap> {
   try {
     const data = await getJson<BootstrapPayload>("/api/bootstrap?limit=1000");
     const config: DiggoConfig = {
-      cluster: data.cluster ?? "devnet",
+      cluster: data.cluster === "devnet" ? "devnet" : "mainnet-beta",
       chainMode: data.chainMode === "native" ? "native" : "meteora",
-      meteoraConfigPubkey: data.meteoraConfigPubkey ?? "",
+      meteoraConfigPubkey: normalizeMeteoraConfigPubkey(
+        data.meteoraConfigPubkey ?? data.meteoraDbcConfig ?? data.meteoraConfig,
+      ),
       posthogApiKey: data.posthogApiKey,
       posthogHost: data.posthogHost,
       turnstileSiteKey: data.turnstileSiteKey ?? "",
@@ -179,7 +184,7 @@ export async function getBootstrap(): Promise<Bootstrap> {
     return {
       tokens: [],
       config: {
-        cluster: "devnet",
+        cluster: "mainnet-beta",
         chainMode: "meteora",
         meteoraConfigPubkey: "",
         turnstileSiteKey: "",
@@ -782,6 +787,13 @@ export interface MeteoraPortfolio {
   graduated: boolean;
 }
 
+export interface PreparedMiningClaim {
+  /** Base64 legacy transaction already signed in the vault authority's slot. */
+  transaction: string;
+  /** Unix seconds; the wallet should not sign after this deadline. */
+  expiresAt: number;
+}
+
 export async function getGameState(wallet: string): Promise<GameState> {
   const data = await getJson<{ profile: { game: GameState } }>(
     "/api/game/player/" + encodeURIComponent(wallet),
@@ -806,8 +818,17 @@ export async function upgradeGameCrew(component: GameCrewComponent): Promise<{ p
   return postJson("/api/game/upgrade", { component });
 }
 
-export async function claimGameMining(mint: string): Promise<{ claim: GameClaim; status: "PENDING" | "PAID" }> {
+export async function claimGameMining(
+  mint: string,
+): Promise<{ claim: GameClaim; status: "PENDING" | "PAID"; payout?: PreparedMiningClaim }> {
   return postJson("/api/game/claim", { mint });
+}
+
+export async function confirmGameMiningClaim(
+  claimId: string,
+  signature: string,
+): Promise<{ claim: GameClaim; status: "PENDING" | "PAID" }> {
+  return postJson("/api/game/claim/confirm", { claimId, signature });
 }
 
 export async function runGameDiscovery(): Promise<{ discovered: boolean; claim?: GameClaim; reason?: string }> {

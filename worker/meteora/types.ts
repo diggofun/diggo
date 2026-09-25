@@ -131,3 +131,15 @@ export interface MeteoraVaultOperation {
   amount: string | null;
   error: string | null;
 }
+
+export interface PreparedMiningClaim {
+  id: string;
+  mint: string;
+  wallet: string;
+  amount: string;
+  source: string;
+  destination: string;
+  transaction: string;
+  /** Unix seconds after which the client should not sign this transaction. */
+  expiresAt: number;
+}

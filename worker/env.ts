@@ -15,7 +15,7 @@ export interface SecretBindings {
   /** Secret required for the operator-only manual indexer refresh endpoints. */
   INDEXER_ADMIN_SECRET?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
-  /** Devnet RPC URL, e.g. a Helius endpoint. Falls back to the public devnet RPC when unset. */
+  /** Cluster-matched RPC URL. Mainnet deployments should set this to a keyed provider secret. */
   DIGGO_RPC_URL?: string;
   /** Comma-separated fallback RPC endpoints, tried after DIGGO_RPC_URL. */
   DIGGO_RPC_URLS?: string;
@@ -97,6 +97,7 @@ export interface IndexerBindings {
 /** Temporary Meteora bridge settings. The secret key itself is never declared here. */
 export interface MeteoraBindings {
   CHAIN_MODE?: string;
+  SOLANA_CLUSTER?: string;
   METEORA_DBC_CONFIG?: string;
   MINING_VAULT_PUBLIC_KEY?: string;
   MINING_CLAIM_PER_CLAIM?: string;

@@ -60,7 +60,7 @@ export function HomeHero({
       <div className="hero-copy">
         <div className="eyebrow">
           <span className={"live-dot " + (featured ? "" : "idle-dot")} />
-          {featured ? "Live on Solana devnet" : "Solana devnet · no mines launched yet"}
+          {featured ? "Live on Solana" : "No mines launched yet"}
         </div>
         <h1>
           BUILD YOUR
@@ -98,7 +98,7 @@ export function HomeHero({
           <div className="empty-body">
             <p>
               No token has been launched on this protocol yet, so there is nothing to mine. Block
-              rewards, network power and prices will appear here once a real coin is launched on devnet.
+              rewards, network power and prices will appear here once a real coin is launched.
             </p>
             <button className="btn btn-primary" onClick={onLaunch}>
               Launch the first coin <IconPlus size={19} />

@@ -150,7 +150,7 @@ export default function App() {
   const [loadingTokens, setLoadingTokens] = useState(true);
   const [bootstrapFailed, setBootstrapFailed] = useState(false);
   const [config, setConfig] = useState<DiggoConfig>({
-    cluster: "devnet",
+    cluster: "mainnet-beta",
     chainMode: "meteora",
     meteoraConfigPubkey: "",
     turnstileSiteKey: "",
@@ -424,7 +424,7 @@ export default function App() {
       if (result.report) setMiningReport(result.report);
       if (result.mine) setMineInfo(result.mine);
       setReportCollected(true);
-      track("mining_report_viewed", { network: "solana-devnet" });
+      track("mining_report_viewed", { network: config.cluster });
       await refreshClaims();
     } catch (error) {
       setReportError(messageOf(error));
@@ -517,7 +517,7 @@ export default function App() {
       }
       await ensureSession();
       await confirmRewardClaimPayout(claim.id, result.signature);
-      track("reward_claimed", { mint: claim.mint, network: "solana-devnet" });
+      track("reward_claimed", { mint: claim.mint, network: config.cluster });
       await refreshClaims();
     } catch (error) {
       if (!pendingTransaction.record(error, "Reward claim")) setClaimError(messageOf(error));
@@ -665,7 +665,7 @@ export default function App() {
     const referralCode = new URLSearchParams(window.location.search).get("ref");
     const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature), referralCode);
     setSession(verified.wallet);
-    track("wallet_signed_in", { network: "solana-devnet" });
+    track("wallet_signed_in", { network: config.cluster });
   }
 
   async function handleActivate() {
@@ -678,7 +678,7 @@ export default function App() {
         const signature = await connected.signMessage(new TextEncoder().encode(challenge.message));
         await activateGame(challenge.nonce, bs58.encode(signature));
         await refreshGame();
-        track("mine_activated", { streak: game?.streak ?? 0, network: "solana-devnet" });
+        track("mine_activated", { streak: game?.streak ?? 0, network: config.cluster });
       } catch (error) { setActivateError(messageOf(error)); }
       finally { setActivating(false); }
       return;
@@ -707,7 +707,7 @@ export default function App() {
       const state = await getMiningState(connected.address);
       if (state.report) setMiningReport(state.report);
       await refreshClaims();
-      track("mine_activated", { streak: profile.streak, network: "solana-devnet" });
+        track("mine_activated", { streak: profile.streak, network: config.cluster });
     } catch (error) {
       if (!pendingTransaction.record(error, "Player activation")) setActivateError(messageOf(error));
       else setActivateError("");
@@ -749,7 +749,7 @@ export default function App() {
       const profile = await getPlayerProfile(connected.address);
       setPlayer(profile);
       setSwitchOpen(false);
-      track("mine_switched", { network: "solana-devnet" });
+    track("mine_switched", { network: config.cluster });
       await loadMineInfo(mint);
     } catch (error) {
       if (!pendingTransaction.record(error, "Mine switch")) setActivateError(messageOf(error));
@@ -783,7 +783,7 @@ export default function App() {
         pendingTransaction.recordSubmission(submission.signature, "Reward claim");
         return;
       }
-      track("rewards_claimed", { network: "solana-devnet" });
+      track("rewards_claimed", { network: config.cluster });
       await refreshFeaturedToken();
     } catch (error) {
       if (!pendingTransaction.record(error, "Reward claim")) {
@@ -1060,7 +1060,7 @@ export default function App() {
             <SwapPanel token={featured} programAddress={config.programId} cluster={config.cluster} chainMode={config.chainMode} meteoraConfigPubkey={config.meteoraConfigPubkey} signer={connected?.wallet ?? null} onTraded={() => void refreshFeaturedToken()} />
           ) : (
             <section className="page-shell">
-              <EmptyState title="Nothing to trade yet">Trading opens once a mine is live on devnet.</EmptyState>
+              <EmptyState title="Nothing to trade yet">Trading opens once a mine is live.</EmptyState>
             </section>
           ))}
 
@@ -1068,10 +1068,10 @@ export default function App() {
             <section className="create-coin-page page-shell">
               <div>
                 <h1>START A<br /><span>NEW MINE.</span></h1>
-                <p>Create a fixed-supply Solana devnet coin, allocate its mining reserve, and optionally make the first real buy into its bonding curve.</p>
+                <p>Create a fixed-supply Solana coin, allocate its mining reserve, and optionally make the first real buy into its bonding curve.</p>
               </div>
               <div className="create-coin-card">
-                <span>DEVNET LAUNCH</span>
+                <span>MAINNET LAUNCH</span>
                 <h2>{config.chainMode === "meteora" ? "Launch the next mine." : "Everything settles on-chain."}</h2>
                 <p>{config.chainMode === "meteora" ? "Create a coin, then send your crew to work in its market." : "Your creator wallet signs the launch and, if selected, the initial liquidity buy in one transaction."}</p>
                 <button className="btn btn-primary" onClick={openLaunch}>Open launch builder <IconArrowUpRight size={17} /></button>
