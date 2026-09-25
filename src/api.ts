@@ -36,6 +36,8 @@ import type {
 import { startAnalytics } from "./analytics";
 import bs58 from "bs58";
 import { DEVICE_HEADER, deviceId } from "./device";
+import type { ChainMode } from "../shared/meteora";
+import type { AdminDashboardPayload } from "../shared/adminDashboard";
 
 /** An HTTP failure carrying the Worker's status and machine-readable code. */
 export class ApiError extends Error {
@@ -124,6 +126,8 @@ function playerPath(wallet: string, suffix = ""): string {
 
 export interface DiggoConfig {
   cluster: string;
+  chainMode: ChainMode;
+  meteoraConfigPubkey: string;
   posthogApiKey?: string;
   posthogHost?: string;
   turnstileSiteKey: string;
@@ -147,6 +151,8 @@ export interface Bootstrap {
 interface BootstrapPayload {
   tokens?: TokenSummary[];
   cluster?: string;
+  chainMode?: ChainMode;
+  meteoraConfigPubkey?: string;
   programId?: string;
   posthogApiKey?: string;
   posthogHost?: string;
@@ -159,6 +165,8 @@ export async function getBootstrap(): Promise<Bootstrap> {
     const data = await getJson<BootstrapPayload>("/api/bootstrap?limit=1000");
     const config: DiggoConfig = {
       cluster: data.cluster ?? "devnet",
+      chainMode: data.chainMode === "native" ? "native" : "meteora",
+      meteoraConfigPubkey: data.meteoraConfigPubkey ?? "",
       posthogApiKey: data.posthogApiKey,
       posthogHost: data.posthogHost,
       turnstileSiteKey: data.turnstileSiteKey ?? "",
@@ -172,6 +180,8 @@ export async function getBootstrap(): Promise<Bootstrap> {
       tokens: [],
       config: {
         cluster: "devnet",
+        chainMode: "meteora",
+        meteoraConfigPubkey: "",
         turnstileSiteKey: "",
         programId: "",
         vanitySuffix: "diggo",
@@ -704,6 +714,113 @@ export async function getAdminAbuse(
 
 export async function getAdminMetrics(): Promise<AdminMetrics> {
   return getJson<AdminMetrics>("/api/admin/metrics");
+}
+
+export interface MeteoraPoolRegistration {
+  pool: string;
+  mint: string;
+  config: string;
+}
+
+export async function registerMeteoraPool(pool: string): Promise<MeteoraPoolRegistration> {
+  return postJson<MeteoraPoolRegistration>("/api/meteora/pools/register", { pool });
+}
+
+export type GameCrewComponent = "miners" | "drills" | "carts" | "foreman" | "storage";
+
+export interface GameCoin {
+  mint: string;
+  symbol: string;
+  name: string;
+  createdAt: number;
+  miningStartsAt: number;
+  graduated: boolean;
+}
+
+export interface GameClaim {
+  id: string;
+  mint: string;
+  amount: string;
+  amountWhole: number;
+  kind: string;
+  status: "PENDING" | "PAID";
+  signature: string | null;
+  createdAt: number;
+}
+
+export interface GameState {
+  wallet: string;
+  chainMode: ChainMode;
+  createdAt: number;
+  oreBalance: number;
+  oreEarned: number;
+  streak: number;
+  longestStreak: number;
+  streakFreezes: number;
+  activeUntil: number;
+  lastActivationAt: number;
+  activatedAt: number;
+  lastOreAt: number;
+  activeDays: number;
+  validActivations: number;
+  activeMine: {
+    coin: GameCoin;
+    balance: { claimable: string; amountWhole: number; lastSettledAt: number };
+    reserve: { initial: string; released: string; committed: string; paid: string; remaining: string } | null;
+  } | null;
+  activation: { active: boolean; activeUntil: number };
+  discovery: { eligible: boolean; epoch: number; portfolioUsd: number | null };
+  crew: Record<GameCrewComponent, number>;
+  claims: GameClaim[];
+}
+
+export interface MeteoraPortfolio {
+  wallet: string;
+  game: GameState;
+  claimable: string;
+  pendingUntilGraduation: string;
+  graduated: boolean;
+}
+
+export async function getGameState(wallet: string): Promise<GameState> {
+  const data = await getJson<{ profile: { game: GameState } }>(
+    "/api/game/player/" + encodeURIComponent(wallet),
+  );
+  return data.profile.game;
+}
+
+export async function getMeteoraPortfolio(wallet: string): Promise<MeteoraPortfolio> {
+  const data = await getJson<{ portfolio: MeteoraPortfolio }>("/api/portfolio/" + encodeURIComponent(wallet));
+  return data.portfolio;
+}
+
+export async function requestGameActivationChallenge(wallet: string): Promise<{ nonce: string; message: string; expiresAt: number }> {
+  return postJson("/api/game/activation-challenge", { wallet });
+}
+
+export async function activateGame(nonce: string, signature: string): Promise<{ player: GameState; ore: number }> {
+  return postJson("/api/game/activate", { nonce, signature });
+}
+
+export async function upgradeGameCrew(component: GameCrewComponent): Promise<{ player: GameState; spent: number; power: number }> {
+  return postJson("/api/game/upgrade", { component });
+}
+
+export async function claimGameMining(mint: string): Promise<{ claim: GameClaim; status: "PENDING" | "PAID" }> {
+  return postJson("/api/game/claim", { mint });
+}
+
+export async function runGameDiscovery(): Promise<{ discovered: boolean; claim?: GameClaim; reason?: string }> {
+  return postJson("/api/game/discovery", {});
+}
+
+export async function selectGameMine(mint: string): Promise<{ mine: GameState["activeMine"] }> {
+  const data = await postJson<{ mine: GameState["activeMine"] }>("/api/game/mine", { mint });
+  return data;
+}
+
+export async function getAdminDashboard(): Promise<AdminDashboardPayload> {
+  return adminRequest<AdminDashboardPayload>("/api/admin/dashboard");
 }
 
 /**

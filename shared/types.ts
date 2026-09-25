@@ -87,6 +87,9 @@ export interface TokenSummary {
   nextEpochAt: number;
   createdAt: number;
   decimals: number;
+  venue?: "meteora";
+  quoteReserve?: string;
+  migrationQuoteThreshold?: string;
 }
 
 /**

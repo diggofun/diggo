@@ -4,11 +4,12 @@ export function compact(value: number): string {
   return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
-export function money(value: number): string {
-  if (value <= 0) return "$0.00";
-  if (value < 0.000001) return `$${value.toExponential(2)}`;
-  if (value < 0.01) return `$${value.toFixed(8)}`;
-  return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+export function money(value: number | null | undefined): string {
+  const safe = value ?? 0;
+  if (!Number.isFinite(safe) || safe <= 0) return "$0.00";
+  if (safe < 0.000001) return `$${safe.toExponential(2)}`;
+  if (safe < 0.01) return `$${safe.toFixed(8)}`;
+  return `$${safe.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 }
 
 export function shortAddress(value: string): string {

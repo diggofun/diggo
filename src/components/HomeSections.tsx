@@ -39,6 +39,7 @@ export function HomeHero({
   onManageCrew,
   onLaunch,
   onClaimRewards,
+  claimCopy = "Claim on-chain rewards",
 }: {
   featured: TokenSummary | null;
   player: PlayerProfile | null;
@@ -50,6 +51,7 @@ export function HomeHero({
   onManageCrew(): void;
   onLaunch(): void;
   onClaimRewards(): void;
+  claimCopy?: string;
 }) {
   const isMiningActive = player?.activationState === "ACTIVE";
   const reservePercent = featured ? (featured.reserveRemaining / featured.reserveTotal) * 100 : 0;
@@ -136,7 +138,7 @@ export function HomeHero({
               )}
               {connected && (
                 <button type="button" className="claim-rewards-button" onClick={onClaimRewards}>
-                  <IconOre size={12} /> Claim on-chain rewards
+                  <IconOre size={12} /> {claimCopy}
                 </button>
               )}
             </div>
@@ -262,7 +264,7 @@ function TokenCard({ token }: { token: TokenSummary }) {
    * launched without a curve share stays on the reserve reading.
    */
   const curve = token.curveMining;
-  const onCurve = curve.onCurve && curve.cap > 0;
+  const onCurve = curve?.onCurve === true && curve.cap > 0;
   return (
     <a className="token-card" href={"/mines?mint=" + encodeURIComponent(token.mint)} aria-label={"Open the " + token.name + " mine"}>
       <div className="token-card-head">

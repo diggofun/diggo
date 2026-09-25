@@ -36,10 +36,21 @@ import {
 } from "../solanaProgram";
 import { usePendingTransaction } from "../onchain";
 import { IconWallet } from "../icons";
+import { deriveMeteoraPoolAddresses } from "../../shared/meteora";
+import { executeMeteoraSwap, loadMeteoraPoolSnapshot, quoteMeteoraSwap, type MeteoraPoolSnapshot, type MeteoraSwapQuote } from "../meteora";
+import type { ChainMode } from "../../shared/meteora";
 
 function formatTokenAmount(raw: bigint, decimals: number): string {
   const whole = Number(raw) / 10 ** decimals;
   return whole.toLocaleString(undefined, { maximumFractionDigits: whole < 1 ? 6 : 2 });
+}
+
+function rawAmountToDecimalString(raw: bigint, decimals: number): string {
+  const sign = raw < 0n ? "-" : "";
+  const digits = (raw < 0n ? -raw : raw).toString().padStart(decimals + 1, "0");
+  const whole = digits.slice(0, -decimals) || "0";
+  const fraction = decimals > 0 ? `.${digits.slice(-decimals).replace(/0+$/, "")}` : "";
+  return `${sign}${whole}${fraction}`;
 }
 
 /** A fee in basis points as a percentage label: 100 -> "1", 250 -> "2.5". */
@@ -48,14 +59,120 @@ function formatFeeBps(bps: number): string {
   return Number.isInteger(percent) ? String(percent) : percent.toFixed(2).replace(/0+$/, "");
 }
 
+function MeteoraSwapPanel({
+  token,
+  cluster,
+  configPubkey,
+  signer,
+  onTraded,
+}: {
+  token: TokenSummary;
+  cluster: string;
+  configPubkey: string;
+  signer: DiggoWallet | null;
+  onTraded(): void;
+}) {
+  const [side, setSide] = useState<"buy" | "sell">("buy");
+  const [amount, setAmount] = useState("");
+  const [snapshot, setSnapshot] = useState<MeteoraPoolSnapshot | null>(null);
+  const [quote, setQuote] = useState<MeteoraSwapQuote | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [signature, setSignature] = useState("");
+  const pendingTransaction = usePendingTransaction();
+  const poolAddress = useMemo(() => configPubkey ? deriveMeteoraPoolAddresses(token.mint, configPubkey).pool : null, [configPubkey, token.mint]);
+  const rawAmount = useMemo(() => {
+    const value = Number(amount);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return BigInt(Math.floor(value * 10 ** (side === "buy" ? 9 : token.decimals)));
+  }, [amount, side, token.decimals]);
+
+  const refresh = useCallback(async () => {
+    if (!poolAddress) return;
+    try {
+      const next = await loadMeteoraPoolSnapshot(poolAddress, cluster);
+      setSnapshot(next);
+      setError("");
+    } catch (cause) {
+      setSnapshot(null);
+      setError(cause instanceof Error ? cause.message : "Meteora pool state is unavailable.");
+    }
+  }, [cluster, poolAddress]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    if (!poolAddress || !rawAmount) { setQuote(null); return; }
+    let cancelled = false;
+    void quoteMeteoraSwap(poolAddress, side, rawAmount, 100).then((next) => {
+      if (!cancelled) setQuote(next);
+    }).catch(() => { if (!cancelled) setQuote(null); });
+    return () => { cancelled = true; };
+  }, [amount, poolAddress, rawAmount, side]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setError("");
+    if (!signer) { setError("Connect a wallet that can sign transactions first."); return; }
+    if (!poolAddress || !rawAmount) { setError("Enter an amount."); return; }
+    setBusy(true);
+    try {
+      const result = await executeMeteoraSwap({ wallet: signer, poolAddress, side, amount: rawAmount, slippageBps: 100 });
+      setSignature(result.signature);
+      await recordTrade(token.mint, { signature: result.signature, side, amount: rawAmountToDecimalString(result.amountOut, token.decimals) });
+      setAmount("");
+      onTraded();
+      await refresh();
+    } catch (cause) {
+      if (!pendingTransaction.record(cause, "Trade")) setError(cause instanceof Error ? cause.message : "Trade failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const progress = snapshot?.metrics.progress ?? 0;
+  const output = quote?.amountOut ?? null;
+  return (
+    <section className="swap-terminal page-shell" id="swap">
+      <div className="section-heading"><div><h2>TRADE<br />${token.symbol}.</h2></div><div className="swap-price-tag"><span>METEORA DBC</span><strong>{snapshot ? `${snapshot.metrics.priceSol.toFixed(9)} SOL` : "—"}</strong><span>{snapshot?.metrics.graduated ? "GRADUATED · DAMM v2" : "BONDING CURVE"}</span></div></div>
+      <div className="swap-grid"><div className="swap-chart-panel"><div className="swap-capacity"><span>GRADUATION PROGRESS</span><strong>{Math.round(progress * 100)}%</strong><progress max="1" value={progress} /><small>{snapshot?.metrics.graduated ? "Mining rewards are unlocked." : "Mining rewards unlock at graduation."}</small></div></div>
+        <form className="swap-form" onSubmit={submit}><div className="swap-tabs"><button type="button" className={side === "buy" ? "active" : ""} onClick={() => setSide("buy")}>Buy</button><button type="button" className={side === "sell" ? "active" : ""} onClick={() => setSide("sell")}>Sell</button></div>
+          <label>{side === "buy" ? "Pay (SOL)" : `Sell ($${token.symbol})`}<input type="number" min="0" step="any" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" /></label>
+          <div className="swap-quote"><span>YOU RECEIVE (EST., 1% SLIPPAGE FLOOR)</span><strong>{output === null ? "—" : side === "buy" ? `${formatTokenAmount(output, token.decimals)} $${token.symbol}` : `${(Number(output) / 1_000_000_000).toFixed(6)} SOL`}</strong></div>
+          {error && <p className="form-message" role="alert">{error}</p>}
+          {signature && <a className="tx-success" href={`https://explorer.solana.com/tx/${signature}?cluster=${cluster === "mainnet-beta" ? "mainnet-beta" : "devnet"}`} target="_blank" rel="noreferrer">View transaction</a>}
+          {signer ? <button className="primary-button swap-submit" disabled={busy || !quote || quote.minimumAmountOut <= 0n || !pendingTransaction.canSubmit()}>{busy ? "Confirming…" : side === "buy" ? "Buy on Meteora" : "Sell on Meteora"}</button> : <button type="button" className="primary-button swap-submit" onClick={requestWalletMenu}>Connect wallet <IconWallet size={16} /></button>}
+          <p className="swap-note">Mining rewards unlock at graduation. Dynamic fees and the Meteora anti-sniper schedule are active.</p>
+        </form></div></section>
+  );
+}
+
 export function SwapPanel({
   token,
   programAddress,
+  cluster = "devnet",
+  chainMode = "native",
+  meteoraConfigPubkey = "",
   signer,
   onTraded,
 }: {
   token: TokenSummary;
   programAddress: string;
+  cluster?: string;
+  chainMode?: ChainMode;
+  meteoraConfigPubkey?: string;
+  signer: DiggoWallet | null;
+  onTraded(): void;
+}) {
+  if (chainMode === "meteora") {
+    return <MeteoraSwapPanel token={token} cluster={cluster} configPubkey={meteoraConfigPubkey} signer={signer} onTraded={onTraded} />;
+  }
+  return <NativeSwapPanel token={token} programAddress={programAddress} cluster={cluster} signer={signer} onTraded={onTraded} />;
+}
+
+function NativeSwapPanel({ token, programAddress, cluster, signer, onTraded }: {
+  token: TokenSummary;
+  programAddress: string;
+  cluster: string;
   signer: DiggoWallet | null;
   onTraded(): void;
 }) {

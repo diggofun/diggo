@@ -4,9 +4,11 @@ import bs58 from "bs58";
 import { getChallenge, verifyWallet, type PortfolioSummary } from "../api";
 import { track } from "../analytics";
 import { oreAmount, shortAddress, solAmount } from "../format";
+import type { GameState } from "../api";
 import {
   IconClose,
   IconBalance,
+  IconAdmin,
   IconCosmetics,
   IconCrew,
   IconDiscoveries,
@@ -103,11 +105,13 @@ interface AppHeaderProps {
   session: string | null;
   signedIn: boolean;
   summary: PortfolioSummary | null;
+  game: GameState | null;
   solBalance: number | null;
+  onLaunch(): void;
   onAuthenticated(wallet: string): void;
 }
 
-export function AppHeader({ page, session, signedIn, summary, solBalance, onAuthenticated }: AppHeaderProps) {
+export function AppHeader({ page, session, signedIn, summary, game, solBalance, onLaunch, onAuthenticated }: AppHeaderProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
@@ -139,25 +143,25 @@ export function AppHeader({ page, session, signedIn, summary, solBalance, onAuth
 
         <div className="header-actions">
           <div className="account-summary" aria-label="Wallet summary">
-            <span title={summary ? `${summary.mining.streak} day streak` : "Streak unavailable"}>
+            <span title={game ? `${game.streak} day streak` : summary ? `${summary.mining.streak} day streak` : signedIn ? "Loading streak" : "Sign in to view streak"}>
               <IconStreak size={23} />
-              <b>{summary ? summary.mining.streak : "—"}</b>
+              <b>{game ? game.streak : summary ? summary.mining.streak : signedIn ? 0 : "—"}</b>
               <small>Streak</small>
             </span>
-            <span title={summary ? `${oreAmount(summary.mining.oreWhole)} ORE` : "ORE unavailable"}>
+            <span title={game ? `${oreAmount(game.oreBalance)} ORE` : summary ? `${oreAmount(summary.mining.oreWhole)} ORE` : signedIn ? "Loading ORE" : "Sign in to view ORE"}>
               <IconOre size={23} />
-              <b>{summary ? oreAmount(summary.mining.oreWhole) : "—"}</b>
+              <b>{game ? oreAmount(game.oreBalance) : summary ? oreAmount(summary.mining.oreWhole) : signedIn ? oreAmount(0) : "—"}</b>
               <small>ORE</small>
             </span>
-            <span title={solBalance === null ? "SOL balance unavailable" : `${solAmount(solBalance)} SOL`}>
+            <span title={solBalance === null ? (signedIn ? "Loading SOL balance" : "Sign in to view SOL balance") : `${solAmount(solBalance)} SOL`}>
               <IconBalance size={23} />
-              <b>{solBalance === null ? "—" : solAmount(solBalance)}</b>
+              <b>{solBalance === null ? (signedIn ? solAmount(0) : "—") : solAmount(solBalance)}</b>
               <small>SOL</small>
             </span>
           </div>
-          <a className="launch-button" href="/create" aria-current={page === "create" ? "page" : undefined}>
+          <button type="button" className="launch-button" onClick={onLaunch}>
             <IconRocket size={23} /> <span>Create coin</span>
-          </a>
+          </button>
           <span
             className="header-alerts-control"
             style={{ "--header-alerts-icon": "url(/assets/icons/alerts.png)" } as CSSProperties}
@@ -180,7 +184,11 @@ export function AppHeader({ page, session, signedIn, summary, solBalance, onAuth
           {NAV_GROUPS.map((group) => (
             <section className="sidebar-section" key={group.label} aria-labelledby={"sidebar-" + group.label.toLowerCase()}>
               <h2 id={"sidebar-" + group.label.toLowerCase()}>{group.label}</h2>
-              {group.items.map((item) => (
+              {group.items.map((item) => item.page === "create" ? (
+                <button key={item.page} type="button" className="sidebar-link" onClick={() => { setSidebarOpen(false); onLaunch(); }}>
+                  {item.icon ? <item.icon size={26} /> : null}{item.label}
+                </button>
+              ) : (
                 <NavLink key={item.page} item={item} active={page === item.page} className="sidebar-link" onNavigate={() => setSidebarOpen(false)} />
               ))}
             </section>
@@ -191,6 +199,9 @@ export function AppHeader({ page, session, signedIn, summary, solBalance, onAuth
           <a className="sidebar-link" href="/#watchlist" onClick={() => setSidebarOpen(false)}>
             <IconWatchlist size={26} /> Watchlist
           </a>
+          {signedIn && (
+            <NavLink item={{ page: "admin", href: "/admin", label: "Admin", icon: IconAdmin }} active={page === "admin"} className="sidebar-link" onNavigate={() => setSidebarOpen(false)} />
+          )}
           <a
             className={"sidebar-link sidebar-profile" + (page === "profile" ? " active" : "")}
             href="/profile"
