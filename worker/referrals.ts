@@ -16,7 +16,6 @@ import { getProgramAddress, sendAndConfirmWithFeePayer } from "./chainV2";
 import { crankSigner } from "./crank";
 import { buildCreditReferralOreInstruction } from "../shared/program";
 import { address } from "@solana/kit";
-import { getWalletVolumeLamports } from "./meteora";
 import { creditReferralOre } from "./game/service";
 import { meteoraGameContext } from "./modes/meteora";
 
@@ -50,6 +49,15 @@ function nowSeconds(): number {
   return Math.floor(Date.now() / 1_000);
 }
 
+/**
+ * Meteora mode is the deployed default; native mode is the pre-migration v2 path. Referral
+ * qualification and reward settlement both read the index for the mode they are running in, so
+ * the panel and the cron never disagree about what a referee has done.
+ */
+function isMeteora(env: RuntimeEnv): boolean {
+  return String(env.CHAIN_MODE || "meteora") !== "native";
+}
+
 function defaultCode(wallet: string): string {
   return wallet.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 6).padEnd(6, "0");
 }
@@ -78,7 +86,21 @@ async function chooseDefaultCode(env: RuntimeEnv, wallet: string): Promise<strin
     const validation = validateReferralCode(candidate);
     if (validation.ok && await codeIsFree(env, validation.code, wallet)) return validation.code;
   }
-  return defaultCode(wallet);
+  // Every wallet prefix is taken (or rejected as reserved/blocked). Widening further would exceed
+  // the length limit, so suffix the 6-char default instead of handing back a code that is already
+  // owned by somebody else: the profile and the code row have to agree or links break on arrival.
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const seed = [...wallet].reduce((total, character) => (total * 31 + character.charCodeAt(0)) >>> 0, 7);
+  for (let offset = 0; offset < 400; offset += 1) {
+    const value = (seed + offset * 2_654_435_761) >>> 0;
+    const suffix = alphabet[value % alphabet.length] + alphabet[Math.floor(value / alphabet.length) % alphabet.length];
+    const candidate = defaultCode(wallet) + suffix;
+    const validation = validateReferralCode(candidate);
+    if (validation.ok && await codeIsFree(env, validation.code, wallet)) return validation.code;
+  }
+  // Every derived code is taken too. A random code is the only remaining way to keep this wallet's
+  // profile pointing at a row that actually exists; uniqueness is still enforced by the insert.
+  return `${defaultCode(wallet)}${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
 }
 
 function uniqueViolation(error: unknown): boolean {
@@ -145,6 +167,35 @@ async function volumeFor(env: RuntimeEnv, row: AttributionRow): Promise<bigint> 
   }
 }
 
+/**
+ * Meteora's volume lives in meteora_swaps, not trades. Signatures where the referrer is also the
+ * trader are excluded the same way the native index excludes them, so a referrer cannot qualify
+ * their own referee by trading with them.
+ */
+async function meteoraVolumeFor(env: RuntimeEnv, referredWallet: string, referrerWallet: string): Promise<bigint> {
+  const rows = await env.DB.prepare(
+    "SELECT s.sol_amount_lamports FROM meteora_swaps s WHERE s.trader_wallet = ?1" +
+      " AND NOT EXISTS (SELECT 1 FROM meteora_swaps w WHERE w.signature = s.signature AND w.trader_wallet = ?2)",
+  ).bind(referredWallet, referrerWallet).all<{ sol_amount_lamports: string }>();
+  let total = 0n;
+  for (const entry of rows.results ?? []) {
+    try {
+      total += BigInt(entry.sol_amount_lamports);
+    } catch {
+      // A malformed lamport value is skipped rather than failing the whole sweep.
+    }
+  }
+  return total;
+}
+
+/** True once the Meteora sweep has actually moved ORE into the referrer's off-chain balance. */
+async function meteoraCreditSettled(env: RuntimeEnv, row: AttributionRow): Promise<boolean> {
+  const credit = await env.DB.prepare(
+    "SELECT 1 FROM game_referral_credits WHERE referrer_wallet = ?1 AND referee_wallet = ?2 AND applied_to_player = 1",
+  ).bind(row.referrer_wallet, row.referred_wallet).first();
+  return Boolean(credit);
+}
+
 async function reserveReward(env: RuntimeEnv, row: AttributionRow, now: number): Promise<boolean> {
   if (row.status === "REWARDED") return true;
   const week = referralWeekIndex(now);
@@ -177,17 +228,25 @@ async function reserveReward(env: RuntimeEnv, row: AttributionRow, now: number):
 }
 
 async function refreshAttribution(env: RuntimeEnv, row: AttributionRow, now: number): Promise<ReferralPanelRow> {
-  const volumeLamports = await volumeFor(env, row);
+  const meteora = isMeteora(env);
+  const volumeLamports = meteora ? await meteoraVolumeFor(env, row.referred_wallet, row.referrer_wallet) : await volumeFor(env, row);
   if (row.status === "PENDING" && referralVolumeQualified(volumeLamports)) {
     await env.DB.prepare("UPDATE referral_attributions SET status = 'QUALIFIED', qualified_at = ?1, updated_at = ?1 WHERE id = ?2 AND status = 'PENDING'")
       .bind(now, row.id).run();
     row.status = "QUALIFIED";
   }
-  if (row.status === "QUALIFIED") await reserveReward(env, row, now);
+  // Meteora pays through the off-chain game store, so the native on-chain reservation would create
+  // reward events the cron never settles. Qualification is the same; settlement is the sweep's job.
+  if (row.status === "QUALIFIED" && !meteora) await reserveReward(env, row, now);
+  if (meteora && row.status === "REWARDED") await settleMeteoraAttribution(env, row, now);
   const event = await env.DB.prepare("SELECT status, ore_amount FROM referral_reward_events WHERE attribution_id = ?1")
     .bind(row.id).first<{ status: string; ore_amount: string }>();
-  const rewarded = event?.status === "CONFIRMED";
-  const oreEntitled = event ? Number(event.ore_amount) : 0;
+  const rewarded = meteora ? await meteoraCreditSettled(env, row) : event?.status === "CONFIRMED";
+  // In Meteora mode the entitlement is the configured reward as soon as the row qualifies: the
+  // sweep moves the ORE off-chain, and showing 0 until that lands hid the reward entirely.
+  const oreEntitled = meteora
+    ? (row.status === "PENDING" ? 0 : DIGGO_CONFIG.referral.rewardOre)
+    : (event ? Number(event.ore_amount) : 0);
   const oreCredited = rewarded ? oreEntitled : 0;
   return {
     id: row.id,
@@ -199,6 +258,23 @@ async function refreshAttribution(env: RuntimeEnv, row: AttributionRow, now: num
     oreEntitled,
     oreCredited,
   };
+}
+
+/**
+ * Meteora rows that were marked REWARDED by the sweep always have their ORE credited in the same
+ * pass, but an interrupted pass can leave the attribution ahead of the balance. Re-running the
+ * credit is safe: the game store dedupes on (referrer, referee).
+ */
+async function settleMeteoraAttribution(env: RuntimeEnv, row: AttributionRow, now: number): Promise<void> {
+  if (await meteoraCreditSettled(env, row)) return;
+  const result = await creditReferralOre(meteoraGameContext(env), row.referrer_wallet, row.referred_wallet, DIGGO_CONFIG.referral.rewardOre, now);
+  if (!result.credited) return;
+  await env.DB.batch([
+    env.DB.prepare("UPDATE referral_attributions SET reward_ore = ?1, rewarded_at = ?2, updated_at = ?2 WHERE id = ?3")
+      .bind(String(result.amount), now, row.id),
+    env.DB.prepare("INSERT OR IGNORE INTO player_cosmetics (wallet, cosmetic_id, acquired_at) VALUES (?1, ?2, ?3)")
+      .bind(row.referrer_wallet, REFERRAL_SKIN_ID, now),
+  ]);
 }
 
 interface ReferralRewardRow {
@@ -294,15 +370,19 @@ export async function sweepMeteoraReferralOre(
 ): Promise<{ checked: number; qualified: number; credited: number; skipped: number }> {
   const now = options.now ?? nowSeconds();
   const max = Math.min(25, Math.max(1, options.max ?? 25));
+  // QUALIFIED rows first: they are already earned and only waiting for settlement, so they must not
+  // be starved by a long tail of PENDING referees who never trade past the threshold.
   const rows = await env.DB.prepare(
-    "SELECT id, referred_wallet, referrer_wallet, status FROM referral_attributions WHERE status IN ('PENDING', 'QUALIFIED') ORDER BY created_at ASC LIMIT ?1",
-  ).bind(max).all<{ id: string; referred_wallet: string; referrer_wallet: string; status: ReferralStatus }>();
+    "SELECT id, referred_wallet, referrer_wallet, status, created_at" +
+      " FROM referral_attributions WHERE status IN ('PENDING', 'QUALIFIED')" +
+      " ORDER BY CASE status WHEN 'QUALIFIED' THEN 0 ELSE 1 END, created_at ASC LIMIT ?1",
+  ).bind(max).all<{ id: string; referred_wallet: string; referrer_wallet: string; status: ReferralStatus; created_at: number }>();
   let qualified = 0;
   let credited = 0;
   let skipped = 0;
   for (const row of rows.results ?? []) {
-    const volume = await getWalletVolumeLamports({ ...env, DIGGO_RPC_URL: String(env.DIGGO_RPC_URL || "https://api.devnet.solana.com") }, row.referred_wallet);
-    if (volume < 500_000_000n) {
+    const volume = await meteoraVolumeFor(env, row.referred_wallet, row.referrer_wallet);
+    if (!referralVolumeQualified(volume)) {
       skipped += 1;
       continue;
     }
@@ -311,7 +391,7 @@ export async function sweepMeteoraReferralOre(
         .bind(now, row.id).run();
       qualified += 1;
     }
-    const result = await creditReferralOre(meteoraGameContext(env), row.referrer_wallet, row.referred_wallet, 250, now);
+    const result = await creditReferralOre(meteoraGameContext(env), row.referrer_wallet, row.referred_wallet, DIGGO_CONFIG.referral.rewardOre, now);
     if (result.credited) {
       credited += 1;
       await env.DB.batch([
@@ -356,7 +436,7 @@ export async function referralPanel(request: Request, env: RuntimeEnv, page: num
   return json({
     wallet,
     code: profile?.current_code ?? defaultCode(wallet),
-    link: `https://diggo.fun/?ref=${encodeURIComponent(profile?.current_code ?? defaultCode(wallet))}`,
+    link: `https://diggo.fun/r/${encodeURIComponent(profile?.current_code ?? defaultCode(wallet))}`,
     cooldownSeconds: referralCooldownRemaining(profile?.last_changed_at ?? 0, now),
     totals: {
       invited: all.length,
@@ -408,4 +488,27 @@ export async function referralAvailability(code: string, env: RuntimeEnv): Promi
   if (!validation.ok) return json({ available: false, reason: validation.reason, message: referralRejectionMessage(validation.reason) });
   const row = await env.DB.prepare("SELECT wallet FROM referral_codes WHERE code = ?1 COLLATE NOCASE").bind(validation.code).first<{ wallet: string }>();
   return json({ available: !row, code: validation.code });
+}
+
+/**
+ * Binds a remembered referral to a wallet that is already signed in.
+ *
+ * Sign-in is the only moment attribution used to be recorded, so a returning player who arrived on
+ * a referral link but already held a session cookie was never attributed at all. The client calls
+ * this once on load when it has both a stored code and a live session. The first referral still
+ * wins: `referral_attributions.referred_wallet` is unique, so a later code cannot overwrite it.
+ */
+export async function captureReferralForSession(request: Request, env: RuntimeEnv): Promise<Response> {
+  const wallet = await sessionWallet(request, env);
+  if (!wallet) return apiError("Wallet authentication required", 401);
+  if (!(await checkWalletRateLimit(env, wallet, "referral-capture", 10, 60))) return apiError("Too many requests", 429);
+  const body = await readJson<{ code?: unknown }>(request);
+  if (typeof body.code !== "string") return apiError("Missing referral code");
+  const validation = validateReferralCode(body.code);
+  if (!validation.ok) return json({ code: validation.reason, captured: false });
+  const existing = await env.DB.prepare("SELECT referrer_wallet FROM referral_attributions WHERE referred_wallet = ?1")
+    .bind(wallet).first<{ referrer_wallet: string }>();
+  if (existing) return json({ code: validation.code, captured: false, reason: "already_attributed" });
+  const attribution = await captureAttribution(env, wallet, validation.code);
+  return json({ code: validation.code, captured: Boolean(attribution) });
 }

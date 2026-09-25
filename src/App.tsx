@@ -17,6 +17,7 @@ import {
   getPortfolio,
   getPlayerRewards,
   getReferrals,
+  captureReferral,
   getRewardClaimChallenge,
   getWalletSession,
   getToken,
@@ -50,6 +51,7 @@ import { ConsentBanner } from "./components/ConsentBanner";
 import { PushToggle } from "./components/PushToggle";
 import { WatchlistPanel } from "./components/WatchlistPanel";
 import { isLegalPath } from "./components/legal/routes";
+import { captureLandingReferral, clearRememberedReferral, readRememberedReferral } from "./referralLink";
 import { usePendingTransaction } from "./onchain";
 import { signPreparedClaim } from "./onchain/preparedClaim";
 import { settledClaimAllNotice } from "./claimAll";
@@ -235,7 +237,7 @@ export default function App() {
 
   useEffect(() => {
     if (!analyticsConfigured) return;
-    const referralCode = new URLSearchParams(window.location.search).get("ref");
+    const referralCode = readRememberedReferral();
     if (referralCode?.trim()) return trackOnce("referral_landed");
   }, [analyticsConfigured]);
 
@@ -270,15 +272,30 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [fetchBootstrap]);
 
+  // Remember the referrer before anything can navigate away, and take the code out of the visible
+  // URL so an in-app link cannot drop it. Runs once, ahead of the session probe below.
+  const [landingReferral] = useState(() => captureLandingReferral());
+
   useEffect(() => {
     let current = true;
-    void getWalletSession().then((storedSession) => {
-      if (current && storedSession) setSession(storedSession.wallet);
+    void getWalletSession().then(async (storedSession) => {
+      if (!current || !storedSession) return;
+      setSession(storedSession.wallet);
+      // A returning player already holds a session, so no sign-in will ever fire and the referral
+      // would go unrecorded. Bind it directly instead.
+      const code = readRememberedReferral();
+      if (!code) return;
+      try {
+        const result = await captureReferral(code);
+        if (current && result.captured) clearRememberedReferral();
+      } catch {
+        // The code stays remembered and is retried on the next load.
+      }
     }).catch(() => {
       // An absent or expired HttpOnly cookie simply means the wallet must sign in again.
     });
     return () => { current = false; };
-  }, []);
+  }, [landingReferral]);
 
   useEffect(() => {
     if (config.chainMode === "meteora") {
@@ -716,8 +733,11 @@ export default function App() {
     if (!connected || session === connected.address) return;
     const challenge = await getChallenge(connected.address);
     const signature = await connected.signMessage(new TextEncoder().encode(challenge.message));
-    const referralCode = new URLSearchParams(window.location.search).get("ref");
+    // The remembered code, not the query string: in-app navigation drops `?ref=` long before a
+    // visitor gets round to connecting.
+    const referralCode = readRememberedReferral();
     const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature), referralCode);
+    clearRememberedReferral();
     setSession(verified.wallet);
     track("wallet_signed_in", { network: config.cluster });
   }
