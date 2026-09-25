@@ -40,6 +40,10 @@ import { useDiggoWallet } from "../wallet";
 const SponsorEventsPanel = lazy(() =>
   import("./SponsorEventsPanel").then((module) => ({ default: module.SponsorEventsPanel })),
 );
+/** Renders only for the Meteora config fee claimer; everyone else sees nothing. */
+const PlatformFeesPanel = lazy(() =>
+  import("./PlatformFeesPanel").then((module) => ({ default: module.PlatformFeesPanel })),
+);
 
 export interface AdminScreenProps {
   signedIn: boolean;
@@ -50,6 +54,10 @@ export interface AdminScreenProps {
    * button that cannot work.
    */
   programId?: string;
+  /** Published Meteora DBC config; enables the fee-claimer-only "Platform fees" card. */
+  meteoraConfigPubkey?: string;
+  officialMint?: string | null;
+  cluster?: string;
 }
 
 /** Mirrors the Worker's BREAKER_SCOPES; discovery_reserve is per mine. */
@@ -303,7 +311,7 @@ export function ClaimedCell({ account }: { account: ClaimedValueFields }) {
   );
 }
 
-export function AdminScreen({ signedIn, chainMode, programId }: AdminScreenProps) {
+export function AdminScreen({ signedIn, chainMode, programId, meteoraConfigPubkey, officialMint, cluster }: AdminScreenProps) {
   const connected = useDiggoWallet();
   const [abuse, setAbuse] = useState<AdminAbuseView | null>(null);
   const [metrics, setMetrics] = useState<AdminMetrics | null>(null);
@@ -465,9 +473,21 @@ export function AdminScreen({ signedIn, chainMode, programId }: AdminScreenProps
     });
   }
 
+  const platformFees = chainMode === "meteora" && meteoraConfigPubkey ? (
+    <Suspense fallback={null}>
+      <PlatformFeesPanel
+        configAddress={meteoraConfigPubkey}
+        officialMint={officialMint ?? null}
+        cluster={cluster ?? "mainnet-beta"}
+        signedIn={signedIn}
+      />
+    </Suspense>
+  ) : null;
+
   if (denied) {
     return (
       <section className="admin-screen page-shell">
+        {platformFees}
         <div className="admin-locked">
           <h2>Admin access required</h2>
           <p>
@@ -487,6 +507,7 @@ export function AdminScreen({ signedIn, chainMode, programId }: AdminScreenProps
 
   return (
     <section className="admin-screen page-shell" id="admin">
+      {platformFees}
       {dashboard && <AdminDashboardView data={dashboard} />}
       {!dashboard && dashboardError && (
         <div className="admin-block">

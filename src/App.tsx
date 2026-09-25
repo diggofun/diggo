@@ -88,6 +88,7 @@ const SwapPanel = lazy(() => import("./components/SwapPanel").then((module) => (
 /** The official coin's trade page. Lazy for the same reason: it pulls in the swap terminal. */
 const DiggoTradePage = lazy(() => import("./components/DiggoTradePage").then((module) => ({ default: module.DiggoTradePage })));
 const RentReclaimPanel = lazy(() => import("./components/RentReclaimPanel").then((module) => ({ default: module.RentReclaimPanel })));
+const PlatformFeesPanel = lazy(() => import("./components/PlatformFeesPanel").then((module) => ({ default: module.PlatformFeesPanel })));
 /** Terms, Privacy, Risk and Cookies: their own chunk, because most visits never open one. */
 const LegalRoute = lazy(() => import("./components/legal/LegalPage").then((module) => ({ default: module.LegalRoute })));
 /** Design review gallery; only exists in the Vite dev server and is dropped from production builds. */
@@ -1110,6 +1111,17 @@ export default function App() {
           {page === "profile" && connected && config.chainMode === "meteora" && (
             <>
               <MeteoraPortfolioScreen game={game} portfolio={meteoraPortfolio} tokens={tokens} />
+              {config.meteoraConfigPubkey && (
+                <Suspense fallback={null}>
+                  <PlatformFeesPanel
+                    configAddress={config.meteoraConfigPubkey}
+                    officialMint={config.officialMint}
+                    cluster={config.cluster}
+                    signedIn={signedIn}
+                    onSignIn={ensureSession}
+                  />
+                </Suspense>
+              )}
               <section className="page-shell" aria-label="Rent reclaim status">
                 <p className="form-message">
                   Rent reclaim is unavailable in Meteora mode. The native-program account authority
@@ -1136,7 +1148,16 @@ export default function App() {
             </section>
           )}
           {page === "referrals" && <ReferralsScreen signedIn={signedIn} />}
-          {page === "admin" && <AdminScreen signedIn={signedIn} chainMode={config.chainMode} programId={config.programId || undefined} />}
+          {page === "admin" && (
+            <AdminScreen
+              signedIn={signedIn}
+              chainMode={config.chainMode}
+              programId={config.programId || undefined}
+              meteoraConfigPubkey={config.meteoraConfigPubkey}
+              officialMint={config.officialMint}
+              cluster={config.cluster}
+            />
+          )}
           {page === "ui" && UiGallery && <UiGallery />}
         </Suspense>
         </RouteErrorBoundary>

@@ -1691,3 +1691,30 @@ body.has-modal { overflow: hidden; }
   .candle-stage { height: 260px; }
   .candle-intervals button, .candle-currency button { min-width: 34px; padding: 4px 6px; }
 }
+
+/* Platform fees card: fee-claimer-only partner fee claims (src/components/PlatformFeesPanel.tsx). */
+.platform-fees { padding-top: 0; }
+.platform-fees-card { display: grid; gap: var(--space-4); margin-top: var(--space-4); padding: var(--space-5); border: 1px solid var(--ink); background: var(--paper-2); box-shadow: var(--shadow-acid); }
+.platform-fees-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-4); }
+.platform-fees-head h2 { margin: 6px 0; font: 900 24px/1 var(--font-display); text-transform: uppercase; }
+.platform-fees-head small { color: var(--muted); line-height: 1.5; }
+.platform-fees-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.platform-fees-summary div { display: grid; gap: 6px; padding: var(--space-3); border: 1px solid var(--line); background: var(--paper); }
+.platform-fees-summary span, .platform-fees-pools dt { font: 700 10px monospace; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.platform-fees-summary strong { font: 900 20px/1.1 var(--font-display); }
+.platform-fees-pools { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
+.platform-fees-pools li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto; align-items: center; gap: var(--space-4); padding: var(--space-3); border: 1px solid var(--line); background: var(--paper); }
+.platform-fees-pool-id { display: grid; gap: 4px; }
+.platform-fees-pool-id small { color: var(--muted); font: 700 10px monospace; }
+.platform-fees-pools dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin: 0; }
+.platform-fees-pools dd { margin: 4px 0 0; font-weight: 800; }
+.platform-fees-pools .btn:disabled { opacity: .5; cursor: not-allowed; }
+.platform-fees-warning { background: rgba(214, 160, 32, .18); }
+.platform-fees-error { background: rgba(200, 60, 40, .14); }
+.platform-fees-success { background: rgba(47, 158, 91, .14); }
+.platform-fees-success a { display: inline-flex; align-items: center; gap: 4px; }
+@media (max-width: 760px) {
+  .platform-fees-head { flex-direction: column; }
+  .platform-fees-pools li { grid-template-columns: 1fr; }
+}
+
