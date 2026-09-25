@@ -7,10 +7,13 @@ import {
   TRANSFER_HOOK_POOL_DISCRIMINATOR,
   VIRTUAL_POOL_DISCRIMINATOR,
   decodeVirtualPool,
+  METEORA_CONFIG_OFFSET,
   readAccount,
+  readProgramAccounts,
   readSignatures,
   readTransaction,
 } from "./rpc";
+import type { MeteoraTransaction } from "./rpc";
 import {
   METEORA_DBC_PROGRAM_ID,
   type MeteoraEvent,
@@ -32,6 +35,10 @@ const IX_SWAP2_UPGRADED = Uint8Array.of(76, 106, 185, 89, 238, 20, 170, 75);
 const IX_SWAP = Uint8Array.of(248, 198, 158, 145, 225, 117, 135, 200);
 const TRADE_DIRECTION_BASE_TO_QUOTE = 0;
 const SOL_MINT = "So11111111111111111111111111111111111111112";
+// Signature listing is cheap (1000 per call); transaction reads are not, so they are capped per tick.
+const SIGNATURE_PAGE_SIZE = 1000;
+const SIGNATURE_MAX_PAGES = 5;
+const MAX_TRANSACTIONS_PER_ACCOUNT = 200;
 
 function equal(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -169,7 +176,7 @@ export function isMeteoraPoolAccount(data: Uint8Array): boolean {
 }
 
 export function poolBelongsToConfig(data: Uint8Array, config: string): boolean {
-  return data.length >= 306 && isMeteoraPoolAccount(data) && pubkey(data, 72) === config;
+  return data.length >= 306 && isMeteoraPoolAccount(data) && pubkey(data, METEORA_CONFIG_OFFSET) === config;
 }
 
 function safePoolRow(pool: MeteoraPoolRecord) {
@@ -234,62 +241,118 @@ export async function verifyAndIndexMeteoraPool(env: MeteoraRpcEnv, accountAddre
   return pool;
 }
 
-async function scanConfigPools(env: MeteoraRpcEnv, options: { limit: number; pages: number }): Promise<MeteoraPoolRecord[]> {
+type SignatureInfo = Awaited<ReturnType<typeof readSignatures>>[number];
+
+/**
+ * Lists signatures newer than `cursor` (the newest signature already processed), oldest first.
+ * `complete` is false when the backlog is larger than the listing budget; the oldest part of
+ * that backlog is then unreachable, which is why pool discovery also reconciles by account scan.
+ */
+export async function pendingSignatures(
+  env: MeteoraRpcEnv,
+  account: string,
+  cursor: string | undefined,
+  options: { pageSize?: number; maxPages?: number } = {},
+): Promise<{ signatures: SignatureInfo[]; complete: boolean }> {
+  const pageSize = options.pageSize ?? SIGNATURE_PAGE_SIZE;
+  const maxPages = options.maxPages ?? SIGNATURE_MAX_PAGES;
+  const newestFirst: SignatureInfo[] = [];
+  let before: string | undefined;
+  for (let page = 0; page < maxPages; page += 1) {
+    const batch = await readSignatures(env, account, {
+      limit: pageSize,
+      ...(cursor ? { until: cursor } : {}),
+      ...(before ? { before } : {}),
+    });
+    for (const info of batch) {
+      if (info.signature === cursor) return { signatures: newestFirst.reverse(), complete: true };
+      newestFirst.push(info);
+    }
+    if (batch.length < pageSize) return { signatures: newestFirst.reverse(), complete: true };
+    before = batch[batch.length - 1].signature;
+  }
+  return { signatures: newestFirst.reverse(), complete: false };
+}
+
+/**
+ * Feeds each successful transaction after `cursor` to `handle`, oldest first, and returns the
+ * newest signature that was fully handled. A read or handler failure stops the walk there so the
+ * next tick retries it; one bad transaction can no longer abort the scan without progress.
+ */
+async function followSignatures(
+  env: MeteoraRpcEnv,
+  account: string,
+  cursor: string | undefined,
+  handle: (info: SignatureInfo, transaction: MeteoraTransaction) => Promise<void>,
+): Promise<string | undefined> {
+  const { signatures, complete } = await pendingSignatures(env, account, cursor);
+  if (!complete) console.warn(JSON.stringify({ event: "meteora.signature_backlog_truncated", account, listed: signatures.length }));
+  let last = cursor;
+  for (const info of signatures.slice(0, MAX_TRANSACTIONS_PER_ACCOUNT)) {
+    if (!info.failed) {
+      try {
+        const transaction = await readTransaction(env, info.signature);
+        if (!transaction) break; // not visible at this commitment yet; retry next tick
+        if (!transaction.failed) await handle(info, transaction);
+      } catch (error) {
+        console.error(JSON.stringify({ event: "meteora.transaction_index_failed", account, signature: info.signature, error: String(error) }));
+        break;
+      }
+    }
+    last = info.signature;
+  }
+  return last;
+}
+
+export function initializedPools(transaction: MeteoraTransaction, config: string): string[] {
+  const pools = parseMeteoraLogs(transaction.logs)
+    .map((data) => decodeMeteoraEventData(data))
+    .flatMap((event) => event?.kind === "initialize" && event.config === config ? [event.pool] : []);
+  if (pools.length > 0) return pools;
+  const event = initializeFromInstruction(transaction, config);
+  return event ? [event.pool] : [];
+}
+
+async function scanConfigPools(env: MeteoraRpcEnv): Promise<MeteoraPoolRecord[]> {
   const config = configAddress(env);
   const state = await env.DB.prepare("SELECT signature_cursor FROM meteora_config_scan WHERE config=?1").bind(config)
     .first<{ signature_cursor: string | null }>();
-  let until = state?.signature_cursor ?? undefined;
-  let before: string | undefined;
-  let cursor = until;
+  const cursor = state?.signature_cursor ?? undefined;
   const pools: MeteoraPoolRecord[] = [];
-  for (let page = 0; page < options.pages; page += 1) {
-    const signatures = await readSignatures(env, config, {
-      limit: options.limit,
-      ...(until ? { until } : {}),
-      ...(before ? { before } : {}),
-    });
-    if (signatures.length === 0) break;
-    for (const info of signatures) {
-    if (info.signature === until) continue;
-      const transaction = await readTransaction(env, info.signature);
-      if (!transaction || transaction.failed) continue;
-      const eventLogs = parseMeteoraLogs(transaction.logs);
-      let hasInitialize = false;
-      for (const data of eventLogs) {
-        const event = decodeMeteoraEventData(data);
-        if (event?.kind !== "initialize" || event.config !== config) continue;
-        hasInitialize = true;
-        try {
-          pools.push(await verifyAndIndexMeteoraPool(env, event.pool));
-        } catch (error) {
-          console.error(JSON.stringify({ event: "meteora.pool_verify_failed", pool: event.pool, error: String(error) }));
-        }
-      }
-      if (!hasInitialize) {
-        const event = initializeFromInstruction(transaction, config);
-        if (event) {
-          try {
-            pools.push(await verifyAndIndexMeteoraPool(env, event.pool));
-          } catch (error) {
-            console.error(JSON.stringify({ event: "meteora.pool_verify_failed", pool: event.pool, error: String(error) }));
-          }
-        }
+  const next = await followSignatures(env, config, cursor, async (_info, transaction) => {
+    for (const pool of initializedPools(transaction, config)) {
+      try {
+        pools.push(await verifyAndIndexMeteoraPool(env, pool));
+      } catch (error) {
+        console.error(JSON.stringify({ event: "meteora.pool_verify_failed", pool, error: String(error) }));
       }
     }
-    const oldest = signatures[signatures.length - 1]?.signature;
-    if (!oldest || oldest === cursor) break;
-    cursor = oldest;
-    if (until) {
-      until = oldest;
-      before = undefined;
-    } else {
-      before = oldest;
-    }
-    if (signatures.length < options.limit) break;
-  }
-  if (cursor) {
+  });
+  if (next && next !== cursor) {
     await env.DB.prepare("INSERT INTO meteora_config_scan (config, signature_cursor, indexed_at) VALUES (?1, ?2, ?3) ON CONFLICT(config) DO UPDATE SET signature_cursor=excluded.signature_cursor, indexed_at=excluded.indexed_at")
-      .bind(config, cursor, Math.floor(Date.now() / 1000)).run();
+      .bind(config, next, Math.floor(Date.now() / 1000)).run();
+  }
+  return pools;
+}
+
+/**
+ * Finds every DBC pool account whose config field matches, independent of signature history.
+ * This is the backstop that keeps a missed or unreadable create transaction from hiding a pool.
+ */
+async function reconcileConfigPools(env: MeteoraRpcEnv, known: ReadonlySet<string>): Promise<MeteoraPoolRecord[]> {
+  const config = configAddress(env);
+  const accounts = await readProgramAccounts(env, { memcmpOffset: METEORA_CONFIG_OFFSET, memcmpBytes: bs58.decode(config) });
+  const pools: MeteoraPoolRecord[] = [];
+  for (const account of accounts) {
+    if (known.has(account.pubkey) || !poolBelongsToConfig(account.data, config)) continue;
+    try {
+      const pool = await hydratePool(env, account.pubkey, account.data);
+      await upsertPool(env, pool);
+      console.warn(JSON.stringify({ event: "meteora.pool_reconciled", pool: pool.pool }));
+      pools.push(pool);
+    } catch (error) {
+      console.error(JSON.stringify({ event: "meteora.pool_verify_failed", pool: account.pubkey, error: String(error) }));
+    }
   }
   return pools;
 }
@@ -308,11 +371,21 @@ export async function discoverMeteoraPools(env: MeteoraRpcEnv): Promise<MeteoraP
   }
   const known = new Set(pools.map((pool) => pool.pool));
   try {
-    for (const pool of await scanConfigPools(env, { limit: 100, pages: 3 })) {
-      if (!known.has(pool.pool)) pools.push(pool);
+    for (const pool of await scanConfigPools(env)) {
+      if (known.has(pool.pool)) continue;
+      known.add(pool.pool);
+      pools.push(pool);
     }
   } catch (error) {
     console.error(JSON.stringify({ event: "meteora.config_scan_failed", error: String(error) }));
+  }
+  try {
+    for (const pool of await reconcileConfigPools(env, known)) {
+      known.add(pool.pool);
+      pools.push(pool);
+    }
+  } catch (error) {
+    console.error(JSON.stringify({ event: "meteora.config_reconcile_failed", error: String(error) }));
   }
   return pools;
 }
@@ -421,18 +494,12 @@ async function recordEvent(env: MeteoraRpcEnv, event: MeteoraEvent, pool: Meteor
   return true;
 }
 
-async function indexPool(env: MeteoraRpcEnv, pool: MeteoraPoolRecord, options: { limit: number; pages: number }): Promise<{ swaps: number; events: number }> {
+async function indexPool(env: MeteoraRpcEnv, pool: MeteoraPoolRecord): Promise<{ swaps: number; events: number }> {
   const row = await env.DB.prepare("SELECT signature_cursor FROM meteora_pools WHERE pool=?1").bind(pool.pool).first<{ signature_cursor: string | null }>();
-  let until = row?.signature_cursor ?? undefined;
-  let before: string | undefined;
+  const cursor = row?.signature_cursor ?? undefined;
   let events = 0;
   let swaps = 0;
-  for (let page = 0; page < options.pages; page += 1) {
-    const signatures = await readSignatures(env, pool.pool, { limit: options.limit, until, before });
-    if (signatures.length === 0) break;
-    for (const info of signatures) {
-      const transaction = await readTransaction(env, info.signature);
-      if (!transaction || transaction.failed) continue;
+  const next = await followSignatures(env, pool.pool, cursor, async (info, transaction) => {
       const eventLogs = parseMeteoraLogs(transaction.logs);
       for (let eventIndex = 0; eventIndex < eventLogs.length; eventIndex += 1) {
         const data = eventLogs[eventIndex];
@@ -460,12 +527,8 @@ async function indexPool(env: MeteoraRpcEnv, pool: MeteoraPoolRecord, options: {
           swaps += 1;
         }
       }
-    }
-    before = signatures[signatures.length - 1].signature;
-    if (!until) until = before;
-    if (signatures.length < options.limit) break;
-  }
-  if (before) await env.DB.prepare("UPDATE meteora_pools SET signature_cursor=?2, indexed_at=?3 WHERE pool=?1").bind(pool.pool, before, Math.floor(Date.now() / 1000)).run();
+  });
+  if (next && next !== cursor) await env.DB.prepare("UPDATE meteora_pools SET signature_cursor=?2, indexed_at=?3 WHERE pool=?1").bind(pool.pool, next, Math.floor(Date.now() / 1000)).run();
   return { swaps, events };
 }
 
@@ -484,7 +547,7 @@ export async function runMeteoraIndexer(env: MeteoraRpcEnv): Promise<{ pools: nu
   let swaps = 0;
   for (const pool of pools) {
     await upsertPool(env, pool);
-    const result = await indexPool(env, pool, { limit: 100, pages: 3 });
+    const result = await indexPool(env, pool);
     events += result.events;
     swaps += result.swaps;
   }
