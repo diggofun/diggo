@@ -28,6 +28,62 @@ work without a chain. The seed is a plain SQL file under `scripts/`, applied wit
 `wrangler d1 execute --local`, and deliberately **not** part of `migrations/` — production must
 never ship demo tokens. `npm run dev:local -- --seed` seeds as part of startup.
 
+## Temporary Meteora mode
+
+The current default is `CHAIN_MODE=meteora`. The alternate `CHAIN_MODE=native` value serves the
+original on-chain v2 routes and must be used for a native-only deployment. Production and staging
+are currently devnet (`SOLANA_CLUSTER=devnet`). `wrangler.jsonc` publishes these public settings:
+
+```text
+CHAIN_MODE=meteora
+METEORA_DBC_CONFIG=5Dtu9MNLM1k4asZgYos2Dm7CU75zkY4QqQSMkt8GGRar
+MINING_VAULT_PUBLIC_KEY=6i6EuPmUrg8R6zehqQKFd2XoE5A3mYjZQhm9u6ocBo7d
+MINING_CLAIM_PER_CLAIM=250000000
+MINING_CLAIM_PER_DAY=1000000000
+MINING_VAULT_SWEEP_LIMIT=10
+```
+
+The vault secret is never a variable and must never be committed. If mining payouts or vault
+sweeps are needed, set it per environment:
+
+```bash
+npx wrangler secret put MINING_VAULT_SECRET
+# staging: npx wrangler secret put MINING_VAULT_SECRET --env staging
+```
+
+The secret is optional for indexing. When it is absent, pool discovery and the game state continue
+to work but the cron skips the vault sweep; claims that need a payout remain pending. Apply the D1
+migrations, including the Meteora index, game tables, and cached wallet-age table, before smoke
+testing:
+
+```bash
+npm run db:local
+# or: npm run db:staging
+# or: npm run db:production
+```
+
+The scheduled handler runs every minute (`* * * * *`). In Meteora mode it runs the Meteora pool
+indexer, vault sweep (when the secret exists), game mine registration/graduation propagation, and
+referral settlement. It does not run the native crank or native index/reconciliation jobs. In
+native mode those native jobs remain the scheduled path.
+
+For a local devnet smoke run:
+
+```bash
+npm run db:local
+npx wrangler dev
+```
+
+Then request `GET /api/bootstrap` and confirm the indexed devnet pool appears. The pool endpoint
+accepts either the pool address or its base mint:
+
+```text
+GET /api/mines/8zNuum1zEAbjWGWQ2KSwmAnZj3r654VvWkP7fX3N5VXT/info
+```
+
+The indexer must discover that pool and the mine-info response must report it as a Meteora mine;
+the bootstrap response must also include it in `tokens`.
+
 ## Cloudflare resources
 
 Wrangler declares the following bindings and validates them in dry-run mode:

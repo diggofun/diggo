@@ -1,5 +1,130 @@
 # API surface
 
+## Temporary Meteora mode
+
+The deployed Worker now selects its API with `CHAIN_MODE`. The default is `meteora`; set
+`CHAIN_MODE=native` to serve the original on-chain v2 API described in the rest of this document.
+The Meteora routes are a temporary off-chain game integration and use the same signed-wallet
+session cookie, `diggo_session`, as `/api/auth/verify`.
+
+All game writes require that session. Their normal limit is 30 requests per IP per minute and 30
+per wallet per 60 seconds. Activation challenges are limited to 20 per IP per minute. A rejected
+request is `{ "error": string }`; the usual status codes are 400 (validation), 401 (session or
+signature), 403 (eligibility), 404 (unknown mine), 409 (state/eligibility conflict), and 429
+(rate limit).
+
+### Configuration and indexed pools
+
+`GET /api/config` and the configuration fields on `GET /api/bootstrap` return:
+
+```json
+{
+  "chainMode": "meteora",
+  "cluster": "devnet",
+  "meteoraConfig": "5Dtu9MNLM1k4asZgYos2Dm7CU75zkY4QqQSMkt8GGRar",
+  "meteoraDbcConfig": "5Dtu9MNLM1k4asZgYos2Dm7CU75zkY4QqQSMkt8GGRar",
+  "miningVault": "6i6EuPmUrg8R6zehqQKFd2XoE5A3mYjZQhm9u6ocBo7d",
+  "miningClaimCaps": { "perClaim": "250000000", "perDay": "1000000000" }
+}
+```
+
+`GET /api/bootstrap` and `GET /api/tokens` return `{ tokens, syncedAt, ...config }`. Each token
+has `mint`, `pool`, `name`, `symbol`, `slug`, `createdAt`, `status` (`active` or `graduated`),
+`venue: "meteora"`, `graduated`, `quoteReserve`, and `migrationQuoteThreshold`. Token amounts are
+strings. `GET /api/player/:wallet` returns `{ profile: { wallet, game } }`; the `game` object is the
+same state described below. `GET /api/portfolio/:wallet` returns `{ portfolio: { wallet, game,
+claimable, pendingUntilGraduation, graduated } }`. `GET /api/mines/:slug/info` accepts a base mint
+or pool address and returns `{ mine: { mint, pool, symbol, name, status, venue, graduated,
+claimable, pendingUntilGraduation, quoteReserve, migrationQuoteThreshold } }`; `wallet` is an
+optional query parameter used to include the caller's current balance.
+
+### Game state
+
+`GET /api/game/player/:wallet` returns the public game state for a wallet:
+
+```json
+{
+  "wallet": "...",
+  "chainMode": "meteora",
+  "createdAt": 0,
+  "oreBalance": 0,
+  "oreEarned": 0,
+  "streak": 0,
+  "longestStreak": 0,
+  "streakFreezes": 0,
+  "activeUntil": 0,
+  "lastActivationAt": 0,
+  "activatedAt": 0,
+  "lastOreAt": 0,
+  "activeDays": 0,
+  "validActivations": 0,
+  "activeMine": {
+    "coin": { "mint": "...", "symbol": "...", "name": "...", "createdAt": 0,
+      "miningStartsAt": 0, "graduated": false },
+    "balance": { "claimable": "0", "amountWhole": 0, "lastSettledAt": 0 },
+    "reserve": { "initial": "0", "released": "0", "committed": "0", "paid": "0", "remaining": "0" }
+  },
+  "activation": { "active": false, "activeUntil": 0 },
+  "discovery": { "eligible": false, "epoch": 0, "portfolioUsd": 0 },
+  "crew": { "miners": 1, "drills": 1, "carts": 1, "foreman": 1, "storage": 1 },
+  "claims": [{ "id": "...", "mint": "...", "amount": "0", "amountWhole": 0,
+    "kind": "MINING", "status": "PENDING", "signature": null, "createdAt": 0 }]
+}
+```
+
+`activeMine` is `null` until a mine is selected. There is one active mine per wallet. `POST
+/api/game/mine` accepts `{ "mint": "<base mint>" }`; omitting `mint` selects the wallet's most
+recently indexed Meteora pool, and switching settles the old mine first. Pre-graduation mining is
+still accumulated, but `claimable` is pending until graduation: it is reported as
+`pendingUntilGraduation` on portfolio/mine responses and remains `PENDING` in claim history until
+the Meteora vault payout succeeds.
+
+### Activation
+
+`POST /api/game/activation-challenge` with `{ "wallet": "..." }` returns `{ nonce, message,
+expiresAt }`. Sign the returned `message` with that wallet, then call `POST /api/game/activate` with
+`{ "nonce": "...", "signature": "..." }`. A successful response is `{ player, ore }`. The nonce
+is single-use and the signature must belong to the same wallet as the session. Activation updates
+the daily streak, active window, active days, and valid-activation count.
+
+### Crew and claims
+
+`POST /api/game/upgrade` accepts `{ "component": "miners|drills|carts|foreman|storage" }` and
+returns `{ player, spent, power }`. The component must be below its maximum level and the wallet
+must have enough ORE. `POST /api/game/claim` accepts `{ "mint": "..." }` and returns one of:
+
+```json
+{ "claim": { "id": "...", "mint": "...", "amount": "...", "amountWhole": 1,
+  "kind": "MINING", "status": "PENDING|PAID", "signature": "...", "createdAt": 0 },
+  "status": "PENDING|PAID" }
+```
+
+For an active pool the claim remains `PENDING`; for a graduated pool the Worker calls
+`payMiningClaim` and marks it `PAID` when the transaction has a signature. Failed payout attempts
+remain pending for a later retry. Claim history is limited to the most recent 20 entries.
+
+### Discovery and referrals
+
+`POST /api/game/discovery` accepts an empty JSON object `{}` and returns `{ discovered, claim? }`.
+It requires a wallet at least seven days old (the oldest signature timestamp, cached in D1), a SOL
+portfolio of at least $10, and at least five active days and five valid activations. The $10 value is
+SOL balance multiplied by the cached/fallback SOL/USD oracle price, not a paid requirement.
+`POST /api/game/discovery` is idempotent per wallet/epoch and reserves discovery ORE from the mine.
+
+In Meteora mode, referral qualification uses at least 0.5 SOL of indexed swap volume from
+`getWalletVolumeLamports`. A successful credit is up to 250 ORE per qualified referral, with a
+weekly cap of 25 credits and therefore an aggregate maximum of 6,250 ORE per referrer per week. The
+same Meteora referral path also unlocks the referral cosmetic. Native mode retains its existing
+on-chain credit path. The current Meteora swap index has no participant table, so exact native
+wash-trade exclusion cannot be reproduced; the volume threshold is applied to indexed swaps.
+
+### Rate limits
+
+Activation challenge requests are limited to 20 per IP per minute. Authenticated activation, upgrade,
+claim, discovery, and mine-switch actions are limited to 30 per IP per minute and 30 per wallet per
+60 seconds. Switches consume the same wallet budget as the other game actions. The limits use the
+Worker's existing `TOKEN_CACHE` counters and optional `RATE_LIMITER` binding.
+
 The Worker is an indexer of the on-chain v2 program, a read API over that index, a notification
 sender, and an optional permissionless crank. It is not an authority over anyone's money, and the
 API reflects that: **every endpoint below is read-only with respect to value.** Nothing here can

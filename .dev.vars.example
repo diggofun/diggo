@@ -49,6 +49,9 @@ ADMIN_WALLETS=
 # Keeper signer: a base58-encoded 64-byte secret key, JSON-array-stringified (docs/CUSTODY.md).
 # Only needed for on-chain sync_crew_power / claim_discovery.
 #DIGGO_KEEPER_SECRET_KEY=
+# Solana keypair for the Worker-held Meteora mining vault. Store the base58 secret in the actual
+# .dev.vars locally or as a Wrangler secret in deployed environments; never commit its value.
+#MINING_VAULT_SECRET=
 # Turnstile secret. On localhost, wrangler dev plus the dev site key accept the token "dev-bypass".
 #TURNSTILE_SECRET=
 # Hostnames a Turnstile token is allowed to have been solved on, comma-separated. The request's own

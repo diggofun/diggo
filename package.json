@@ -24,6 +24,7 @@
     "deploy:production": "wrangler deploy"
   },
   "dependencies": {
+    "@meteora-ag/dynamic-bonding-curve-sdk": "1.5.13",
     "@noble/curves": "latest",
     "@reown/appkit": "^1.8.23",
     "@reown/appkit-adapter-solana": "^1.8.23",
@@ -42,6 +43,7 @@
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.63.0",
     "@resvg/resvg-js": "^2.6.2",
+    "@types/bn.js": "5.2.0",
     "@types/node": "^26.5.1",
     "@types/react": "latest",
     "@types/react-dom": "latest",

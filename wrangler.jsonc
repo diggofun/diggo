@@ -24,9 +24,16 @@
   "vars": {
     "ENVIRONMENT": "production",
     "SOLANA_CLUSTER": "devnet",
-    // diggo.fun is intentionally still on devnet. Every deployed environment must also set the
-    // DIGGO_RPC_URL secret below; the public devnet fallback is only for local Wrangler development.
-    // Change cluster, program id, treasury and RPC endpoint together when moving networks.
+    "CHAIN_MODE": "meteora",
+    "METEORA_DBC_CONFIG": "5Dtu9MNLM1k4asZgYos2Dm7CU75zkY4QqQSMkt8GGRar",
+    "MINING_VAULT_PUBLIC_KEY": "6i6EuPmUrg8R6zehqQKFd2XoE5A3mYjZQhm9u6ocBo7d",
+    "MINING_CLAIM_PER_CLAIM": "250000000",
+    "MINING_CLAIM_PER_DAY": "1000000000",
+    "MINING_VAULT_SWEEP_LIMIT": "10",
+    // diggo.fun is intentionally still on devnet. DIGGO_RPC_URL is a deployed Worker secret;
+    // DIGGO_RPC_URLS remains the ordered free fallback list. Change cluster, program id, treasury
+    // and RPC endpoint together when moving networks.
+    "DIGGO_RPC_URLS": "https://api.devnet.solana.com https://solana-devnet.gateway.tatum.io",
     "POSTHOG_API_KEY": "phc_rUmzX7ft4ue8iLqACMEe8NgaJphvWYVD9WtwRGfC6nQK",
     "POSTHOG_HOST": "https://us.i.posthog.com",
     "SUPABASE_URL": "https://mtkvvcybpasehmscueox.supabase.co",
@@ -114,7 +121,7 @@
   "triggers": {
     // Indexing runs on a short cadence because the index is what the read API serves; the
     // advisory sweeps (social, risk, crank) ride along on the same tick and are all idempotent.
-    "crons": ["*/2 * * * *"]
+    "crons": ["* * * * *"]
   },
   // Analytics Engine is deliberately NOT bound: the Cloudflare account this Worker deploys to
   // has Analytics Engine disabled, and a deploy that declares an analytics_engine_datasets
@@ -167,7 +174,14 @@
         "ENVIRONMENT": "staging",
         // Devnet only. Staging must never point at a mainnet program id or RPC.
         "SOLANA_CLUSTER": "devnet",
-        // Staging is also a deployed devnet environment and must provide DIGGO_RPC_URL explicitly.
+        "CHAIN_MODE": "meteora",
+        "METEORA_DBC_CONFIG": "5Dtu9MNLM1k4asZgYos2Dm7CU75zkY4QqQSMkt8GGRar",
+        "MINING_VAULT_PUBLIC_KEY": "6i6EuPmUrg8R6zehqQKFd2XoE5A3mYjZQhm9u6ocBo7d",
+        "MINING_CLAIM_PER_CLAIM": "250000000",
+        "MINING_CLAIM_PER_DAY": "1000000000",
+        "MINING_VAULT_SWEEP_LIMIT": "10",
+        // Staging is also a deployed devnet environment and provides DIGGO_RPC_URL as a secret.
+        "DIGGO_RPC_URLS": "https://api.devnet.solana.com https://solana-devnet.gateway.tatum.io",
         "POSTHOG_API_KEY": "phc_rUmzX7ft4ue8iLqACMEe8NgaJphvWYVD9WtwRGfC6nQK",
         "POSTHOG_HOST": "https://us.i.posthog.com",
         "SUPABASE_URL": "https://mtkvvcybpasehmscueox.supabase.co",
@@ -247,7 +261,7 @@
       },
       "triggers": {
         // Staging runs the same cadence so cron paths are exercised before production.
-        "crons": ["*/2 * * * *"]
+        "crons": ["* * * * *"]
       },
       // Same account-level Analytics Engine restriction as production; see the comment above
       // the production block. Staging metrics stay in the staging D1 database.
