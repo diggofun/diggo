@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type ComponentType, type CSSProperties } from "react";
 import { useConnect, useDisconnect, useWallets } from "@solana/kit-plugin-wallet/react";
 import bs58 from "bs58";
-import { getChallenge, verifyWallet, type PortfolioSummary } from "../api";
+import { fetchSolUsd, getChallenge, verifyWallet, type PortfolioSummary } from "../api";
 import { track } from "../analytics";
-import { oreAmount, shortAddress, solAmount } from "../format";
+import { oreAmount, shortAddress, solAmount, usdApprox } from "../format";
 import type { GameState } from "../api";
 import {
   IconClose,
@@ -43,6 +43,7 @@ export type PageId =
   | "crew"
   | "discoveries"
   | "explore"
+  | "diggo"
   | "leaderboards"
   | "mines"
   | "cosmetics"
@@ -58,6 +59,11 @@ interface NavItem {
   href: string;
   label: string;
   icon?: ComponentType<IconProps>;
+  /**
+ * A raster mark rendered instead of an icon-pack glyph, sized to match the line icons beside it.
+   * Used for the official coin link so it carries the real brand asset (no SVG, no icon pack).
+   */
+  image?: string;
 }
 
 const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
@@ -72,6 +78,10 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: "Explore",
     items: [
+      // The official coin sits at the top of Explore: it is a market, not a mining destination.
+      // Its icon is the brand mark, rendered as an <img> by NavItem.image below rather than an
+      // icon-pack glyph, so the sidebar reuses the shipped logo rather than a lookalike.
+      { page: "diggo", href: "/diggo", label: "Trade Diggo", image: "/assets/brand/mark-trim-512.png" },
       { page: "explore", href: "/explore", label: "Explore coins", icon: IconSearch },
       { page: "mines", href: "/mines", label: "Mines", icon: IconMines },
       { page: "trade", href: "/trade", label: "Trade", icon: IconSwap },
@@ -94,7 +104,9 @@ const MOBILE_ITEMS: PageId[] = ["home", "mine", "crew", "explore", "trade"];
 export function BrandMark() {
   return (
     <a className="brand" href="/" aria-label="Diggo.fun home">
-      <img className="brand-art brand-art-icon" src="/assets/brand/icon-512.png" alt="" width={512} height={512} />
+      {/* Transparent mark, not the square icon: the header sits on translucent paper, so an
+          opaque white tile would read as a pale box around the pickaxe. */}
+      <img className="brand-art brand-art-icon" src="/assets/brand/mark-trim-512.png" alt="" width={512} height={512} />
       <strong>Diggo</strong>
     </a>
   );
@@ -113,6 +125,22 @@ interface AppHeaderProps {
 
 export function AppHeader({ page, session, signedIn, summary, game, solBalance, onLaunch, onAuthenticated }: AppHeaderProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  /*
+   * SOL/USD for the balance chip. Fetched here rather than lifted into App because it is purely a
+   * header ornament: no screen, no balance and no settlement depends on it. The Worker already
+   * caches the Jupiter quote for five minutes, so one call per mount is enough and re-polling on
+   * every render would only add load. A failed or unavailable price leaves this null, and the chip
+   * then shows the SOL amount alone instead of a fabricated dollar figure.
+   */
+  const [solUsd, setSolUsd] = useState<number | null>(null);
+  useEffect(() => {
+    let current = true;
+    void fetchSolUsd().then((price) => {
+      if (current) setSolUsd(price);
+    });
+    return () => { current = false; };
+  }, []);
+  const solBalanceUsd = solBalance === null || solUsd === null ? null : usdApprox(solBalance * solUsd);
 
   useEffect(() => {
     if (!sidebarOpen) return;
@@ -153,10 +181,15 @@ export function AppHeader({ page, session, signedIn, summary, game, solBalance, 
               <b>{game ? oreAmount(game.oreBalance) : summary ? oreAmount(summary.mining.oreWhole) : signedIn ? oreAmount(0) : "—"}</b>
               <small>ORE</small>
             </span>
-            <span title={solBalance === null ? (signedIn ? "Loading SOL balance" : "Sign in to view SOL balance") : `${solAmount(solBalance)} SOL`}>
+            <span title={solBalance === null ? (signedIn ? "Loading SOL balance" : "Sign in to view SOL balance") : `${solAmount(solBalance)} SOL${solBalanceUsd ? ` (≈ ${solBalanceUsd})` : ""}`}>
               <IconBalance size={23} />
               <b>{solBalance === null ? (signedIn ? solAmount(0) : "—") : solAmount(solBalance)}</b>
-              <small>SOL</small>
+              {/* The sub-label row: "SOL" plus the USD reading, which is null - and so absent -
+                  until both a real balance and a real price exist (see solUsd above). */}
+              <span className="account-sub">
+                <small>SOL</small>
+                {solBalanceUsd ? <em className="account-usd">≈&nbsp;{solBalanceUsd}</em> : null}
+              </span>
             </span>
           </div>
           <button type="button" className="launch-button" onClick={onLaunch}>
@@ -248,6 +281,7 @@ function NavLink({
   onNavigate?(): void;
 }) {
   const Icon = item.icon;
+  const inSidebar = className.includes("sidebar");
   return (
     <a
       className={(className + (active ? " active" : "")).trim()}
@@ -255,8 +289,12 @@ function NavLink({
       aria-current={active ? "page" : undefined}
       onClick={onNavigate}
     >
-      {Icon ? <Icon size={className.includes("sidebar") ? 26 : 18} /> : null} {item.label}
-    </a>
+      {item.image ? (
+        <img className="nav-mark" src={item.image} alt="" width={512} height={512} />
+      ) : (
+        Icon ? <Icon size={inSidebar ? 26 : 18} /> : null
+      )} {item.label}
+   </a>
   );
 }
 

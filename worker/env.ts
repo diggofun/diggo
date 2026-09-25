@@ -99,6 +99,14 @@ export interface MeteoraBindings {
   CHAIN_MODE?: string;
   SOLANA_CLUSTER?: string;
   METEORA_DBC_CONFIG?: string;
+  /**
+   * The platform official coin's mint ($DIGGO), served by GET /api/config as `officialMint`.
+   *
+   * Not a secret: a mint address is public. It is read through the optional-binding accessor and
+   * validated as a base58 pubkey before it ever reaches a client, so the empty value it ships with
+   * means "not launched" rather than "empty market" (shared/officialMint.ts).
+   */
+  DIGGO_OFFICIAL_MINT?: string;
   MINING_VAULT_PUBLIC_KEY?: string;
   MINING_CLAIM_PER_CLAIM?: string;
   MINING_CLAIM_PER_DAY?: string;

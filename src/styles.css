@@ -72,12 +72,20 @@ a { color: inherit; text-decoration: none; }
 .brand { display: inline-flex; align-items: center; gap: 9px; font: 900 19px/1 Arial Black, sans-serif; letter-spacing: -1px; user-select: none; -webkit-user-select: none; }
 .brand strong { font: 950 17px/1 var(--font-display); letter-spacing: -.04em; }
 .brand-mark { width: 34px; height: 34px; display: grid; place-items: center; color: var(--acid); background: var(--ink); border-radius: 50%; transform: rotate(-8deg); }
-.brand-art { height: 34px; width: auto; -webkit-user-drag: none; }
+.brand-art { height: 40px; width: auto; -webkit-user-drag: none; }
 /* One slot per logo shape: the lockup when there is room, the square icon in the narrow header. */
 .brand-slot { display: inline-flex; align-items: center; gap: 9px; }
 .brand-slot-icon { display: none; }
-.brand-art-icon { width: 34px; height: 34px; object-fit: contain; }
+/*
+ * The pickaxe, not the padding. mark-trim-512.png is alpha-trimmed, so this box IS the pickaxe:
+ * 30px reads as clearly larger than the ~17px the unpadded 34px box used to show, while the header
+ * stays at its original 76px and the wordmark keeps its place on the centre line.
+ */
+.brand-art-icon { width: 30px; height: 30px; object-fit: contain; }
 .brand-dot { color: var(--orange); }
+/* The footer reuses BrandMark. It is a quiet repeat of the wordmark, not the header's statement, so
+   the mark steps down to 24px and the two sit on one baseline. */
+.site-footer .brand-art-icon { width: 24px; height: 24px; }
 .site-header nav { display: flex; align-items: center; gap: 5px; color: #4d4f47; font-size: 11px; font-weight: 800; }
 .site-header nav a, .site-header nav button { min-height: 34px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border: 1px solid transparent; background: transparent; color: inherit; white-space: nowrap; }
 .site-header nav a:hover, .site-header nav button:hover { color: var(--ink); border-color: var(--line); background: white; }
@@ -199,7 +207,7 @@ a { color: inherit; text-decoration: none; }
 .site-footer-legal a { color: var(--muted); }
 .site-footer-legal a:hover { color: var(--ink); }
 
-.modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: rgba(23,24,19,.72); backdrop-filter: blur(8px); }.launch-modal { width: min(590px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; background: var(--paper); border: 1px solid var(--ink); box-shadow: 10px 10px 0 var(--acid); padding: 36px; position: relative; }.modal-close { position: absolute; top: 18px; right: 18px; width: 36px; height: 36px; display: grid; place-items: center; background: transparent; border: 1px solid var(--line); }.launch-modal h2 { font-size: 52px; margin: 12px 0 16px; }.modal-intro { color: var(--muted); line-height: 1.5; font-size: 13px; }.launch-modal form { display: grid; gap: 15px; margin-top: 24px; }.form-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }.launch-modal label { display: grid; gap: 7px; font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }.launch-modal input, .launch-modal textarea { width: 100%; border: 1px solid var(--ink); border-radius: 0; background: #faf8f1; padding: 12px; outline: none; text-transform: none; }.launch-modal input:focus, .launch-modal textarea:focus { box-shadow: 3px 3px 0 var(--acid); }.launch-modal textarea { min-height: 84px; resize: vertical; }.file-input input { border-style: dashed; }.file-input i { color: var(--muted); font: 700 9px monospace; text-transform: none; }.launch-allocation { display: flex; flex-wrap: wrap; gap: 6px; }.launch-allocation span { background: #dedbd0; padding: 6px 8px; font: 700 8px monospace; text-transform: uppercase; }.turnstile-box { min-height: 1px; }.form-message { margin: 0; padding: 10px; background: #e5e1d6; font: 700 10px monospace; line-height: 1.5; }.launch-submit { width: 100%; }.launch-submit:disabled { opacity: .5; cursor: not-allowed; }.success-panel { text-align: center; padding: 38px 8px 8px; }.success-panel > span { width: 64px; height: 64px; display: grid; place-items: center; margin: 0 auto; border-radius: 50%; background: var(--acid); border: 1px solid var(--ink); }.success-panel h3 { font: 900 23px Arial Black; text-transform: uppercase; }.success-panel p { color: var(--muted); line-height: 1.6; }.loading-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; gap: 12px; font: 900 13px monospace; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: rgba(23,24,19,.72); backdrop-filter: blur(8px); }.launch-modal { width: min(590px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; background: var(--paper); border: 1px solid var(--ink); box-shadow: 10px 10px 0 var(--acid); padding: 36px; position: relative; }.modal-close { position: absolute; top: 18px; right: 18px; width: 36px; height: 36px; display: grid; place-items: center; background: transparent; border: 1px solid var(--line); }.launch-modal h2 { font-size: 52px; margin: 12px 0 16px; }.modal-intro { color: var(--muted); line-height: 1.5; font-size: 13px; }.launch-modal form { display: grid; gap: 15px; margin-top: 24px; }.form-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }.launch-modal label { display: grid; gap: 7px; font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }.launch-modal input, .launch-modal textarea { width: 100%; border: 1px solid var(--ink); border-radius: 0; background: #faf8f1; padding: 12px; outline: none; text-transform: none; }.launch-modal input:focus, .launch-modal textarea:focus { box-shadow: 3px 3px 0 var(--acid); }.launch-modal textarea { min-height: 84px; resize: vertical; }.file-input input { border-style: dashed; }.file-input i { color: var(--muted); font: 700 9px monospace; text-transform: none; }.turnstile-box { min-height: 1px; }.form-message { margin: 0; padding: 10px; background: #e5e1d6; font: 700 10px monospace; line-height: 1.5; }.launch-submit { width: 100%; }.launch-submit:disabled { opacity: .5; cursor: not-allowed; }.success-panel { text-align: center; padding: 38px 8px 8px; }.success-panel > span { width: 64px; height: 64px; display: grid; place-items: center; margin: 0 auto; border-radius: 50%; background: var(--acid); border: 1px solid var(--ink); }.success-panel h3 { font: 900 23px Arial Black; text-transform: uppercase; }.success-panel p { color: var(--muted); line-height: 1.6; }.loading-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; gap: 12px; font: 900 13px monospace; }
 
 .idle-dot { background: #97998f !important; box-shadow: 0 0 0 4px rgba(151,153,143,.16) !important; }
 .claim-rewards-button { border: 1px solid rgba(215,255,63,.4); background: rgba(215,255,63,.08); color: var(--acid); padding: 6px 10px; border-radius: 20px; display: inline-flex; align-items: center; gap: 5px; font: 800 9px monospace; text-transform: uppercase; }
@@ -999,27 +1007,6 @@ body.has-modal { overflow: hidden; }
 .onboarding-ok { color: var(--success); }
 .onboarding-error { color: var(--danger); }
 
-/* --- the launch cost note -------------------------------------------------------------------
-   The exact figure the creator pays, broken into the three accounts' rent and the network fee,
-   plus the one thing that can move it: an active LaunchRentSubsidy event. */
-.launch-cost {
-  display: grid; gap: var(--space-3); padding: var(--space-4);
-  border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper-2);
-}
-.launch-cost-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
-.launch-cost-label { font: 800 var(--text-xs)/1 var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
-.launch-cost-total { font: 800 var(--text-lg)/1 var(--font-display); }
-.launch-cost-breakdown { margin: 0; display: grid; gap: var(--space-1); }
-.launch-cost-breakdown > div { display: flex; justify-content: space-between; gap: var(--space-3); }
-.launch-cost-breakdown dt { color: var(--muted); font: var(--text-sm)/1.4 var(--font-mono); }
-.launch-cost-breakdown dd { margin: 0; font: var(--text-sm)/1.4 var(--font-mono); }
-.launch-sponsored {
-  display: flex; align-items: flex-start; gap: var(--space-2); margin: 0;
-  padding: var(--space-3); border-radius: var(--radius-sm);
-  background: rgba(215, 255, 63, .28); color: var(--ink); font: var(--text-sm)/1.5 var(--font-mono);
-}
-.launch-cost-note { margin: 0; color: var(--muted); font: var(--text-sm)/1.5 var(--font-mono); }
-
 /* --- the sponsor console --------------------------------------------------------------------
    The only admin surface that is not governance: the vault is the operator's own, holds
    lamports, and can never be a program or config authority. */
@@ -1135,7 +1122,7 @@ body.has-modal { overflow: hidden; }
   .brand-mark { width: 30px; height: 30px; }
   .brand-slot-wide { display: none; }
   .brand-slot-icon { display: inline-flex; }
-  .brand-art, .brand-art-icon { width: 30px; height: 30px; object-fit: contain; }
+  .brand-art, .brand-art-icon { width: 28px; height: 28px; object-fit: contain; }
   .wallet-button { height: 40px; padding: 0 12px; font-size: 11px; }
   .wallet-control:not(.signed-wallet) .wallet-button-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .site-menu { left: 14px; right: 14px; width: auto; }
@@ -1374,6 +1361,13 @@ body.has-modal { overflow: hidden; }
 .account-summary .icon { grid-row: 1 / 3; align-self: center; color: var(--ink); }
 .account-summary b { color: var(--ink); font: 900 12px/1 var(--font-mono); white-space: nowrap; }
 .account-summary small { font: 800 8px/1.2 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+/*
+ * The SOL chip's second row holds "SOL" and the USD reading side by side. It is one grid cell of
+ * the chip (the chip is a 2x2 grid: icon | amount, then icon | sub-label), so the pair is wrapped
+ * rather than added as a third cell, which would have dropped it into a column that does not exist.
+ */
+.account-sub { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
+.account-usd { color: var(--muted); font: 800 8px/1.2 var(--font-mono); font-style: normal; white-space: nowrap; }
 
 .app-sidebar { position: fixed; z-index: 75; inset: var(--header-h) auto 0 0; width: 252px; min-height: calc(100dvh - var(--header-h)); height: auto; padding: var(--space-4) var(--space-3); display: flex; flex-direction: column; gap: var(--space-5); background: var(--paper-2); border-right: 1px solid var(--line); overflow: hidden; }
 .sidebar-head { min-height: 32px; padding: 0 var(--space-2); display: flex; align-items: center; justify-content: flex-end; color: var(--muted); font: 800 var(--text-xs)/1 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; }
@@ -1428,6 +1422,9 @@ body.has-modal { overflow: hidden; }
   .site-header { padding-inline: 14px; gap: 8px; }
   .header-actions { gap: 6px; }
   .account-summary > span { min-width: 58px; padding-inline: 7px; }
+  /* Phones keep only the SOL amount. The USD figure is the first thing to go: the chip's second row
+     is already the narrowest line in the header, and the SOL total is the number a player acts on. */
+  .account-usd { display: none; }
   .site-header .launch-button { display: none; }
   .sidebar-toggle { width: 40px; height: 40px; }
   /* The orange crew line deliberately stays on one line; scale the display type to the phone gutter. */
@@ -1562,4 +1559,97 @@ body.has-modal { overflow: hidden; }
   .referral-total { border-bottom: 1px solid var(--line); }
   .referral-total:nth-last-child(-n+2) { border-bottom: 0; }
   .referral-table-head { flex-direction: column; }
+}
+
+/* ---- Trade Diggo: the official $DIGGO coin page (/diggo) --------------------------
+ * Added for the platform own coin. Everything here is scoped to the .diggo-* classes and the
+ * .nav-mark sidebar glyph, so it cannot leak into the existing per-coin trade view it reuses.
+ * The layout is single-column on narrow screens with min-width:0 on every flex/grid child, so
+ * the page never produces a horizontal scrollbar on a phone.
+ */
+
+.nav-mark {
+  /*
+   * The box is the sidebar's 26px icon column, not the pickaxe's 22px, so "Trade Diggo" starts on
+   * exactly the same line as every other label. With the global border-box sizing the 22px mark is
+   * centred inside that column and the row height is unchanged - the icon is the approved size, the
+   * layout matches its neighbours, and the sidebar does not shift.
+   */
+  width: 26px;
+  height: 26px;
+  padding: 2px;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  object-fit: contain;
+}
+.tab-bar .nav-mark { width: 24px; height: 24px; padding: 1px; border-radius: 6px; }
+
+.diggo-page { display: grid; gap: 22px; padding-block: 30px calc(var(--tabbar-h) + 50px); }
+.diggo-page > .page-shell { width: 100%; }
+
+.diggo-hero {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+  padding-block: 8px;
+}
+.diggo-hero-mark {
+  width: 96px;
+  height: 96px;
+  flex: 0 0 auto;
+  border: 1px solid var(--ink);
+  border-radius: 24px;
+  object-fit: contain;
+  background: var(--paper-2);
+}
+.diggo-hero-text { display: grid; gap: 6px; min-width: 0; }
+.diggo-hero-text h1 {
+  margin: 0;
+  font: 900 clamp(28px, 7vw, 46px)/1 var(--font-display);
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+.diggo-hero-text h1 span { color: var(--muted); }
+.diggo-mint {
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font: 700 11px/1.4 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diggo-stats {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0;
+  padding-inline: 0;
+  border: 1px solid var(--ink);
+  background: var(--paper-2);
+}
+.diggo-stats .metric-panel { min-width: 0; border-right: 1px solid var(--line); }
+.diggo-stats .metric-panel:last-child { border-right: 0; }
+.diggo-stats .metric-panel strong { overflow-wrap: anywhere; }
+
+.diggo-empty-mark { width: 36px; height: 36px; border-radius: 9px; object-fit: contain; }
+.diggo-loading { display: grid; gap: 12px; }
+.diggo-loading .skeleton-card { display: block; height: 190px; }
+
+@media (max-width: 980px) {
+  .diggo-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .diggo-stats .metric-panel:nth-child(3n) { border-right: 0; }
+  .diggo-stats .metric-panel:nth-child(-n+3) { border-bottom: 1px solid var(--line); }
+}
+
+@media (max-width: 760px) {
+  .diggo-page { gap: 16px; padding-block: 20px calc(var(--tabbar-h) + 50px); }
+  .diggo-hero { gap: 13px; }
+  .diggo-hero-mark { width: 72px; height: 72px; border-radius: 18px; }
+  .diggo-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .diggo-stats .metric-panel { border-bottom: 1px solid var(--line); }
+  .diggo-stats .metric-panel:nth-child(2n) { border-right: 0; }
+  .diggo-stats .metric-panel:nth-last-child(-n+2) { border-bottom: 0; }
 }

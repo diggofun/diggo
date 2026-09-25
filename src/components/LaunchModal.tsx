@@ -3,16 +3,14 @@
  * and chain-specific mining allocation. Loaded lazily so the Solana launch clients only ship to
  * players who open it.
  *
- * The creator pays 100% by default, and the form says exactly how much before they sign: the three
- * accounts a coin is made of, plus the network fee. The one thing that can move that cost is an
- * active LaunchRentSubsidy sponsor event, and when one covers this launch the form says so and
- * names it. Sponsorship can pay rent and fees and nothing else — it cannot touch power, rewards,
- * discovery odds, rarity, caps or eligibility — which is why the badge is a cost note rather than
- * a promise about the coin.
+ * An active LaunchRentSubsidy sponsor event can pay this launch's rent, and when one covers it the
+ * subsidy is resolved on chain immediately before the creator signs. Sponsorship can pay rent and
+ * fees and nothing else — it cannot touch power, rewards, discovery odds, rarity, caps or
+ * eligibility.
  */
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import bs58 from "bs58";
-import { IconBadge, IconClose, IconRocket } from "../icons";
+import { IconClose, IconRocket } from "../icons";
 import type { TokenSummary } from "../../shared/types";
 import {
   getChallenge,
@@ -27,10 +25,7 @@ import {
 import { track } from "../analytics";
 import {
   LAUNCH_DISCOVERY_RESERVE_BPS,
-  LAUNCH_RENT_SOL,
   LAUNCH_RESERVE_BPS,
-  LAUNCH_TOTAL_SOL,
-  LAUNCH_TX_FEE_SOL,
   TURNSTILE_SITE_KEY,
 } from "../constants";
 import {
@@ -45,7 +40,6 @@ import {
   fetchSponsorEvent,
   findLaunchSubsidy,
   launchCoin,
-  launchCostLamports,
   resolveSubsidy,
   type SponsorEventView,
 } from "../solanaProgram";
@@ -54,13 +48,7 @@ import { TurnstileBox } from "./TurnstileBox";
 import { useDialog } from "./useDialog";
 import { usePendingTransaction } from "../onchain";
 import { launchMeteoraCoin } from "../meteora";
-import {
-  estimatedMeteoraLaunchCostLamports,
-  isMeteoraConfigPubkey,
-  METEORA_MIGRATION_THRESHOLD_SOL,
-  METEORA_POOL_CREATION_FEE_LAMPORTS,
-  normalizeMeteoraCluster,
-} from "../../shared/meteora";
+import { isMeteoraConfigPubkey } from "../../shared/meteora";
 
 export function LaunchModal({
   onClose,
@@ -134,9 +122,6 @@ export function LaunchModal({
     };
   }, [config.programId]);
 
-  const cost = launchCostLamports({ sponsored: sponsor !== null });
-  const meteoraCost = estimatedMeteoraLaunchCostLamports();
-  const meteoraCluster = normalizeMeteoraCluster(config.cluster);
   const launchReady = config.chainMode === "native" || isMeteoraConfigPubkey(config.meteoraConfigPubkey);
 
   async function authenticate(): Promise<void> {
@@ -285,33 +270,6 @@ export function LaunchModal({
             ? "Create a fixed-supply coin with a wallet-signed Meteora launch. This launch configuration sets the creator trading fee to 0%. Leftover supply is held in the Diggo-signed mining vault for eligible player payouts. Mining rewards and yield are not guaranteed."
             : "Set a fixed supply and chain-specific mining allocation, then create the coin with a wallet-signed transaction. Diggo never holds user funds."}
         </p>
-        <div className="launch-cost" aria-live="polite">
-          <div className="launch-cost-head">
-            <span className="launch-cost-label">You pay to launch</span>
-            <strong className="launch-cost-total">{config.chainMode === "meteora" ? (Number(meteoraCost.totalLamports) / 1_000_000_000).toFixed(6) + " SOL" : cost.totalLamports === 0n ? "Network fee only" : LAUNCH_TOTAL_SOL.toFixed(6) + " SOL"}</strong>
-          </div>
-          <dl className="launch-cost-breakdown">
-            <div>
-              <dt>{config.chainMode === "meteora" ? "Meteora pool creation fee" : "Mint, coin account and vault rent"}</dt>
-              <dd>{config.chainMode === "meteora" ? (Number(METEORA_POOL_CREATION_FEE_LAMPORTS) / 1_000_000_000).toFixed(6) + " SOL" : cost.rentLamports === 0n ? "Paid by the sponsor" : LAUNCH_RENT_SOL.toFixed(6) + " SOL"}</dd>
-            </div>
-            <div>
-              <dt>Network fee (estimated)</dt>
-              <dd>{config.chainMode === "meteora" ? "Included in estimate" : LAUNCH_TX_FEE_SOL.toFixed(6) + " SOL"}</dd>
-            </div>
-          </dl>
-          {config.chainMode === "meteora" ? (
-            <p className="launch-cost-note"><strong>Leftover supply goes to the Diggo-signed mining vault.</strong> Eligible mining payouts can accrue before graduation and may remain pending until a wallet-approved claim settles.</p>
-          ) : sponsor ? (
-            <p className="launch-sponsored">
-              <IconBadge size={15} /> Sponsored — event #{sponsor.eventId} pays the rent from its vault, so you pay the network fee only. Sponsorship never changes your coin's power, rewards or discovery odds.
-            </p>
-          ) : (
-            <p className="launch-cost-note">
-              Rent is spent, not deposited: the mint and the coin account can never be closed while supply exists. No sponsorship event is covering launches right now.
-            </p>
-          )}
-        </div>
         {state === "done" ? (
           <div className="success-panel">
             <span>Live</span>
@@ -330,13 +288,9 @@ export function LaunchModal({
             <label>Initial creator buy (SOL)<input type="number" min="0" step="0.001" value={initialBuy} onChange={(event) => setInitialBuy(event.target.value)} placeholder="0.00" /><i>Optional. Executes atomically with launch and becomes real bonding-curve liquidity.</i></label>
             <label className="file-input">
               <span>Token artwork</span>
-              <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+              <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
               <i>{file ? file.name : "PNG, JPG or WEBP · max 2 MB"}</i>
             </label>
-            <div className="launch-allocation">
-              <span>1B SPL supply · 9 decimals</span><span>Leftovers to the Diggo-signed mining vault</span><span>Creator trading fee 0%</span><span>Dynamic fee on · anti-sniper 3%→1% / 60 min</span>
-              {config.chainMode === "meteora" && <span>Migration threshold {METEORA_MIGRATION_THRESHOLD_SOL[meteoraCluster]} SOL</span>}
-            </div>
             <TurnstileBox siteKey={TURNSTILE_SITE_KEY} onToken={onTurnstileToken} />
             {message && <p className="form-message">{message}</p>}
             <button className="primary-button launch-submit" disabled={!launchReady || state === "working" || !turnstileToken || !pendingTransaction.canSubmit()}>

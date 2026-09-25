@@ -309,20 +309,154 @@ export async function registerLaunchedToken(request: Request, env: RuntimeEnv): 
   return json({ mint: body.mint, slug: coin.slug, description, imageKey });
 }
 
-/** Uploads one image to the media store. Cosmetics and coin art only; nothing value-bearing. */
+/** Largest coin image the media store accepts, in bytes. */
+export const MEDIA_MAX_BYTES = 2_000_000;
+
+/** Multipart framing overhead allowed on top of the image budget before we refuse to parse. */
+const MEDIA_MULTIPART_SLACK_BYTES = 65_536;
+
+const MEDIA_TOO_LARGE_MESSAGE = "Image too large (2 MB maximum)";
+const MEDIA_ONLY_IMAGES_MESSAGE = "Only images may be uploaded";
+
+interface SniffedImage {
+  contentType: string;
+  extension: string;
+}
+
+function ascii(bytes: Uint8Array, start: number, end: number): string {
+  let out = "";
+  for (let index = start; index < end; index += 1) out += String.fromCharCode(bytes[index]);
+  return out;
+}
+
+/**
+ * Identifies an image from its leading bytes, ignoring whatever the client claimed.
+ *
+ * A browser sends `multipart/form-data` for a picked file, and the file part's own `type` is
+ * either empty or occasionally wrong (Safari hands back `image/tiff`, some drag-and-drop paths
+ * produce an empty string), so the declared MIME type cannot be the gate. The four raster
+ * containers coin art actually arrives in are matched by their fixed signatures:
+ *
+ * - PNG:  89 50 4E 47 0D 0A 1A 0A
+ * - JPEG: FF D8 FF (three markers, not two: FF D8 alone also prefixes JFIF/EXIF-less oddities)
+ * - GIF:  `GIF87a` or `GIF89a`
+ * - WebP: a RIFF container whose form type at offset 8 is `WEBP`
+ *
+ * SVG is deliberately absent. It is an XML document that executes script when a browser
+ * navigates to it, and this store is served from the site's own origin (see serveMedia), so a
+ * user-supplied SVG would be a stored-XSS primitive aimed at the same session cookie.
+ */
+export function sniffImageFormat(bytes: Uint8Array): SniffedImage | null {
+  if (bytes.byteLength >= 8 &&
+      bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+      bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) {
+    return { contentType: "image/png", extension: "png" };
+  }
+  if (bytes.byteLength >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return { contentType: "image/jpeg", extension: "jpg" };
+  }
+  if (bytes.byteLength >= 6 && ascii(bytes, 0, 3) === "GIF" &&
+      (ascii(bytes, 3, 6) === "87a" || ascii(bytes, 3, 6) === "89a")) {
+    return { contentType: "image/gif", extension: "gif" };
+  }
+  if (bytes.byteLength >= 12 && ascii(bytes, 0, 4) === "RIFF" && ascii(bytes, 8, 12) === "WEBP") {
+    return { contentType: "image/webp", extension: "webp" };
+  }
+  return null;
+}
+
+interface MediaUploadResult {
+  bytes: Uint8Array;
+  /** The file part's declared MIME type, or null when the client sent no type at all. */
+  declaredContentType: string | null;
+}
+
+function isFileLike(value: unknown): value is Blob {
+  return typeof value === "object" && value !== null &&
+    typeof (value as Blob).arrayBuffer === "function" &&
+    typeof (value as Blob).size === "number";
+}
+
+/**
+ * Pulls the image bytes out of the request body, whatever envelope the client used.
+ *
+ * The browser client posts a `FormData`, so the request's own content type is
+ * `multipart/form-data; boundary=...` and the image MIME type only exists on the file part. The
+ * previous code demanded the request's own content type be `image/*`, which rejected every
+ * upload a browser could make. A raw `image/*` body is still accepted for non-browser callers.
+ */
+export async function readMediaUpload(request: Request): Promise<MediaUploadResult | Response> {
+  const declared = (request.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+  if (declared === "multipart/form-data") {
+    const declaredLength = Number(request.headers.get("content-length") ?? "0");
+    if (Number.isFinite(declaredLength) &&
+        declaredLength > MEDIA_MAX_BYTES + MEDIA_MULTIPART_SLACK_BYTES) {
+      return apiError(MEDIA_TOO_LARGE_MESSAGE, 413);
+    }
+    let form: FormData;
+    try {
+      form = await request.formData();
+    } catch {
+      return apiError("Malformed upload", 400);
+    }
+    let file: Blob | null = null;
+    for (const field of ["file", "image", "file0"]) {
+      const candidate = form.get(field);
+      if (isFileLike(candidate)) {
+        file = candidate;
+        break;
+      }
+    }
+    if (!file) {
+      const entries: Blob[] = [];
+      (form as unknown as { forEach?: (cb: (value: unknown) => void) => void }).forEach?.(
+        (value) => entries.push(value as Blob),
+      );
+      for (const candidate of entries) {
+        if (isFileLike(candidate)) {
+          file = candidate;
+          break;
+        }
+      }
+    }
+    if (!file) return apiError("No image was uploaded");
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const partType = (file as File).type;
+    return { bytes, declaredContentType: typeof partType === "string" && partType ? partType : null };
+  }
+  if (declared.startsWith("image/")) {
+    return {
+      bytes: new Uint8Array(await request.arrayBuffer()),
+      declaredContentType: declared,
+    };
+  }
+  return apiError(MEDIA_ONLY_IMAGES_MESSAGE);
+}
+
+/**
+ * Uploads one image to the media store. Cosmetics and coin art only; nothing value-bearing.
+ *
+ * The accepted format is decided by the bytes, never by the client's declared type, so an
+ * extension-less or mislabelled PNG uploads exactly like a well-formed one and a non-image
+ * renamed to `.png` still fails.
+ */
 export async function uploadMedia(request: Request, env: RuntimeEnv): Promise<Response> {
   if (!(await checkRateLimit(request, env, "media", 12))) return apiError("Too many requests", 429);
   const wallet = await sessionWallet(request, env);
   if (!wallet) return apiError("Wallet session required", 401);
-  const contentType = request.headers.get("content-type") ?? "";
-  if (!contentType.startsWith("image/")) return apiError("Only images may be uploaded");
-  const bytes = new Uint8Array(await request.arrayBuffer());
+  const upload = await readMediaUpload(request);
+  if (upload instanceof Response) return upload;
+  const { bytes, declaredContentType } = upload;
   if (bytes.byteLength === 0) return apiError("Empty upload");
-  if (bytes.byteLength > 2_000_000) return apiError("Image too large (2 MB maximum)", 413);
-  const extension = contentType.split("/")[1]?.split(";")[0] ?? "bin";
-  const key = `${wallet.slice(0, 8)}-${crypto.randomUUID()}.${extension.replace(/[^a-z0-9]/g, "")}`;
+  if (bytes.byteLength > MEDIA_MAX_BYTES) return apiError(MEDIA_TOO_LARGE_MESSAGE, 413);
+  if (declaredContentType?.toLowerCase() === "image/svg+xml") {
+    return apiError("SVG is not supported; upload a PNG, JPEG, WebP or GIF");
+  }
+  const image = sniffImageFormat(bytes);
+  if (!image) return apiError(MEDIA_ONLY_IMAGES_MESSAGE);
+  const key = `${wallet.slice(0, 8)}-${crypto.randomUUID()}.${image.extension}`;
   await env.TOKEN_CACHE.put(`media:${key}`, bytes, {
-    metadata: { contentType, wallet, uploadedAt: nowSeconds() },
+    metadata: { contentType: image.contentType, wallet, uploadedAt: nowSeconds() },
     expirationTtl: 60 * 60 * 24 * 365,
   });
   return json({ imageKey: key, url: `/media/${key}` });

@@ -16,6 +16,20 @@ export function shortAddress(value: string): string {
   return `${value.slice(0, 4)}…${value.slice(-5)}`;
 }
 
+/**
+ * A USD amount for the header's balance chip, or null when there is nothing true to show.
+ *
+ * Null is the point: a missing SOL price must render as no value at all rather than a fabricated
+ * `$0.00`, so the chip simply keeps its SOL-only form. Below a cent the exact figure is noise, so
+ * it collapses to `<$0.01`; everything else is grouped to two decimals.
+ */
+export function usdApprox(value: number | null | undefined): string | null {
+  if (value === null || value === undefined || !Number.isFinite(value) || value < 0) return null;
+  if (value === 0) return null;
+  if (value < 0.01) return "<$0.01";
+  return `$${value.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 /** Countdown to a Unix-seconds deadline, refreshed by the caller's tick. */
 export function countdown(target: number, now: number): string {
   const delta = Math.max(0, target * 1000 - now);

@@ -22,6 +22,8 @@ import { getChainRpc, LAMPORTS_PER_SOL } from "../chainV2";
 import { confirmClaimBatch, confirmMiningClaim, prepareClaimBatch, prepareMiningClaim, runMeteoraIndexer, runVaultSweep } from "../meteora";
 import { decodeTokenAccountAmount, deriveAssociatedTokenAddress, readAccount, readSignatures } from "../meteora/rpc";
 import { recordJobRun } from "../indexStore";
+import { optionalBinding } from "../env";
+import { officialMintFromEnv } from "../../shared/officialMint";
 
 type RuntimeEnvLike = GameEnv;
 const lastGoodStates = new Map<string, PlayerGameState>();
@@ -287,6 +289,10 @@ export function meteoraConfig(env: RuntimeEnvLike) {
     cluster: String(env.SOLANA_CLUSTER || "mainnet-beta"),
     meteoraConfig: String(env.METEORA_DBC_CONFIG || "") || null,
     meteoraDbcConfig: String(env.METEORA_DBC_CONFIG || "") || null,
+    // The official coin's mint, validated rather than passed through: a blank or mistyped
+    // DIGGO_OFFICIAL_MINT reads as "not launched" (null) so the UI shows its empty state
+    // (shared/officialMint.ts).
+    officialMint: officialMintFromEnv(optionalBinding<string>(env, "DIGGO_OFFICIAL_MINT")),
     miningVault: String(env.MINING_VAULT_PUBLIC_KEY || "") || null,
     miningClaimCaps: {
       perClaim: String(env.MINING_CLAIM_PER_CLAIM || "") || null,

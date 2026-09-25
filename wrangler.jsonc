@@ -30,6 +30,11 @@
     "MINING_CLAIM_PER_CLAIM": "250000000",
     "MINING_CLAIM_PER_DAY": "1000000000",
     "MINING_VAULT_SWEEP_LIMIT": "50",
+    // The platform official coin, $DIGGO, surfaced by GET /api/config as `officialMint` and traded
+    // on /diggo. Not a secret - it is a public mint address - but also not a constant: the coin has
+    // not launched yet, so it ships empty. An empty or malformed value reads as "not launched" and
+    // the UI shows its empty state rather than a fabricated market (shared/officialMint.ts).
+    "DIGGO_OFFICIAL_MINT": "",
     // DIGGO_RPC_URL is a deployed Worker secret and must be a mainnet endpoint. The public
     // fallbacks below are only a last-resort availability path; browser RPC always uses /api/rpc.
     "DIGGO_RPC_URLS": "https://api.mainnet-beta.solana.com",
@@ -179,6 +184,9 @@
         "MINING_CLAIM_PER_CLAIM": "250000000",
         "MINING_CLAIM_PER_DAY": "1000000000",
         "MINING_VAULT_SWEEP_LIMIT": "50",
+        // Staging ships the same empty value as production: the official coin launches once, on
+        // mainnet, and staging must never point at a different $DIGGO mint.
+        "DIGGO_OFFICIAL_MINT": "",
         // Staging is also a deployed devnet environment and provides DIGGO_RPC_URL as a secret.
         "DIGGO_RPC_URLS": "https://api.devnet.solana.com https://solana-devnet.gateway.tatum.io",
         "POSTHOG_API_KEY": "phc_rUmzX7ft4ue8iLqACMEe8NgaJphvWYVD9WtwRGfC6nQK",
