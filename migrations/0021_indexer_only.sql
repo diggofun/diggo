@@ -471,14 +471,139 @@ CREATE INDEX IF NOT EXISTS idx_advisory_alerts_created ON advisory_alerts (creat
 -- the on-chain PlayerAccount, mirrored in `player_accounts`. What is left here is what has no
 -- on-chain form: the profile row that exists before a wallet ever activates, and the risk
 -- advisory columns. The rows themselves are carried over.
+
+-- The social and risk tables still use players as a wallet registry, but they do not need SQLite
+-- to enforce that relationship: the Worker creates profile rows before writing any of their
+-- child rows, and the registry is rebuilt below. D1 cannot disable foreign keys inside the
+-- migration transaction, so copy these small tables into definitions without the parent
+-- constraint before replacing `players`. Each table's original shape, rows and indexes survive.
+DROP TABLE IF EXISTS risk_events_rebuilt;
+CREATE TABLE risk_events_rebuilt (
+  id TEXT PRIMARY KEY,
+  wallet TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  detail TEXT,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+INSERT INTO risk_events_rebuilt (id, wallet, kind, detail, created_at)
+  SELECT id, wallet, kind, detail, created_at FROM risk_events;
+DROP TABLE risk_events;
+ALTER TABLE risk_events_rebuilt RENAME TO risk_events;
+CREATE INDEX IF NOT EXISTS idx_risk_events_wallet_created ON risk_events(wallet, created_at DESC);
+
+DROP TABLE IF EXISTS seasonal_points_rebuilt;
+CREATE TABLE seasonal_points_rebuilt (
+  wallet TEXT NOT NULL,
+  season_id TEXT NOT NULL,
+  points INTEGER NOT NULL DEFAULT 0 CHECK (points >= 0),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  PRIMARY KEY (wallet, season_id)
+);
+INSERT INTO seasonal_points_rebuilt (wallet, season_id, points, updated_at)
+  SELECT wallet, season_id, points, updated_at FROM seasonal_points;
+DROP TABLE seasonal_points;
+ALTER TABLE seasonal_points_rebuilt RENAME TO seasonal_points;
+CREATE INDEX IF NOT EXISTS idx_seasonal_points_season ON seasonal_points(season_id, points DESC);
+
+DROP TABLE IF EXISTS seasonal_point_events_rebuilt;
+CREATE TABLE seasonal_point_events_rebuilt (
+  id TEXT PRIMARY KEY,
+  wallet TEXT NOT NULL,
+  season_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  ref TEXT NOT NULL,
+  points INTEGER NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  UNIQUE (wallet, season_id, kind, ref)
+);
+INSERT INTO seasonal_point_events_rebuilt (id, wallet, season_id, kind, ref, points, created_at)
+  SELECT id, wallet, season_id, kind, ref, points, created_at FROM seasonal_point_events;
+DROP TABLE seasonal_point_events;
+ALTER TABLE seasonal_point_events_rebuilt RENAME TO seasonal_point_events;
+CREATE INDEX IF NOT EXISTS idx_seasonal_point_events_wallet
+  ON seasonal_point_events(wallet, created_at DESC);
+
+DROP TABLE IF EXISTS player_achievements_rebuilt;
+CREATE TABLE player_achievements_rebuilt (
+  wallet TEXT NOT NULL,
+  achievement_id TEXT NOT NULL,
+  ore_granted INTEGER NOT NULL DEFAULT 0 CHECK (ore_granted >= 0),
+  awarded_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  PRIMARY KEY (wallet, achievement_id)
+);
+INSERT INTO player_achievements_rebuilt (wallet, achievement_id, ore_granted, awarded_at)
+  SELECT wallet, achievement_id, ore_granted, awarded_at FROM player_achievements;
+DROP TABLE player_achievements;
+ALTER TABLE player_achievements_rebuilt RENAME TO player_achievements;
+CREATE INDEX IF NOT EXISTS idx_player_achievements_achievement
+  ON player_achievements(achievement_id);
+
+DROP TABLE IF EXISTS player_cosmetics_rebuilt;
+CREATE TABLE player_cosmetics_rebuilt (
+  wallet TEXT NOT NULL,
+  cosmetic_id TEXT NOT NULL,
+  acquired_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  PRIMARY KEY (wallet, cosmetic_id)
+);
+INSERT INTO player_cosmetics_rebuilt (wallet, cosmetic_id, acquired_at)
+  SELECT wallet, cosmetic_id, acquired_at FROM player_cosmetics;
+DROP TABLE player_cosmetics;
+ALTER TABLE player_cosmetics_rebuilt RENAME TO player_cosmetics;
+
+DROP TABLE IF EXISTS player_loadout_rebuilt;
+CREATE TABLE player_loadout_rebuilt (
+  wallet TEXT NOT NULL,
+  slot TEXT NOT NULL,
+  cosmetic_id TEXT NOT NULL,
+  equipped_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  PRIMARY KEY (wallet, slot)
+);
+INSERT INTO player_loadout_rebuilt (wallet, slot, cosmetic_id, equipped_at)
+  SELECT wallet, slot, cosmetic_id, equipped_at FROM player_loadout;
+DROP TABLE player_loadout;
+ALTER TABLE player_loadout_rebuilt RENAME TO player_loadout;
+
+DROP TABLE IF EXISTS player_social_metrics_rebuilt;
+CREATE TABLE player_social_metrics_rebuilt (
+  wallet TEXT PRIMARY KEY,
+  blocks_won INTEGER NOT NULL DEFAULT 0,
+  mine_switches INTEGER NOT NULL DEFAULT 0,
+  fully_mined_witnessed INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+INSERT INTO player_social_metrics_rebuilt
+  (wallet, blocks_won, mine_switches, fully_mined_witnessed, updated_at)
+  SELECT wallet, blocks_won, mine_switches, fully_mined_witnessed, updated_at
+    FROM player_social_metrics;
+DROP TABLE player_social_metrics;
+ALTER TABLE player_social_metrics_rebuilt RENAME TO player_social_metrics;
+
+DROP TABLE IF EXISTS notifications_rebuilt;
+CREATE TABLE notifications_rebuilt (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wallet TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}',
+  dedupe_key TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  read_at INTEGER
+);
+INSERT INTO notifications_rebuilt
+  (id, wallet, kind, payload, dedupe_key, created_at, read_at)
+  SELECT id, wallet, kind, payload, dedupe_key, created_at, read_at FROM notifications;
+DROP TABLE notifications;
+ALTER TABLE notifications_rebuilt RENAME TO notifications;
+CREATE INDEX IF NOT EXISTS idx_notifications_wallet_created
+  ON notifications(wallet, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_wallet_unread
+  ON notifications(wallet, read_at, created_at DESC);
+
 DROP TABLE IF EXISTS players_v2;
 CREATE TABLE players_v2 (
   wallet TEXT PRIMARY KEY,
   created_at INTEGER NOT NULL DEFAULT 0,
   risk_state TEXT NOT NULL DEFAULT 'NORMAL',
   risk_score INTEGER NOT NULL DEFAULT 0,
-  -- Denormalised mirrors of the indexed PlayerAccount, refreshed by the indexer so a profile
-  -- read is one row and never an RPC. NULL means "not indexed yet", never zero.
   indexed_at INTEGER,
   active_mint TEXT,
   last_activation_at INTEGER,
