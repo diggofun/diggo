@@ -240,6 +240,7 @@ const PRIVACY: LegalDocument = {
         "A Telegram chat identifier, only if you link a chat to your wallet with a one-time code. It is removed when you send /stop to the bot.",
         "Operational data: structured logs, alert and metric counters, and error reports. We aim to keep these free of personal data, and inside the Service we never log wallet keys.",
         "Correspondence you send us, including appeals, which record the message, the state you were in when you filed it, and the reviewer's decision.",
+        "Only if you allow analytics: page views, product events and session recordings, described in sections 4 and 5.",
       ],
     },
     {
@@ -249,7 +250,7 @@ const PRIVACY: LegalDocument = {
         "Providing the game and settling rewards - performance of a contract: your wallet address, session, gameplay data, claims and notifications.",
         "Protecting the Service and its players from abuse, multi-accounting, bots and reserve manipulation - our legitimate interests, and those of everyone playing honestly: the device id, salted IP/network/device hashes, activity signals and risk state.",
         "Keeping the Service secure, available and debuggable - our legitimate interests: logs, metrics and error reports.",
-        "Understanding how the game is used - your consent only: analytics (see section 4).",
+        "Understanding how the game is used and fixing what breaks - your consent only: analytics and session recording (see sections 4 and 5).",
         "Sending push alerts and Telegram messages - your consent, given by switching the channel on: push subscription data, Telegram chat id.",
         "Meeting legal obligations - legal obligation: records we must keep where applicable, such as responding to lawful requests or tax duties.",
       ],
@@ -258,47 +259,63 @@ const PRIVACY: LegalDocument = {
       heading: "4. Analytics",
       paragraphs: [
         "Analytics is off by default and only starts after you choose 'Allow analytics' in the consent banner. Until then, nothing is loaded from our analytics provider and nothing is sent to it.",
-        "When it is on, we use PostHog (EU cloud, reached through diggo.fun itself): page views, the product events we explicitly record (for example launching a mine, a swap or a reward claim) and session replays of how pages are used, with every form input masked. Once you sign in with a wallet, these are linked to that wallet's public address. We never send private keys, signatures, transaction contents or email addresses. Autocapture and surveys are off. You can withdraw consent at any time from the Cookie & Storage Notice or the banner, and analytics and replay stop straight away.",
+        "When it is on, we use PostHog (EU cloud, reached through diggo.fun itself): page views, the product events we explicitly record (for example launching a mine, a swap or a reward claim) and session recordings, which section 5 describes in full. Once you sign in with a wallet, these are linked to that wallet's public address. We never send private keys, signatures, transaction contents or email addresses. Autocapture and surveys are off. You can withdraw consent at any time from the Cookie & Storage Notice or the banner, and analytics and recording stop straight away.",
       ],
     },
     {
-      heading: "5. Automated decisions and anti-abuse",
+      heading: "5. Session recording",
+      paragraphs: [
+        "Diggo uses PostHog (PostHog Inc., on its EU cloud, with the data hosted in the European Union) for product analytics and session recording. A session recording is a replay of how you used the site: your clicks, scrolls and page navigation, and the page content as it was rendered on your screen. It is sent through diggo.fun itself (the /ph address) to PostHog's EU servers.",
+        "Session recording runs only after you click 'Allow analytics' in the cookie banner. If you choose 'Essential only', nothing is recorded. If you withdraw consent later, recording stops straight away, in the same page load. To withdraw, use the 'Change your analytics choice' button at the bottom of this page or of the Cookie & Storage Notice (diggo.fun/cookies), and choose 'Essential only'.",
+        "Every form input is masked in recordings, so what you type is never captured. No private keys, seed phrases or signatures are captured: Diggo never asks for them, and your wallet handles signing outside our pages. When you are signed in, recordings and events are linked to your wallet's public address.",
+      ],
+      bullets: [
+        "Purpose: to find and fix bugs, improve the user experience, and measure funnels, such as how many visitors go from connecting a wallet to activating a mine.",
+        "Legal basis: your consent, under Article 6(1)(a) GDPR. Withdrawing it does not affect recordings made before you withdrew.",
+        "Retention: recordings are kept for a limited period set in our PostHog settings and are then deleted.",
+        "Your rights: you can ask for access to, or deletion of, the recordings and events linked to your wallet address by writing to " +
+          PRIVACY_CONTACT +
+          ". Section 11 lists all your rights.",
+      ],
+    },
+    {
+      heading: "6. Automated decisions and anti-abuse",
       paragraphs: [
         "Some restrictions on earning are produced by an automated risk score that combines the signals listed above. Where the score places an account under review or on hold, the interface shows a status message but never the detection details, because publishing them would let abusers route around them.",
         "You have the right to object to this processing and to obtain human intervention. Every restriction can be appealed in the app, an appeal is decided by a person, and a decision can only lift a restriction - it never moves value. Automated scoring never decides what you have already earned, and it never moves funds.",
       ],
     },
     {
-      heading: "6. On-chain data",
+      heading: "7. On-chain data",
       paragraphs: [
         "Solana is a public, permanent, append-only ledger. Transactions you sign, the mine accounts you create or interact with, and the amounts involved are public and cannot be deleted, altered or hidden by us or by anyone else. That includes your wallet address and its activity.",
         "We do not write anything else about you on-chain. Erasure requests cannot extend to the blockchain itself, because nobody can rewrite it.",
       ],
     },
     {
-      heading: "7. Who we share it with",
+      heading: "8. Who we share it with",
       paragraphs: [
         "We do not sell personal data and we do not share it for advertising. We use service providers who process it on our behalf under contract:",
       ],
       bullets: [
         "A cloud infrastructure provider for hosting, the database, bot protection (Turnstile) and rate limiting.",
         "A Solana RPC provider, to read and verify on-chain state.",
-        "A product analytics provider, only after you consent.",
+        "PostHog Inc., for product analytics and session recording, only after you consent (see section 5). Its data is hosted in the EU.",
         "An error monitoring provider, to receive crash reports that we work to keep free of personal data.",
         "The Telegram Bot API, only if you link a chat.",
         "Lawyers, accountants and auditors where necessary, and public authorities where we are legally required to respond.",
       ],
     },
     {
-      heading: "8. International transfers",
+      heading: "9. International transfers",
       paragraphs: [
-        "Our providers are mainly in the United States, so using the Service involves a transfer of personal data outside the European Economic Area. Those transfers rely on an adequacy decision or on the European Commission's Standard Contractual Clauses with the provider. You can ask us for the relevant safeguards at " +
+        "Our providers are mainly in the United States, so using the Service involves a transfer of personal data outside the European Economic Area. Analytics and session recordings are the exception: PostHog stores them in its EU cloud. Those transfers rely on an adequacy decision or on the European Commission's Standard Contractual Clauses with the provider. You can ask us for the relevant safeguards at " +
           PRIVACY_CONTACT +
           ".",
       ],
     },
     {
-      heading: "9. How long we keep it",
+      heading: "10. How long we keep it",
       paragraphs: [
         "We keep data only as long as the purpose needs it, and these are the current periods. [CONFIRM EACH PERIOD WITH OPERATIONS BEFORE LAUNCH]",
       ],
@@ -310,11 +327,12 @@ const PRIVACY: LegalDocument = {
         "Notifications: the 50 most recent per wallet.",
         "Push subscription: until you switch alerts off, plus up to 180 days after a subscription is disabled for repeated delivery failures.",
         "Telegram link: until you send /stop, or until the bot is blocked.",
+        "Analytics events and session recordings: for a limited period set in our PostHog settings, then deleted.",
         "Logs, metrics and alerts: [LOG RETENTION - to be confirmed].",
       ],
     },
     {
-      heading: "10. Your rights",
+      heading: "11. Your rights",
       paragraphs: [
         "Under the GDPR you can ask for access to your data, rectification, erasure, restriction of processing, portability, and you can object to processing based on our legitimate interests, including the anti-abuse scoring. Where we rely on consent you can withdraw it at any time, without affecting what happened before.",
         "Write to " +
@@ -324,7 +342,7 @@ const PRIVACY: LegalDocument = {
       ],
     },
     {
-      heading: "11. Security, children and changes",
+      heading: "12. Security, children and changes",
       paragraphs: [
         "We store as little as possible, hash what we can, keep browser sessions in HttpOnly cookies, validate everything at the server boundary and use prepared statements for every database access. No system is perfect, and no internet service can promise absolute security.",
         "The Service is for adults. We do not knowingly process data of anyone under 18; if you believe a child has used it, contact us and we will remove the data we can.",
@@ -419,7 +437,7 @@ const COOKIES: LegalDocument = {
     {
       heading: "1. What this notice covers",
       paragraphs: [
-        "Browsers give a site three kinds of storage, and this notice lists all of them that Diggo.fun uses: cookies, the localStorage key/value store, and the push service worker. There are no advertising cookies, no third-party tracking pixels, no cross-site identifiers and no data sold to anyone.",
+        "Browsers give a site several kinds of storage, and this notice lists all of them that Diggo.fun uses: cookies, the localStorage key/value store, sessionStorage (only for analytics, after you allow it), and the push service worker. There are no advertising cookies, no third-party tracking pixels, no cross-site identifiers and no data sold to anyone.",
         "Storage is either strictly necessary or optional. Optional storage only happens after you allow it, and the two choices in the banner are equally easy to make.",
       ],
     },
@@ -439,7 +457,10 @@ const COOKIES: LegalDocument = {
       heading: "3. Optional: only with your permission",
       paragraphs: ["Each of these is off until you turn it on, and each can be turned off again."],
       bullets: [
-        "Analytics (PostHog) - starts only after 'Allow analytics'. It keeps its own identifier in localStorage and a first-party cookie, and records page views, the product events the site explicitly sends and session replays with all form inputs masked; after wallet sign-in it is linked to the wallet's public address. Autocapture and surveys are disabled. Withdraw it at any time; analytics and replay stop straight away.",
+        "Analytics and session recording (PostHog) - starts only after 'Allow analytics'. It records page views, the product events the site explicitly sends and session recordings with every form input masked; after wallet sign-in it is linked to the wallet's public address. Autocapture and surveys are disabled. Withdraw it at any time; analytics and recording stop straight away. Section 5, 'Session recording', of the Privacy Policy (diggo.fun/privacy#session-recording) explains what is recorded and why. PostHog stores:",
+        "ph_<project key>_posthog (first-party cookie and localStorage, cookie 365 days) - PostHog's anonymous identifier and the current analytics session.",
+        "ph_<project key>_window_id and ph_<project key>_primary_window_exists (sessionStorage, cleared when the tab closes) - tell tabs apart so a session recording plays back in the right order.",
+        "__ph_opt_in_out_<project key> (localStorage) - whether PostHog capture is switched on or off in this browser.",
         "Push alerts (service worker and subscription) - if you switch alerts on, your browser registers the push-only service worker at /sw.js and creates a subscription with your browser vendor's push service. Switching alerts off removes the registration and the server-side record.",
         "Telegram alerts - if you link a chat with a one-time code. Send /stop to the bot, or turn it off in the app, to unlink.",
       ],
@@ -454,7 +475,7 @@ const COOKIES: LegalDocument = {
     {
       heading: "5. How long these items last",
       paragraphs: [
-        "The session cookie expires after 7 days. localStorage items last until you clear them or reset them in the app. A push subscription lasts until you switch alerts off, and a subscription that keeps failing to deliver is disabled and then deleted after 180 days. The service worker is removed when you unregister it or clear site data.",
+        "The session cookie expires after 7 days, and the PostHog cookie after 365 days. localStorage items last until you clear them or reset them in the app, and sessionStorage items until the tab closes. Session recordings themselves are kept on PostHog for a limited period set in our PostHog settings, then deleted. A push subscription lasts until you switch alerts off, and a subscription that keeps failing to deliver is disabled and then deleted after 180 days. The service worker is removed when you unregister it or clear site data.",
       ],
     },
     {
