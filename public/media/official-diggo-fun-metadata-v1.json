@@ -1,0 +1,21 @@
+{
+  "name": "Diggo.fun",
+  "symbol": "DIGGO",
+  "description": "The official coin of Diggo.fun, the memecoin mining launchpad on Solana.",
+  "image": "https://diggo.fun/media/official-diggo-fun-logo-v2.png",
+  "external_url": "https://diggo.fun",
+  "extensions": {
+    "website": "https://diggo.fun",
+    "twitter": "https://x.com/Diggo_Fun",
+    "telegram": "https://t.me/DiggoDotFun"
+  },
+  "properties": {
+    "files": [
+      {
+        "uri": "https://diggo.fun/media/official-diggo-fun-logo-v2.png",
+        "type": "image/png"
+      }
+    ],
+    "category": "image"
+  }
+}
