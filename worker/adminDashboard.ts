@@ -1,8 +1,10 @@
 import { address } from "@solana/kit";
+import bs58 from "bs58";
 import type {
   AdminDashboardClaimCounts,
   AdminDashboardCount,
   AdminDashboardFee,
+  AdminDashboardFees,
   AdminDashboardJob,
   AdminDashboardPayload,
   AdminDashboardReferrals,
@@ -12,19 +14,47 @@ import type {
 } from "../shared/adminDashboard";
 import {
   METEORA_FEE_CLAIMER,
-  METEORA_LAUNCH,
+  METEORA_WRAPPED_SOL_MINT,
   normalizeChainMode,
+  normalizeMeteoraConfigPubkey,
   normalizeMeteoraCluster,
 } from "../shared/meteora";
 import { adminActor } from "./admin";
 import { getChainRpc } from "./chainV2";
 import { optionalBinding, type RuntimeEnv } from "./env";
 import { apiError, json } from "./http";
+import {
+  METEORA_CONFIG_OFFSET,
+  VIRTUAL_POOL_DISCRIMINATOR,
+  readAccount,
+  readProgramAccounts,
+  type MeteoraRpcAccount,
+} from "./meteora/rpc";
 
 const CACHE_TTL_MS = 30_000;
 const LAMPORTS_PER_SOL = 1_000_000_000n;
-const PARTNER_TRADING_SHARE_BPS = 8_000n;
-const PARTNER_CREATION_SHARE_BPS = 9_000n;
+/** On-chain fee reads are shared by every admin and refreshed at most once a minute. */
+const FEE_CACHE_TTL_MS = 60_000;
+/** A failed read is retried sooner, but not on every dashboard load. */
+const FEE_FAILURE_TTL_MS = 15_000;
+const FEE_READ_TIMEOUT_MS = 8_000;
+
+// Meteora DBC account layouts (IDL of @meteora-ag/dynamic-bonding-curve-sdk 1.5.13), offsets
+// include the 8-byte Anchor discriminator. adminDashboard.test.ts checks them against the SDK coder.
+const POOL_PROTOCOL_QUOTE_FEE_OFFSET = 256;
+const POOL_PARTNER_QUOTE_FEE_OFFSET = 272;
+const POOL_TOTAL_PROTOCOL_QUOTE_FEE_OFFSET = 320;
+const POOL_TOTAL_TRADING_QUOTE_FEE_OFFSET = 336;
+const POOL_CREATION_FEE_BITS_OFFSET = 369;
+const POOL_ACCOUNT_MIN_LENGTH = 370;
+const CONFIG_QUOTE_MINT_OFFSET = 8;
+const CONFIG_CREATOR_TRADING_FEE_PERCENTAGE_OFFSET = 245;
+const CONFIG_POOL_CREATION_FEE_OFFSET = 368;
+const CONFIG_ACCOUNT_MIN_LENGTH = 376;
+/** PoolState::creation_fee_bits sets bit 1 once the partner has claimed its creation fee. */
+const PARTNER_CREATION_FEE_CLAIMED_MASK = 0b10;
+/** The DBC program keeps this share of every pool creation fee for Meteora. */
+const PROTOCOL_POOL_CREATION_FEE_PERCENT = 10n;
 
 type Scalar = string | number | bigint | ArrayBuffer | null;
 
@@ -38,9 +68,11 @@ interface VolumeRow { lamports: number | string | null }
 interface VaultBalanceRow { mint: string; token_account: string; amount: string; updated_at: number }
 
 const cache = new Map<string, CacheEntry>();
+let feeCache: { key: string; expiresAt: number; fees: AdminDashboardFees } | null = null;
 
 export function resetAdminDashboardCache(): void {
   cache.clear();
+  feeCache = null;
 }
 
 function envText(env: RuntimeEnv, name: string): string | null {
@@ -90,7 +122,21 @@ function unavailableVolume(): AdminDashboardVolume {
 }
 
 function unavailableFee(): AdminDashboardFee {
-  return { accruedSol: null, claimableSol: null, estimated: false };
+  return { claimableSol: null, lifetimeSol: null, claimedSol: null };
+}
+
+export function unavailableFees(config: string | null, error: string): AdminDashboardFees {
+  return {
+    status: "unavailable",
+    claimableSol: null,
+    partnerTrading: unavailableFee(),
+    creation: unavailableFee(),
+    protocol: { tradingLifetimeSol: null, tradingUnclaimedSol: null, creationLifetimeSol: null },
+    pools: null,
+    config,
+    readAt: null,
+    error,
+  };
 }
 
 async function readCount(env: RuntimeEnv, sql: string, values: readonly unknown[] = []): Promise<number | null> {
@@ -180,19 +226,146 @@ async function readVolume(env: RuntimeEnv): Promise<AdminDashboardPayload["tradi
   };
 }
 
-async function readFees(env: RuntimeEnv): Promise<AdminDashboardPayload["fees"]> {
-  const [volume, pools] = await Promise.all([
-    volumeQuery(env, "SELECT COALESCE(SUM(CAST(sol_amount_lamports AS INTEGER)), 0) AS lamports FROM meteora_swaps"),
-    readCount(env, "SELECT COUNT(*) AS value FROM meteora_pools"),
-  ]);
-  const volumeLamports = rowLamports(volume?.lamports);
-  if (volumeLamports === null || pools === null) return { partnerTrading: unavailableFee(), creation: unavailableFee() };
-  const tradingFee = volumeLamports * BigInt(METEORA_LAUNCH.minimumBaseFeeBps) * PARTNER_TRADING_SHARE_BPS / 1_000_000n;
-  const creationFee = BigInt(pools) * METEORA_LAUNCH.poolCreationFeeLamports * PARTNER_CREATION_SHARE_BPS / 10_000n;
+function readU64Le(data: Uint8Array, offset: number): bigint {
+  if (offset + 8 > data.length) throw new Error("truncated u64");
+  let value = 0n;
+  for (let index = 7; index >= 0; index -= 1) value = (value << 8n) | BigInt(data[offset + index]);
+  return value;
+}
+
+export interface DbcFeeConfig {
+  quoteMint: string;
+  creatorTradingFeePercentage: number;
+  poolCreationFeeLamports: bigint;
+}
+
+export interface DbcPoolFees {
+  pool: string;
+  /** Unclaimed partner trading fee in the quote token (lamports for SOL-quoted pools). */
+  partnerQuoteFee: bigint;
+  protocolQuoteFee: bigint;
+  /** Lifetime partner + creator trading fee (PoolMetrics::total_trading_quote_fee). */
+  totalTradingQuoteFee: bigint;
+  totalProtocolQuoteFee: bigint;
+  creationFeeBits: number;
+}
+
+export function decodeDbcFeeConfig(data: Uint8Array): DbcFeeConfig {
+  if (data.length < CONFIG_ACCOUNT_MIN_LENGTH) throw new Error("truncated PoolConfig account");
+  const percentage = data[CONFIG_CREATOR_TRADING_FEE_PERCENTAGE_OFFSET];
+  if (percentage > 100) throw new Error("invalid creator trading fee percentage");
   return {
-    partnerTrading: { accruedSol: lamportsToSol(tradingFee), claimableSol: null, estimated: true },
-    creation: { accruedSol: lamportsToSol(creationFee), claimableSol: null, estimated: true },
+    quoteMint: bs58.encode(data.subarray(CONFIG_QUOTE_MINT_OFFSET, CONFIG_QUOTE_MINT_OFFSET + 32)),
+    creatorTradingFeePercentage: percentage,
+    poolCreationFeeLamports: readU64Le(data, CONFIG_POOL_CREATION_FEE_OFFSET),
   };
+}
+
+export function decodeDbcPoolFees(pool: string, data: Uint8Array): DbcPoolFees {
+  if (data.length < POOL_ACCOUNT_MIN_LENGTH) throw new Error("truncated VirtualPool account");
+  return {
+    pool,
+    partnerQuoteFee: readU64Le(data, POOL_PARTNER_QUOTE_FEE_OFFSET),
+    protocolQuoteFee: readU64Le(data, POOL_PROTOCOL_QUOTE_FEE_OFFSET),
+    totalTradingQuoteFee: readU64Le(data, POOL_TOTAL_TRADING_QUOTE_FEE_OFFSET),
+    totalProtocolQuoteFee: readU64Le(data, POOL_TOTAL_PROTOCOL_QUOTE_FEE_OFFSET),
+    creationFeeBits: data[POOL_CREATION_FEE_BITS_OFFSET],
+  };
+}
+
+function feeAmounts(claimable: bigint, lifetime: bigint): AdminDashboardFee {
+  const claimed = lifetime > claimable ? lifetime - claimable : 0n;
+  return { claimableSol: lamportsToSol(claimable), lifetimeSol: lamportsToSol(lifetime), claimedSol: lamportsToSol(claimed) };
+}
+
+/**
+ * Totals the partner's fees the way the DBC SDK's getPoolFeeBreakdown does per pool: the creator
+ * takes creator_trading_fee_percentage of the lifetime trading fee and the partner the rest; what
+ * is still in partner_quote_fee is claimable, the difference has been claimed. Each pool also owes
+ * the partner 90% of the config's creation fee until creation_fee_bits records the claim.
+ */
+export function summarizePartnerFees(
+  configAddress: string,
+  config: DbcFeeConfig,
+  pools: readonly DbcPoolFees[],
+  readAt: number,
+): AdminDashboardFees {
+  if (config.quoteMint !== METEORA_WRAPPED_SOL_MINT) return unavailableFees(configAddress, "Config is not SOL-quoted");
+  const creatorPercent = BigInt(config.creatorTradingFeePercentage);
+  const protocolCreationFee = config.poolCreationFeeLamports * PROTOCOL_POOL_CREATION_FEE_PERCENT / 100n;
+  const partnerCreationFee = config.poolCreationFeeLamports - protocolCreationFee;
+  let tradingClaimable = 0n;
+  let tradingLifetime = 0n;
+  let creationClaimable = 0n;
+  let protocolTradingLifetime = 0n;
+  let protocolTradingUnclaimed = 0n;
+  for (const pool of pools) {
+    const creatorShare = pool.totalTradingQuoteFee * creatorPercent / 100n;
+    tradingLifetime += pool.totalTradingQuoteFee - creatorShare;
+    tradingClaimable += pool.partnerQuoteFee;
+    if ((pool.creationFeeBits & PARTNER_CREATION_FEE_CLAIMED_MASK) === 0) creationClaimable += partnerCreationFee;
+    protocolTradingLifetime += pool.totalProtocolQuoteFee;
+    protocolTradingUnclaimed += pool.protocolQuoteFee;
+  }
+  const poolCount = BigInt(pools.length);
+  return {
+    status: "live",
+    claimableSol: lamportsToSol(tradingClaimable + creationClaimable),
+    partnerTrading: feeAmounts(tradingClaimable, tradingLifetime),
+    creation: feeAmounts(creationClaimable, partnerCreationFee * poolCount),
+    protocol: {
+      tradingLifetimeSol: lamportsToSol(protocolTradingLifetime),
+      tradingUnclaimedSol: lamportsToSol(protocolTradingUnclaimed),
+      creationLifetimeSol: lamportsToSol(protocolCreationFee * poolCount),
+    },
+    pools: pools.length,
+    config: configAddress,
+    readAt,
+    error: null,
+  };
+}
+
+function isVirtualPool(account: MeteoraRpcAccount): boolean {
+  return account.data.length >= POOL_ACCOUNT_MIN_LENGTH
+    && VIRTUAL_POOL_DISCRIMINATOR.every((byte, index) => account.data[index] === byte);
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("On-chain fee read timed out")), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+async function readFeesOnChain(env: RuntimeEnv, configAddress: string): Promise<AdminDashboardFees> {
+  const rpcEnv = env as unknown as Parameters<typeof readAccount>[0];
+  const [configAccount, poolAccounts] = await Promise.all([
+    readAccount(rpcEnv, configAddress),
+    readProgramAccounts(rpcEnv, { memcmpOffset: METEORA_CONFIG_OFFSET, memcmpBytes: bs58.decode(configAddress) }),
+  ]);
+  if (configAccount === null) throw new Error("Meteora config account not found");
+  const config = decodeDbcFeeConfig(configAccount.data);
+  const pools = poolAccounts.filter(isVirtualPool).map((account) => decodeDbcPoolFees(account.pubkey, account.data));
+  return summarizePartnerFees(configAddress, config, pools, Math.floor(Date.now() / 1_000));
+}
+
+/** On-chain partner fees, cached for a minute. A failed read reports "unavailable", never a guess. */
+export async function readFees(env: RuntimeEnv): Promise<AdminDashboardFees> {
+  const configAddress = normalizeMeteoraConfigPubkey(envText(env, "METEORA_DBC_CONFIG"));
+  if (!configAddress) return unavailableFees(null, "No Meteora config is published");
+  const key = [configAddress, envText(env, "DIGGO_RPC_URL"), envText(env, "DIGGO_RPC_URLS")].join(":");
+  const now = Date.now();
+  if (feeCache !== null && feeCache.key === key && feeCache.expiresAt > now) return feeCache.fees;
+  let fees: AdminDashboardFees;
+  try {
+    fees = await withTimeout(readFeesOnChain(env, configAddress), FEE_READ_TIMEOUT_MS);
+  } catch (error) {
+    console.error("Admin dashboard fee read failed", error);
+    fees = unavailableFees(configAddress, "On-chain fee read failed");
+  }
+  feeCache = { key, expiresAt: now + (fees.status === "live" ? FEE_CACHE_TTL_MS : FEE_FAILURE_TTL_MS), fees };
+  return fees;
 }
 
 async function readVaultSol(env: RuntimeEnv, vaultAddress: string | null): Promise<string | null> {
@@ -306,7 +479,7 @@ export async function adminDashboard(request: Request, env: RuntimeEnv): Promise
     const unavailablePayload: AdminDashboardPayload = {
       actor, generatedAt: Math.floor(now / 1_000), cachedUntil: Math.floor(now / 1_000), chainMode, cluster,
       launches: unavailableCount, graduated: unavailableCount, tradingVolume: { last24h: unavailableVolume(), last7d: unavailableVolume(), all: unavailableVolume() },
-      fees: { partnerTrading: unavailableFee(), creation: unavailableFee() }, vault: { address: null, solBalance: null, solscanUrl: null, tokenBalances: [] },
+      fees: unavailableFees(null, "Dashboard dependency failed"), vault: { address: null, solBalance: null, solscanUrl: null, tokenBalances: [] },
       claims: { pending: null, paid: null }, players: unavailableCount, crews: { active24h: null },
       referrals: { invited: null, qualified: null, oreCredited: null }, jobs: { indexer: { lastSuccessfulAt: null, lastError: null }, vaultSweep: { lastSuccessfulAt: null, lastError: null }, cron: { lastSuccessfulAt: null, lastError: null } },
       addresses: { treasury: null, feeClaimer: METEORA_FEE_CLAIMER, vault: null },
