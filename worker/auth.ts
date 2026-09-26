@@ -383,9 +383,15 @@ export async function verifyWallet(request: Request, env: RuntimeEnv): Promise<R
   const session = crypto.randomUUID().replaceAll("-", "");
   await recordAuthOutcome(env, request, body.wallet, "ok");
   await env.TOKEN_CACHE.put(`auth:session:${session}`, body.wallet, { expirationTtl: SESSION_TTL_SECONDS });
-  await captureAttribution(env, body.wallet, new URL(request.url).searchParams.get("ref"));
+  const referralCode = new URL(request.url).searchParams.get("ref");
+  const attribution = await captureAttribution(env, body.wallet, referralCode);
+  // True when this wallet is bound to the code it signed in with, so the client can report the
+  // referee's sign-in once (referral_signup). Carries no referrer identity.
+  const referralCaptured = Boolean(
+    attribution && referralCode && attribution.code.toLowerCase() === referralCode.trim().toLowerCase(),
+  );
   return json(
-    { wallet: body.wallet, expiresIn: SESSION_TTL_SECONDS },
+    { wallet: body.wallet, expiresIn: SESSION_TTL_SECONDS, referralCaptured },
     { headers: { "set-cookie": sessionCookie(session), "cache-control": "no-store" } },
   );
 }

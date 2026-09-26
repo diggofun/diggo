@@ -137,6 +137,7 @@ export function DiggoTradePage({
         cluster={cluster}
         chainMode={chainMode}
         meteoraConfigPubkey={meteoraConfigPubkey}
+        isOfficialDiggo
         signer={signer}
         onTraded={onTraded}
       />

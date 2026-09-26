@@ -295,7 +295,7 @@ function GuestDashboard() {
           Connect a wallet to see your crew tier, ORE storage, streak and the block rewards your crew
           has settled. Mining Power is earned only by playing.
         </p>
-        <button className="btn btn-primary btn-lg" onClick={requestWalletMenu}>
+        <button className="btn btn-primary btn-lg" onClick={() => requestWalletMenu("dashboard")}>
           <IconWallet size={18} /> Connect wallet
         </button>
       </div>

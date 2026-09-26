@@ -18,6 +18,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import type { TokenSummary } from "../shared/types";
 import { getWalletSession } from "./api";
+import { track } from "./analytics";
 import { DEVICE_HEADER, deviceId } from "./device";
 import { useDiggoWallet } from "./wallet";
 
@@ -311,9 +312,11 @@ export async function toggleWatchlist(mint: string): Promise<void> {
   const before = snapshot;
   const watched = before.mints.includes(mint);
   const next = toggleWatchlistMint(before.mints, mint);
+  const reportToggle = () => track(watched ? "watchlist_removed" : "watchlist_added", { mint });
   if (!before.signedIn) {
     writeLocalWatchlist(next);
     publish({ ...before, mints: next, error: "" });
+    reportToggle();
     return;
   }
   publish({
@@ -333,6 +336,7 @@ export async function toggleWatchlist(mint: string): Promise<void> {
       error: "",
       limit: server.limit,
     });
+    reportToggle();
   } catch (error) {
     // The star goes back to where it was: an optimistic toggle that silently fails is worse than
     // one that visibly refuses.

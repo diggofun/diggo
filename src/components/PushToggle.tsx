@@ -15,6 +15,7 @@
  * about the wallet, the rewards and the ORE balance.
  */
 import { useCallback, useEffect, useState, type CSSProperties, type ReactElement } from "react";
+import { track } from "../analytics";
 import { alertsAvailable, disablePush, enablePush, pushState, watchSubscriptionRotations, type PushState } from "../push";
 
 type Status = PushState | "checking";
@@ -151,6 +152,8 @@ export function PushToggle({ variant = "section" }: PushToggleProps): ReactEleme
     try {
       const next = on ? await disablePush() : await enablePush();
       setStatus(next);
+      if (!on && next === "on") track("alerts_enabled");
+      if (on && next !== "on") track("alerts_disabled");
       if (next === "blocked") {
         setError("Your browser is blocking notifications for this site. Allow them in your browser settings, then try again.");
       }

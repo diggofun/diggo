@@ -7,6 +7,7 @@
  * unsigned, then ask the wallet to sign and send. Fees always go to the claimer itself.
  */
 import { useCallback, useEffect, useState } from "react";
+import { track } from "../analytics";
 import { shortAddress } from "../format";
 import { IconClaim, IconExternalLink, IconRefresh } from "../icons";
 import {
@@ -116,6 +117,7 @@ export function PlatformFeesPanel({ configAddress, officialMint, cluster, signed
       }
       setPhase("Approve the claim in your wallet…");
       const result = await sendPartnerClaim(connected.wallet, prepared);
+      if (result.confirmed) track("platform_fees_claimed", { amount_sol: Number(prepared.plan.claimableLamports) / 1_000_000_000 });
       setReceipt({
         pool: pool.pool,
         signature: result.signature,

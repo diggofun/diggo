@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { track } from "../analytics";
 import { checkReferralCode, getReferrals, saveReferralCode, type ReferralPanel, type ReferralView } from "../api";
 import { shortAddress } from "../format";
 import { IconCopy, IconUserGroup } from "../icons";
@@ -55,7 +56,11 @@ export function ReferralsScreen({ signedIn }: { signedIn: boolean }) {
 
   async function copyLink(): Promise<void> {
     if (!panel) return;
-    try { await navigator.clipboard.writeText(referralLink(code)); setMessage("Referral link copied."); }
+    try {
+      await navigator.clipboard.writeText(referralLink(code));
+      setMessage("Referral link copied.");
+      track("referral_link_copied");
+    }
     catch { setMessage("Copy is unavailable in this browser."); }
   }
 
@@ -70,7 +75,12 @@ export function ReferralsScreen({ signedIn }: { signedIn: boolean }) {
 
   async function saveCode(): Promise<void> {
     setSaving(true); setMessage("");
-    try { await saveReferralCode(code); setMessage("Referral code saved. The previous link keeps working for players who already joined."); await load(); }
+    try {
+      await saveReferralCode(code);
+      track("referral_link_customized");
+      setMessage("Referral code saved. The previous link keeps working for players who already joined.");
+      await load();
+    }
     catch (failure) { setError(failure instanceof Error ? failure.message : "Could not save code."); }
     finally { setSaving(false); }
   }

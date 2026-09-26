@@ -294,6 +294,10 @@ export function meteoraConfig(env: RuntimeEnvLike) {
     // DIGGO_OFFICIAL_MINT reads as "not launched" (null) so the UI shows its empty state
     // (shared/officialMint.ts).
     officialMint: officialMintFromEnv(optionalBinding<string>(env, "DIGGO_OFFICIAL_MINT")),
+    // Public PostHog project key (not a secret) and the first-party proxy path the SDK talks to
+    // (worker/posthogProxy.ts). The client loads PostHog only after analytics consent.
+    posthogApiKey: optionalBinding<string>(env, "POSTHOG_API_KEY") || undefined,
+    posthogHost: optionalBinding<string>(env, "POSTHOG_HOST") || undefined,
     miningVault: String(env.MINING_VAULT_PUBLIC_KEY || "") || null,
     miningClaimCaps: {
       perClaim: String(env.MINING_CLAIM_PER_CLAIM || "") || null,

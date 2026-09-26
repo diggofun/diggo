@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ComponentType, type CSSProperties } f
 import { useConnect, useDisconnect, useWallets } from "@solana/kit-plugin-wallet/react";
 import bs58 from "bs58";
 import { fetchSolUsd, getChallenge, verifyWallet, type PortfolioSummary } from "../api";
-import { track } from "../analytics";
+import { resetAnalyticsIdentity, track } from "../analytics";
 import { clearRememberedReferral, readRememberedReferral } from "../referralLink";
 import { oreAmount, shortAddress, solAmount, usdApprox } from "../format";
 import type { GameState } from "../api";
@@ -247,7 +247,10 @@ export function AppHeader({ page, session, signedIn, summary, game, solBalance, 
             href="https://x.com/Diggo_Fun"
             target="_blank"
             rel="noopener noreferrer"
-            onClick={() => setSidebarOpen(false)}
+            onClick={() => {
+              track("x_link_clicked", { location: "sidebar" });
+              setSidebarOpen(false);
+            }}
           >
             <img className="x-logo" src="/assets/icons/x.png" srcSet="/assets/icons/x.png 1x, /assets/icons/x@2x.png 2x" width={22} height={22} alt="" />
             Follow on X
@@ -337,9 +340,20 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [identityOpen, setIdentityOpen] = useState(false);
   const viewer = useUsername(connected && session === connected.address ? connected.address : null);
+  /** The wallet the player picked in this menu, reported once the connection actually lands. */
+  const chosenWallet = useRef<string | null>(null);
+  const connectedAddress = connected?.address ?? null;
 
   useEffect(() => {
-    const onRequest = () => {
+    if (!connectedAddress || !chosenWallet.current) return;
+    track("wallet_connected", { wallet_name: chosenWallet.current });
+    chosenWallet.current = null;
+  }, [connectedAddress]);
+
+  useEffect(() => {
+    const onRequest = (event: Event) => {
+      const detail = (event as CustomEvent<{ location?: string } | null>).detail;
+      track("wallet_connect_clicked", { location: detail?.location ?? "unknown" });
       setOpen(true);
       rootRef.current?.scrollIntoView({ block: "nearest" });
     };
@@ -382,15 +396,17 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
       const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature), referralCode);
       clearRememberedReferral();
       onAuthenticated(verified.wallet);
-      track("wallet_signed_in", { network: "solana-mainnet" });
+      track("wallet_signed_in");
+      if (referralCode && verified.referralCaptured) track("referral_signup", { ref_code: referralCode });
     } catch {
-      track("wallet_sign_in_failed", { network: "solana-mainnet" });
+      // The button stays available; a refused or failed signature simply leaves the player signed out.
     } finally {
       setSigningIn(false);
     }
   }
 
   async function disconnectWallet() {
+    resetAnalyticsIdentity();
     if (connected?.kind === "walletconnect") await disconnectWalletConnect();
     else standardDisconnect.dispatch();
   }
@@ -450,7 +466,15 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
 
   return (
     <div className="wallet-control" ref={rootRef}>
-      <button className="wallet-button" aria-expanded={open} aria-haspopup="true" onClick={() => setOpen((value) => !value)}>
+      <button
+        className="wallet-button"
+        aria-expanded={open}
+        aria-haspopup="true"
+        onClick={() => {
+          if (!open) track("wallet_connect_clicked", { location: "header" });
+          setOpen((value) => !value);
+        }}
+      >
         <IconWallet className="wallet-button-icon" size={23} /> <span className="wallet-button-label">Connect wallet</span>
       </button>
       {open && (
@@ -461,9 +485,9 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
               key={wallet.name}
               disabled={connect.isRunning}
               onClick={() => {
+                chosenWallet.current = wallet.name;
                 connect.dispatch(wallet);
                 setOpen(false);
-                track("wallet_connected", { network: "solana-mainnet" });
               }}
             >
               {wallet.icon && <img src={wallet.icon} alt="" />} {wallet.name}
@@ -473,7 +497,7 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
             type="button"
             className="wallet-walletconnect-button"
             onClick={() => {
-              track("walletconnect_opened", { network: "solana-mainnet" });
+              chosenWallet.current = "WalletConnect";
               void openWalletConnect().then((opened) => {
                 setWalletConnectError(opened ? "" : "Could not load WalletConnect. Check your connection and try again.");
                 if (opened) setOpen(false);

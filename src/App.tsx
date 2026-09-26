@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { address } from "@solana/kit";
 import bs58 from "bs58";
 import "./walletConnect";
@@ -16,7 +16,6 @@ import {
   getPlayerProfile,
   getPortfolio,
   getPlayerRewards,
-  getReferrals,
   captureReferral,
   getRewardClaimChallenge,
   getWalletSession,
@@ -37,11 +36,11 @@ import {
   runGameDiscovery,
   upgradeGameCrew,
 } from "./api";
-import { track, trackOnce } from "./analytics";
+import { failureReason, identifyWallet, resetAnalyticsIdentity, track, trackOnce } from "./analytics";
 import { TURNSTILE_SITE_KEY } from "./constants";
 import { NEUTRAL_VERIFICATION_TEXT, runGated, VerificationRequiredError } from "./verification";
 import { CREW_COMPONENT_LABELS, CREW_COMPONENTS } from "./crewLabels";
-import { useDiggoWallet } from "./wallet";
+import { requestWalletMenu, useDiggoWallet } from "./wallet";
 import { clearEquippedCosmetics, loadEquippedCosmetics } from "./cosmetics";
 import { AppHeader, type PageId } from "./components/AppHeader";
 import { ExploreBoard, FinalCta, HomeHero, HowItWorks, SelectedMine, SiteFooter, Ticker } from "./components/HomeSections";
@@ -51,12 +50,13 @@ import { ConsentBanner } from "./components/ConsentBanner";
 import { PushToggle } from "./components/PushToggle";
 import { WatchlistPanel } from "./components/WatchlistPanel";
 import { isLegalPath } from "./components/legal/routes";
-import { captureLandingReferral, clearRememberedReferral, readRememberedReferral } from "./referralLink";
+import { captureLandingReferral, clearRememberedReferral, readRememberedReferral, referralCodeFromLocation } from "./referralLink";
 import { usePendingTransaction } from "./onchain";
 import { signPreparedClaim } from "./onchain/preparedClaim";
 import { settledClaimAllNotice } from "./claimAll";
 import { startMeteoraMining } from "./meteoraGameFlow";
 import { crewPower } from "../shared/economics";
+import { crewTier } from "../shared/crew";
 import { MeteoraCrewScreen, MeteoraDiscoveriesScreen, MeteoraMineDashboard, MeteoraPortfolioScreen } from "./components/MeteoraGameScreens";
 import { RouteErrorBoundary } from "./components/RouteErrorBoundary";
 
@@ -236,16 +236,13 @@ export default function App() {
     document.title = title ? title + " · Diggo.fun" : "Diggo.fun — Build and manage your memecoin mining crew";
   }, [page]);
 
-  useEffect(() => {
-    if (!analyticsConfigured) return;
-    const referralCode = readRememberedReferral();
-    if (referralCode?.trim()) return trackOnce("referral_landed");
-  }, [analyticsConfigured]);
+  // Read before captureLandingReferral() below strips ?ref= (or /r/<code>) from the address bar.
+  const [landingRefCode] = useState(() => referralCodeFromLocation(window.location.href));
 
   useEffect(() => {
-    if (page !== "discoveries" || !analyticsConfigured) return;
-    return trackOnce("discoveries_viewed", { network: config.cluster });
-  }, [analyticsConfigured, config.cluster, page]);
+    if (!analyticsConfigured || !landingRefCode) return;
+    return trackOnce("referral_landing", { ref_code: landingRefCode });
+  }, [analyticsConfigured, landingRefCode]);
 
   const fetchBootstrap = useCallback(async (): Promise<void> => {
     try {
@@ -288,7 +285,10 @@ export default function App() {
       if (!code) return;
       try {
         const result = await captureReferral(code);
-        if (current && result.captured) clearRememberedReferral();
+        if (current && result.captured) {
+          clearRememberedReferral();
+          track("referral_signup", { ref_code: code });
+        }
       } catch {
         // The code stays remembered and is retried on the next load.
       }
@@ -348,23 +348,30 @@ export default function App() {
   const isMiningActive = player?.activationState === "ACTIVE";
   const signedIn = Boolean(session && walletAddress && session === walletAddress);
 
+  // Analytics identity follows the signed-in wallet's public key: identify on sign-in, and forget
+  // it once the session or the wallet goes away. A page load that never signs in resets nothing.
+  const identifiedWallet = useRef<string | null>(null);
   useEffect(() => {
-    if (page !== "referrals" || !signedIn || !analyticsConfigured) return;
-    let current = true;
-    let cancelTrackedOnce: (() => void) | undefined;
-    void getReferrals()
-      .then((panel) => {
-        if (current && panel.totals.qualified > 0) cancelTrackedOnce = trackOnce("referral_qualified");
-      })
-      .catch(() => {
-        // The referral dashboard owns its own error state; absence of this observation is not a
-        // qualification event.
-      });
-    return () => {
-      current = false;
-      cancelTrackedOnce?.();
-    };
-  }, [analyticsConfigured, page, signedIn]);
+    if (signedIn && session) {
+      identifiedWallet.current = session;
+      identifyWallet(session);
+    } else if (identifiedWallet.current) {
+      identifiedWallet.current = null;
+      resetAnalyticsIdentity();
+    }
+  }, [session, signedIn]);
+
+  // One coin_viewed per coin page, one trade_diggo_viewed per visit to the official coin's page.
+  const officialMint = config.officialMint;
+  const viewedMint = (page === "mines" || page === "trade") ? featured?.mint ?? null : null;
+  useEffect(() => {
+    if (!analyticsConfigured || !viewedMint) return;
+    return trackOnce("coin_viewed", { mint: viewedMint, is_official_diggo: viewedMint === officialMint });
+  }, [analyticsConfigured, officialMint, viewedMint]);
+  useEffect(() => {
+    if (!analyticsConfigured || page !== "diggo") return;
+    return trackOnce("trade_diggo_viewed");
+  }, [analyticsConfigured, page]);
 
   const refreshGame = useCallback(async (): Promise<void> => {
     if (!walletAddress || config.chainMode !== "meteora") return;
@@ -491,7 +498,6 @@ export default function App() {
       if (result.report) setMiningReport(result.report);
       if (result.mine) setMineInfo(result.mine);
       setReportCollected(true);
-      track("mining_report_viewed", { network: config.cluster });
       await refreshClaims();
     } catch (error) {
       setReportError(messageOf(error));
@@ -507,7 +513,8 @@ export default function App() {
       setCrewError("");
       setCrewNotice("");
       try {
-        await upgradeGameCrew(component);
+        const upgraded = await upgradeGameCrew(component);
+        track("upgrade_purchased", { item: component, level: upgraded.player?.crew?.[component], ore_cost: upgraded.spent });
         await refreshGame();
         setCrewNotice(CREW_COMPONENT_LABELS[component] + " upgraded.");
       } catch (error) { setCrewError(messageOf(error)); }
@@ -542,7 +549,7 @@ export default function App() {
           signature.slice(0, 8) +
           "…",
       );
-      track("crew_upgraded", { component });
+      track("upgrade_purchased", { item: component, level: profile.crewLevels?.[component] });
     } catch (error) {
       if (!pendingTransaction.record(error, "Crew upgrade")) setCrewError(messageOf(error));
       else setCrewError("");
@@ -559,6 +566,7 @@ export default function App() {
     }
     setClaimingId(claim.id);
     setClaimError("");
+    track("rewards_claim_clicked");
     try {
       // v2: the tokens leave the coin's vault only through `claim_rewards`, signed by the
       // player's own wallet. The Worker has no key on this path, so the claim is the transaction
@@ -575,11 +583,13 @@ export default function App() {
       }
       await ensureSession();
       await confirmRewardClaimPayout(claim.id, result.signature);
-      track("reward_claimed", { network: config.cluster });
+      track("rewards_claimed", { coins_count: 1 });
       await refreshClaims();
     } catch (error) {
-      if (!pendingTransaction.record(error, "Reward claim")) setClaimError(messageOf(error));
-      else setClaimError("");
+      if (!pendingTransaction.record(error, "Reward claim")) {
+        setClaimError(messageOf(error));
+        track("rewards_claim_failed", { reason: failureReason(error) });
+      } else setClaimError("");
     } finally {
       setClaimingId(null);
     }
@@ -593,6 +603,7 @@ export default function App() {
     setClaimAllPending(true);
     setClaimAllError("");
     setClaimAllNotice("");
+    track("rewards_claim_clicked");
     try {
       const prepared = await prepareGameClaimAll();
       if (prepared.signatureCount !== 1) {
@@ -603,7 +614,6 @@ export default function App() {
         payout: prepared.batch,
         nowSeconds: Math.floor(Date.now() / 1_000),
       });
-      track("claim_all_submitted", { network: config.cluster });
 
       // Confirmation is idempotent. Poll this exact batch/signature pair after submission instead
       // of ever sending the transaction again or asking the player for another signature.
@@ -612,7 +622,7 @@ export default function App() {
         if (result.batch.status === "SETTLED") {
           await refreshGame();
           setClaimAllNotice(settledClaimAllNotice(prepared));
-          track("claim_all_settled", { network: config.cluster });
+          track("rewards_claimed", { coins_count: prepared.items.length });
           return;
         }
         if (attempt < 5) await new Promise((resolve) => window.setTimeout(resolve, 2_000));
@@ -621,6 +631,7 @@ export default function App() {
       setClaimAllNotice("Collection is submitted and still confirming. Do not sign or submit it again.");
     } catch (error) {
       setClaimAllError(messageOf(error));
+      track("rewards_claim_failed", { reason: failureReason(error) });
     } finally {
       setClaimAllPending(false);
     }
@@ -673,6 +684,7 @@ export default function App() {
       setRolling(true); setDiscoveryError(""); setDiscoveryNotice("");
       try {
         const result = await runGameDiscovery();
+        if (result.discovered) track("discovery_revealed", { token_symbol: result.claim?.symbol ?? undefined });
         const discoveredName = result.claim?.name ?? result.claim?.symbol;
         setDiscoveryNotice(
           result.discovered
@@ -740,23 +752,32 @@ export default function App() {
     const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature), referralCode);
     clearRememberedReferral();
     setSession(verified.wallet);
-    track("wallet_signed_in", { network: config.cluster });
+    track("wallet_signed_in");
+    if (referralCode && verified.referralCaptured) track("referral_signup", { ref_code: referralCode });
   }
 
   async function handleActivate() {
+    track("crew_activate_clicked");
     if (config.chainMode === "meteora") {
-      if (!connected) { setActivateError("Connect a wallet to activate your shift."); return; }
+      if (!connected) {
+        setActivateError("Connect a wallet to activate your shift.");
+        track("crew_activation_failed", { reason: "wallet_not_connected" });
+        return;
+      }
       setActivating(true); setActivateError("");
       try {
         if (!signedIn) await ensureSession();
         const challenge = await requestGameActivationChallenge(connected.address);
         const signature = await connected.signMessage(new TextEncoder().encode(challenge.message));
-        const streak = await startMeteoraMining({
+        await startMeteoraMining({
           activate: () => activateGame(challenge.nonce, bs58.encode(signature)),
           refresh: refreshGame,
         });
-        track("mine_activated", { streak, network: config.cluster });
-      } catch (error) { setActivateError(messageOf(error)); }
+        track("crew_activated", { tier: game ? crewTier(game.crew).tier : undefined });
+      } catch (error) {
+        setActivateError(messageOf(error));
+        track("crew_activation_failed", { reason: failureReason(error) });
+      }
       finally { setActivating(false); }
       return;
     }
@@ -784,10 +805,12 @@ export default function App() {
       const state = await getMiningState(connected.address);
       if (state.report) setMiningReport(state.report);
       await refreshClaims();
-        track("mine_activated", { streak: profile.streak, network: config.cluster });
+      track("crew_activated", { tier: crewTier(profile.crewLevels).tier });
     } catch (error) {
-      if (!pendingTransaction.record(error, "Player activation")) setActivateError(messageOf(error));
-      else setActivateError("");
+      if (!pendingTransaction.record(error, "Player activation")) {
+        setActivateError(messageOf(error));
+        track("crew_activation_failed", { reason: failureReason(error) });
+      } else setActivateError("");
     } finally {
       setActivating(false);
     }
@@ -798,6 +821,7 @@ export default function App() {
     if (!connected || !config.programId || !featured) return;
     if (!pendingTransaction.canSubmit()) return;
     setActivateError("");
+    track("rewards_claim_clicked");
     try {
       const { address, claimRewards } = await import("./solanaProgram");
       const submission = await claimRewards({
@@ -809,11 +833,12 @@ export default function App() {
         pendingTransaction.recordSubmission(submission.signature, "Reward claim");
         return;
       }
-      track("rewards_claimed", { network: config.cluster });
+      track("rewards_claimed", { coins_count: 1 });
       await refreshFeaturedToken();
     } catch (error) {
       if (!pendingTransaction.record(error, "Reward claim")) {
         setActivateError(error instanceof Error ? error.message : "Nothing to claim yet");
+        track("rewards_claim_failed", { reason: failureReason(error) });
       } else setActivateError("");
     }
   }
@@ -937,7 +962,7 @@ export default function App() {
               <WatchlistPanel
                 tokens={tokens}
                 onSelectCoin={openTokenPage}
-                onConnect={() => window.dispatchEvent(new Event("diggo:open-wallet"))}
+                onConnect={() => requestWalletMenu("watchlist")}
               />
               {economy}
               <HowItWorks />
@@ -1077,7 +1102,7 @@ export default function App() {
               />
               {mineInfoPanel(featured)}
               {(config.chainMode === "meteora" || config.programId) && (
-                <SwapPanel token={featured} programAddress={config.programId} cluster={config.cluster} chainMode={config.chainMode} meteoraConfigPubkey={config.meteoraConfigPubkey} signer={connected?.wallet ?? null} onTraded={() => void refreshFeaturedToken()} />
+                <SwapPanel token={featured} programAddress={config.programId} cluster={config.cluster} chainMode={config.chainMode} meteoraConfigPubkey={config.meteoraConfigPubkey} isOfficialDiggo={featured.mint === config.officialMint} signer={connected?.wallet ?? null} onTraded={() => void refreshFeaturedToken()} />
               )}
             </>
           ) : (
@@ -1085,7 +1110,7 @@ export default function App() {
           ))}
 
           {page === "trade" && (featured && (config.chainMode === "meteora" || config.programId) ? (
-            <SwapPanel token={featured} programAddress={config.programId} cluster={config.cluster} chainMode={config.chainMode} meteoraConfigPubkey={config.meteoraConfigPubkey} signer={connected?.wallet ?? null} onTraded={() => void refreshFeaturedToken()} />
+            <SwapPanel token={featured} programAddress={config.programId} cluster={config.cluster} chainMode={config.chainMode} meteoraConfigPubkey={config.meteoraConfigPubkey} isOfficialDiggo={featured.mint === config.officialMint} signer={connected?.wallet ?? null} onTraded={() => void refreshFeaturedToken()} />
           ) : (
             <section className="page-shell">
               <EmptyState title="Nothing to trade yet">Trading opens once a mine is live.</EmptyState>
@@ -1177,7 +1202,6 @@ export default function App() {
             onLaunched={(token) => {
               setTokens((current) => [token, ...current.filter((existing) => existing.mint !== token.mint)]);
               setSelected(token);
-              track("launch_succeeded", { chain_mode: config.chainMode, network: config.cluster });
             }}
           />
         )}
