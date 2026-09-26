@@ -128,7 +128,7 @@ export async function executeMeteoraSwap(input: {
     amountIn: new BN(input.amount.toString()),
     minimumAmountOut,
   });
-  const submission = await sendMeteoraTransaction(input.wallet, transaction);
+  const submission = await sendMeteoraTransaction(input.wallet, transaction, { action: "trade", connection: client.connection });
   return {
     signature: submission.signature,
     confirmed: submission.confirmed,
