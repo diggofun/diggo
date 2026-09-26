@@ -21,10 +21,20 @@ import {
 import { LEGAL_DOCUMENTS, type LegalSection } from "./content";
 import { LEGAL_ROUTES, legalDocId } from "./routes";
 
-function Section({ section, index }: { section: LegalSection; index: number }): ReactElement {
+/** A stable anchor for a section, from its heading without the number: "5. Session recording" -> "session-recording". */
+function sectionAnchor(heading: string): string {
+  return heading
+    .replace(/^\d+\.\s*/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function Section({ section }: { section: LegalSection }): ReactElement {
+  const anchor = sectionAnchor(section.heading);
   return (
-    <section aria-labelledby={"legal-section-" + index}>
-      <h2 id={"legal-section-" + index} className="legal-section-heading">
+    <section aria-labelledby={anchor}>
+      <h2 id={anchor} className="legal-section-heading">
         {section.heading}
       </h2>
       {section.paragraphs.map((paragraph, paragraphIndex) => (
@@ -94,8 +104,19 @@ export function LegalRoute({ pathname }: { pathname: string }): ReactElement {
         ))}
       </nav>
 
-      {doc.sections.map((section, index) => (
-        <Section key={section.heading} section={section} index={index} />
+      <nav className="legal-toc" aria-label="Contents">
+        <h2 className="legal-toc-title">Contents</h2>
+        <ol className="legal-list legal-toc-list">
+          {doc.sections.map((section) => (
+            <li key={section.heading}>
+              <a href={"#" + sectionAnchor(section.heading)}>{section.heading.replace(/^\d+\.\s*/, "")}</a>
+            </li>
+          ))}
+        </ol>
+      </nav>
+
+      {doc.sections.map((section) => (
+        <Section key={section.heading} section={section} />
       ))}
 
       <div className="legal-choices">

@@ -88,3 +88,44 @@ describe("terms of service compliance clauses", () => {
     expect(LEGAL_DOCUMENTS.privacy.updated).toBe("26 September 2026");
   });
 });
+
+describe("session recording disclosure", () => {
+  const privacy = LEGAL_DOCUMENTS.privacy;
+  const recording = privacy.sections.find((section) => section.heading === "5. Session recording");
+  const recordingText = recording
+    ? [...recording.paragraphs, ...(recording.bullets ?? [])].join("\n")
+    : "";
+  const cookiesText = LEGAL_DOCUMENTS.cookies.sections
+    .flatMap((section) => [...section.paragraphs, ...(section.bullets ?? [])])
+    .join("\n");
+
+  it("numbers the privacy sections in order from one", () => {
+    privacy.sections.forEach((section, index) => {
+      expect(section.heading.startsWith(index + 1 + ". ")).toBe(true);
+    });
+  });
+
+  it("has its own section covering provider, consent, masking, identity, basis and rights", () => {
+    expect(recording).toBeDefined();
+    for (const clause of [
+      "PostHog Inc.",
+      "hosted in the European Union",
+      "'Allow analytics'",
+      "'Essential only'",
+      "'Change your analytics choice'",
+      "Every form input is masked",
+      "seed phrases",
+      "public address",
+      "Article 6(1)(a) GDPR",
+      "deleted",
+    ]) {
+      expect(recordingText).toContain(clause);
+    }
+  });
+
+  it("is referenced from the cookie notice with the PostHog storage it uses", () => {
+    expect(cookiesText).toContain("privacy#session-recording");
+    expect(cookiesText).toContain("ph_<project key>_posthog");
+    expect(cookiesText).toContain("sessionStorage");
+  });
+});
