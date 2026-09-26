@@ -42,7 +42,12 @@ export async function launchMeteoraCoin(input: MeteoraLaunchInput): Promise<Mete
     },
     ...(firstBuy ? { firstBuyParam: firstBuy } : {}),
   });
-  const submission = await sendMeteoraTransaction(input.wallet, transaction);
+  // The new mint account must sign its own creation alongside the creator's wallet.
+  const submission = await sendMeteoraTransaction(input.wallet, transaction, {
+    action: "launch",
+    additionalSigners: [mint],
+    connection: client.connection,
+  });
   return {
     mint: mint.publicKey.toBase58(),
     pool: deriveMeteoraPoolAddresses(mint.publicKey.toBase58(), config.toBase58()).pool,

@@ -233,5 +233,5 @@ export async function sendPartnerClaim(wallet: DiggoWallet, prepared: PreparedPa
   if (wallet.address !== prepared.transaction.feePayer?.toBase58()) {
     throw new Error("The connected wallet changed. Refresh and try again.");
   }
-  return sendMeteoraTransaction(wallet, prepared.transaction, 90_000);
+  return sendMeteoraTransaction(wallet, prepared.transaction, { action: "claim", timeoutMs: 90_000 });
 }
