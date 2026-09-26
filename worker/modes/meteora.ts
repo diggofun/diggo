@@ -11,11 +11,13 @@ import {
   handleClaimConfirmation,
   handleDiscovery,
   handleUpgrade,
+  settleActiveShifts,
   settlePlayerMining,
   type GameHandlerContext,
   type PlayerGameState,
 } from "../game/service";
-import { gameChainMode, type GameCoin, type GameCoinSource, type GameEnv, type GamePlayerState, type GamePortfolioSource, type GameServices, type GameWalletSource, type MiningPayout } from "../game/contracts";
+import { gameChainMode, MINING_RESERVE, type GameCoin, type GameCoinSource, type GameEnv, type GamePlayerState, type GamePortfolioSource, type GameServices, type GameWalletSource, type MiningPayout } from "../game/contracts";
+import { wholeTokens } from "../game/store";
 import { getSolUsd } from "../oracle";
 import { apiError, checkRateLimit, checkWalletRateLimit, isBase58Address, json } from "../http";
 import { getChainRpc, LAMPORTS_PER_SOL } from "../chainV2";
@@ -284,6 +286,43 @@ export async function runMeteoraScheduled(env: RuntimeEnvLike) {
   return { indexed, sweep };
 }
 
+/**
+ * The five-minute settlement pass: books ORE and pending mining tokens for every shift with
+ * unsettled time, and rolls the day's discovery for eligible active crews. It runs after the
+ * indexer so a newly indexed pool is already a mine it can assign.
+ */
+export async function runMeteoraSettlement(env: RuntimeEnvLike) {
+  try {
+    const result = await settleActiveShifts(meteoraGameContext(env));
+    await recordJobRun(env, "meteora:settle", result.failed > 0 ? "FAILED" : "OK", {
+      accounts: result.settled,
+      events: result.oreBooked,
+      detail: result.failed > 0 ? `${result.failed} wallet(s) failed to settle` : undefined,
+    });
+    return result;
+  } catch (error) {
+    await recordJobRun(env, "meteora:settle", "FAILED", { accounts: 0, events: 0, detail: String(error) });
+    throw error;
+  }
+}
+
+/** The off-chain mining ledger for a mine, in whole tokens, plus the power digging it now. */
+async function mineLedgerView(env: RuntimeEnvLike, mint: string) {
+  const store = d1GameStore(env.DB);
+  const now = Math.floor(Date.now() / 1_000);
+  const [ledger, power] = await Promise.all([store.getMine(mint), store.getEligiblePower(mint, now)]);
+  const initial = ledger?.initialReserve ?? MINING_RESERVE;
+  const remaining = ledger?.remaining ?? MINING_RESERVE;
+  const committed = ledger?.committed ?? 0n;
+  return {
+    reserveTotal: wholeTokens(initial),
+    reserveRemaining: wholeTokens(remaining),
+    committed: wholeTokens(committed),
+    progress: initial > 0n ? Number((committed * 1_000_000n) / initial) / 1_000_000 : 0,
+    power,
+  };
+}
+
 export function meteoraConfig(env: RuntimeEnvLike) {
   return {
     chainMode: gameChainMode(env),
@@ -348,11 +387,25 @@ export async function meteoraMineInfo(env: RuntimeEnvLike, slug: string, wallet:
   const state = wallet && isBase58Address(wallet) ? (await readPlayerState(env, wallet)).state : null;
   const balance = state?.activeMine?.coin?.mint === mint ? state.activeMine.balance : { claimable: "0" };
   const graduated = Number(row.is_graduated) === 1;
+  const ledger = await mineLedgerView(env, mint);
+  const playerPower = state ? (state.activeMine?.coin?.mint === mint && state.activation.active ? state.activeMiningPower : 0) : null;
   return json({ mine: {
     mint, pool: String(row.pool), symbol: String(row.symbol || mint.slice(0, 6)), name: String(row.name || row.symbol || mint),
     status: graduated ? "graduated" : "active", venue: "meteora", graduated,
     claimable: balance.claimable, pendingUntilGraduation: graduated ? "0" : balance.claimable,
     quoteReserve: String(row.quote_reserve), migrationQuoteThreshold: String(row.migration_quote_threshold),
+    // The Mining Reserve is an off-chain ledger (game_mines): rewards accrue as pending balances and
+    // are paid from the mining vault after graduation, so these figures come from that ledger.
+    remainingReserve: ledger.reserveRemaining,
+    reserveTotal: ledger.reserveTotal,
+    fullyMinedProgress: ledger.progress,
+    totalMiningPower: ledger.power,
+    playerPower,
+    estimatedShare: playerPower !== null && ledger.power > 0 ? Math.min(1, playerPower / ledger.power) : null,
+    emissionSource: "RESERVE",
+    // Before graduation the mining vault is empty by design: the pool's 20% leftover (200M) only
+    // reaches it at migration. Rewards accrue as pending against that allocation meanwhile.
+    accounting: { source: "OFFCHAIN", authoritative: false, label: "Pending reserve: accrues now, paid from the 200M leftover after graduation" },
   } });
 }
 
@@ -422,6 +475,7 @@ export async function meteoraTokenBySlug(env: RuntimeEnvLike, slug: string): Pro
   const supply = mintAccount ? Number(decodeTokenMint(mintAccount.data).supply) / 10 ** decimals : 0;
   const graduated = Number(row.is_graduated) === 1;
   const createdAt = Number(row.created_at) || 0;
+  const ledger = await mineLedgerView(env, mint);
   const token: TokenSummary = {
     mint, slug: mint,
     name: String(row.name || row.symbol || mint), symbol: String(row.symbol || mint.slice(0, 6)),
@@ -434,7 +488,8 @@ export async function meteoraTokenBySlug(env: RuntimeEnvLike, slug: string): Pro
     curveMining: { open: false, disabled: true, onCurve: !graduated, cap: 0, mined: 0, remaining: 0, progress: 0, blockReward: 0, unpaid: 0 },
     sellCapacity: { sol: graduated ? 0 : Number(row.quote_reserve ?? 0) / LAMPORTS_PER_SOL, tokens: null },
     marketCapUsd: priceSol * usd * supply,
-    reserveRemaining: 0, reserveTotal: 0, rewardPerBlock: 0, networkPower: 0, nextBlockAt: 0, nextEpochAt: 0,
+    reserveRemaining: ledger.reserveRemaining, reserveTotal: ledger.reserveTotal, rewardPerBlock: 0, networkPower: ledger.power,
+    nextBlockAt: 0, nextEpochAt: 0,
     createdAt, decimals, venue: "meteora",
     quoteReserve: String(row.quote_reserve ?? "0"), migrationQuoteThreshold: String(row.migration_quote_threshold ?? "0"),
   };

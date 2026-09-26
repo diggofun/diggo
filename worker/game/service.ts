@@ -1,5 +1,6 @@
 import { DIGGO_CONFIG, type CrewComponent } from "../../shared/config";
 import { upgradeOreCost } from "../../shared/crew";
+import { onchainOreCapacity, onchainStoreOre } from "../../shared/ore";
 import { activationEligibility, isEligibleForBlock } from "../../shared/streak";
 import {
   consumeChallengeNonce,
@@ -14,14 +15,18 @@ import { gameChainMode, TOKEN_SCALE, type GameCoin, type GamePlayerState } from 
 import { d1GameStore } from "./d1-store";
 import {
   accrueMining,
+  activationBonusOre,
   applyGameActivation,
   DISCOVERY_MIN_WALLET_AGE_SECONDS,
   discoveryEpoch,
   discoveryId,
   isPortfolioEligible,
+  miningSettlementWindow,
   pickDiscoveryMint,
   playerCrewPower,
   releasedMiningAllocation,
+  settleShiftOre,
+  unixSeconds,
   weekIndex,
   type ReferralCreditResult,
 } from "./rules";
@@ -33,11 +38,17 @@ export interface GameHandlerContext {
   env: GameEnv;
   services: GameServices;
   store?: GameStore;
+  /** Test clock in Unix seconds. Production uses the wall clock, also in seconds. */
   now?: () => number;
 }
 
+/**
+ * The game clock, in Unix seconds. Every stored game timestamp, the 24h shift, the streak grace
+ * and the reserve release schedule are seconds; defaulting to `Date.now` (milliseconds) here made
+ * every 24h shift last 86.4 seconds and stopped all settlement in production.
+ */
 function unixNow(context: GameHandlerContext): number {
-  return Math.floor((context.now ?? Date.now)());
+  return context.now ? Math.floor(context.now()) : unixSeconds();
 }
 
 function contextStore(context: GameHandlerContext): GameStore {
@@ -83,6 +94,24 @@ async function persistPlayer(context: GameHandlerContext, store: GameStore, play
   const version = await store.playerVersion(player.wallet);
   if (!(await store.savePlayer(player, version))) throw new Error("Game state changed");
   return (await store.getPlayer(player.wallet)) ?? player;
+}
+
+/**
+ * Books the ORE the current shift has dug since the last settlement. The version is read before
+ * the row, so a concurrent write makes the guarded save fail instead of overwriting newer state;
+ * the next settlement then books the same interval from the unchanged cursor.
+ */
+export async function settlePlayerOre(context: GameHandlerContext, player: GamePlayerStateLike): Promise<GamePlayerStateLike> {
+  const store = contextStore(context);
+  const now = unixNow(context);
+  if (!settleShiftOre(player, now)) return player;
+  const version = await store.playerVersion(player.wallet);
+  const fresh = (await store.getPlayer(player.wallet)) ?? player;
+  const settlement = settleShiftOre(fresh, now);
+  if (!settlement) return fresh;
+  const updated = { ...fresh, oreBalance: settlement.oreBalance, oreEarned: settlement.oreEarned, lastOreAt: settlement.lastOreAt };
+  if (!(await store.savePlayer(updated, version))) return (await store.getPlayer(player.wallet)) ?? fresh;
+  return (await store.getPlayer(player.wallet)) ?? updated;
 }
 
 function secureRandomIndex(length: number): number {
@@ -193,9 +222,25 @@ export async function handleActivate(context: GameHandlerContext, request: Reque
   if ((await consumeChallengeNonce(context.env, { nonce: body.nonce, wallet, action: "game-activate" })) !== "ok") {
     return apiError("Activation challenge was already used", 409);
   }
+  const result = await activatePlayer(context, wallet);
+  if (!result.ok) return apiError(result.message, result.status, result.code);
+  return json({ player: result.player, ore: result.player.oreBalance });
+}
+
+export type ActivationResult =
+  | { ok: true; player: GamePlayerStateLike }
+  | { ok: false; status: number; message: string; code?: string };
+
+/**
+ * Everything an authenticated activation does to game state: settle the previous shift, apply
+ * the streak and reactivation rules, open a 24h shift, book the activation ORE and assign a mine.
+ * The route and the mining backfill both call this, so a replayed history follows the live rules.
+ */
+export async function activatePlayer(context: GameHandlerContext, wallet: string): Promise<ActivationResult> {
   const store = contextStore(context);
   const now = unixNow(context);
-  const player = await ensurePlayer(context, wallet);
+  // Book what the previous shift dug before its window is replaced by the new one.
+  const player = await settlePlayerOre(context, await ensurePlayer(context, wallet));
   const eligibility = activationEligibility({
     activatedAt: player.activatedAt > 0 ? player.activatedAt : null,
     activeUntil: player.activeUntil > 0 ? player.activeUntil : null,
@@ -204,33 +249,39 @@ export async function handleActivate(context: GameHandlerContext, request: Reque
     longestStreak: player.longestStreak,
     streakFreezes: player.streakFreezes,
   }, now);
-  if (!eligibility.eligible) return apiError("Activation is not available yet", 409);
+  if (!eligibility.eligible) return { ok: false, status: 409, message: "Activation is not available yet" };
   const outcome = applyGameActivation(player, now);
   const currentCoin = player.activeMine ? await context.services.coins.getMine(player.activeMine) : null;
   if (currentCoin) await settleMining(context, player, currentCoin);
   const latestPlayer = (await store.getPlayer(player.wallet)) ?? player;
   const assignedMine = await chooseEligibleMine(context, now, currentCoin);
   if (assignedMine && !(await anchorMiningStart(context, player, assignedMine.mint, now))) {
-    return apiError("Mining could not be started; retry", 503, "MINING_ASSIGNMENT_UNAVAILABLE");
+    return { ok: false, status: 503, message: "Mining could not be started; retry", code: "MINING_ASSIGNMENT_UNAVAILABLE" };
   }
   const newDay = player.lastActivationAt <= 0 || Math.floor(now / 86_400) !== Math.floor(player.lastActivationAt / 86_400);
+  const activationOre = onchainStoreOre(
+    latestPlayer.oreBalance,
+    activationBonusOre(latestPlayer, now) + outcome.rewards.ore,
+    onchainOreCapacity(latestPlayer.crew),
+  );
   const updated: GamePlayerStateLike = {
     ...latestPlayer,
     activatedAt: outcome.window.activatedAt,
     activeUntil: outcome.window.activeUntil,
     lastActivationAt: now,
+    lastOreAt: now,
     streak: outcome.streak,
     longestStreak: outcome.longestStreak,
     streakFreezes: outcome.freezes,
     activeDays: player.activeDays + (newDay ? 1 : 0),
     validActivations: player.validActivations + (newDay ? 1 : 0),
-    oreBalance: player.oreBalance + outcome.rewards.ore,
-    oreEarned: player.oreEarned + outcome.rewards.ore,
+    oreBalance: activationOre.balance,
+    oreEarned: latestPlayer.oreEarned + activationOre.stored,
     activeMine: assignedMine?.mint ?? null,
     activeMiningPower: assignedMine ? playerCrewPower(latestPlayer) : 0,
   };
   const saved = await persistPlayer(context, store, updated);
-  return json({ player: saved, ore: saved.oreBalance });
+  return { ok: true, player: saved };
 }
 
 export async function handleUpgrade(context: GameHandlerContext, request: Request): Promise<Response> {
@@ -240,7 +291,8 @@ export async function handleUpgrade(context: GameHandlerContext, request: Reques
   const { component } = await readJson<{ component?: string }>(request);
   if (!COMPONENTS.includes(component as CrewComponent)) return apiError("Invalid crew component");
   const store = contextStore(context);
-  const player = await ensurePlayer(context, wallet);
+  // Settle first so ORE the crew already dug can pay for the upgrade.
+  const player = await settlePlayerOre(context, await ensurePlayer(context, wallet));
   const level = player.crew[component as CrewComponent];
   if (level >= DIGGO_CONFIG.crew.maxLevel) return apiError("Crew component is already at maximum level");
   const cost = upgradeOreCost(component as CrewComponent, level, player.crew.foreman);
@@ -261,22 +313,25 @@ export async function settleMining(
   coin: import("./contracts").GameCoin,
 ): Promise<GamePlayerStateLike> {
   const now = unixNow(context);
-  const assignedPower = player.activeMine === coin.mint && isEligibleForBlock(player.activeUntil, now, player.activatedAt)
-    ? player.activeMiningPower || playerCrewPower(player)
-    : 0;
-  if (assignedPower <= 0) return player;
+  if (player.activeMine !== coin.mint) return player;
   const store = contextStore(context);
   const balance = await store.getBalance(player.wallet, coin.mint);
+  // The crew digs for the whole shift, online or not: settle up to min(now, activeUntil) even when
+  // the shift has already ended, and never across the gap before the current shift started.
+  const window = miningSettlementWindow(player, balance.lastSettledAt, coin.miningStartsAt, now);
+  if (!window) return player;
+  const assignedPower = player.activeMiningPower || playerCrewPower(player);
+  if (assignedPower <= 0) return player;
   const mine = await store.ensureMine(coin.mint, coin.miningStartsAt, assignedPower, now);
   const visibleEligiblePower = await store.getEligiblePower(coin.mint, now);
   const totalEligiblePower = Math.max(assignedPower, visibleEligiblePower);
-  const releasedBefore = releasedMiningAllocation(balance.lastSettledAt || coin.miningStartsAt, coin.miningStartsAt);
-  const releasedNow = releasedMiningAllocation(now, coin.miningStartsAt);
+  const releasedBefore = releasedMiningAllocation(window.start, coin.miningStartsAt);
+  const releasedNow = releasedMiningAllocation(window.end, coin.miningStartsAt);
   const next = accrueMining({
     mine: coin,
     wallet: player.wallet,
-    now,
-    lastSettledAt: balance.lastSettledAt || coin.miningStartsAt,
+    now: window.end,
+    lastSettledAt: window.start,
     assignedPower,
     totalEligiblePower,
     releasedBefore,
@@ -286,21 +341,28 @@ export async function settleMining(
     committedBefore: mine.committed,
   });
   if (next.claimable === balance.claimable) return player;
+  const released = releasedNow > mine.released ? releasedNow : mine.released;
   const settled = await store.settleMining(
-    { ...mine, released: releasedNow, remaining: next.reserveRemaining, committed: next.committed, totalEligiblePower },
-    { ...balance, claimable: next.claimable, lastSettledAt: now },
+    {
+      ...mine,
+      released: released < next.committed ? next.committed : released,
+      remaining: next.reserveRemaining,
+      committed: next.committed,
+      totalEligiblePower,
+    },
+    { ...balance, claimable: next.claimable, lastSettledAt: window.end },
     mine.version,
     balance.claimable,
-    now,
+    window.end,
   );
   if (!settled) return player;
   return player;
 }
 
-/** Settle the current mine, then assign and settle a fallback when it has no capacity left. */
+/** Settle ORE and the current mine, then assign and settle a fallback when it has no capacity left. */
 export async function settlePlayerMining(context: GameHandlerContext, player: GamePlayerStateLike): Promise<GamePlayerStateLike> {
   const store = contextStore(context);
-  let current = player;
+  let current = await settlePlayerOre(context, player);
   const oldCoin = current.activeMine ? await context.services.coins.getMine(current.activeMine) : null;
   if (oldCoin && !oldCoin.graduated) {
     await settleMining(context, current, oldCoin);
@@ -613,38 +675,105 @@ export async function handleClaimConfirmation(context: GameHandlerContext, reque
   return json({ claim: serializeClaim((await store.getClaim(claim.id)) ?? claim), status: "PAID" });
 }
 
-export async function handleDiscovery(context: GameHandlerContext, request: Request): Promise<Response> {
-  if (gameChainMode(context.env) !== "meteora") return apiError("Discovery is handled by the native path");
-  const wallet = await authenticatedWallet(context, request, "discovery");
-  if (!wallet) return apiError("Wallet authentication required", 401);
+export type DiscoveryAttempt =
+  | { ok: false; status: number; message: string; code?: string }
+  | { ok: true; discovered: false; reason: string }
+  | { ok: true; discovered: true; claim: GameClaim; coin: GameCoin | null; fresh: boolean };
+
+export function discoveryClaimId(wallet: string, epoch: number): string {
+  return `discovery:${wallet}:${epoch}`;
+}
+
+/**
+ * One discovery roll for one wallet and one daily epoch. The roll is keyed by (secret, epoch,
+ * wallet) and the claim id by (wallet, epoch), so the player's button and the scheduled sweep can
+ * both call this and at most one pending reward per wallet per day is ever recorded.
+ */
+export async function attemptDiscovery(context: GameHandlerContext, player: GamePlayerStateLike): Promise<DiscoveryAttempt> {
   const store = contextStore(context);
-  const player = await ensurePlayer(context, wallet);
+  const wallet = player.wallet;
   const now = unixNow(context);
-  if (now - player.createdAt < DISCOVERY_MIN_WALLET_AGE_SECONDS) return apiError("Wallet is too new for discovery", 403);
-  if (!context.services.wallet) return apiError("Wallet age could not be verified", 403);
-  const walletCreatedAt = await context.services.wallet.walletCreatedAt(wallet);
-  if (!walletCreatedAt || now - walletCreatedAt < DISCOVERY_MIN_WALLET_AGE_SECONDS) return apiError("Wallet age could not be verified", 403);
-  if (!context.services.portfolio || !isPortfolioEligible(await context.services.portfolio.portfolioUsd(wallet))) return apiError("Discovery portfolio requirement not met", 403);
-  if (player.activeDays < 5 || player.validActivations < 5) return apiError("Discovery play requirement not met", 403);
+  if (now - player.createdAt < DISCOVERY_MIN_WALLET_AGE_SECONDS) return { ok: false, status: 403, message: "Wallet is too new for discovery" };
+  if (player.activeDays < 5 || player.validActivations < 5) return { ok: false, status: 403, message: "Discovery play requirement not met" };
   // A Discovery pays real tokens, so it may only roll inside a live activation window, using the
   // same boundary that credits mining blocks: activation instant inclusive, activeUntil exclusive.
   // Without this an expired crew could still roll, and since the roll is commit-reveal and
   // idempotent per epoch it would be a one-shot real-token reward for a day never worked.
   if (!isEligibleForBlock(player.activeUntil, now, player.activatedAt)) {
-    return apiError("Activate your crew to roll for a discovery", 403, "ACTIVATION_REQUIRED");
+    return { ok: false, status: 403, message: "Activate your crew to roll for a discovery", code: "ACTIVATION_REQUIRED" };
+  }
+  const secret = context.env.DISCOVERY_SECRET?.trim();
+  if (!secret || secret.length < 32) return { ok: false, status: 503, message: "Discovery is unavailable until DISCOVERY_SECRET is configured" };
+  const epoch = discoveryEpoch(now);
+  const existing = await store.getClaim(discoveryClaimId(wallet, epoch));
+  if (existing) return { ok: true, discovered: true, claim: existing, coin: await context.services.coins.getMine(existing.mint), fresh: false };
+  if (!context.services.wallet) return { ok: false, status: 403, message: "Wallet age could not be verified" };
+  const walletCreatedAt = await context.services.wallet.walletCreatedAt(wallet);
+  if (!walletCreatedAt || now - walletCreatedAt < DISCOVERY_MIN_WALLET_AGE_SECONDS) return { ok: false, status: 403, message: "Wallet age could not be verified" };
+  if (!context.services.portfolio || !isPortfolioEligible(await context.services.portfolio.portfolioUsd(wallet))) {
+    return { ok: false, status: 403, message: "Discovery portfolio requirement not met" };
   }
   const coins = (await context.services.coins.listActiveMines()).filter((coin) => coin.miningStartsAt <= now && !coin.graduated);
-  const epoch = discoveryEpoch(now);
-  const secret = context.env.DISCOVERY_SECRET?.trim();
-  if (!secret || secret.length < 32) return apiError("Discovery is unavailable until DISCOVERY_SECRET is configured", 503);
   const id = discoveryId({ secret, epoch, wallet });
   const coin = pickDiscoveryMint(id, coins);
-  if (!coin) return apiError("No discovery coin is available", 409);
+  if (!coin) return { ok: false, status: 409, message: "No discovery coin is available" };
   const mine = await store.ensureMine(coin.mint, coin.miningStartsAt, 1, now);
-  const claimId = `discovery:${wallet}:${epoch}`;
-  const claim = await store.createDiscovery({ id, wallet, mint: coin.mint, amount: 1_000_000n, claimId, epoch, createdAt: now }, mine.remaining);
-  if (!claim) return json({ discovered: false, reason: "already_dispatched_or_reserve_empty" }, { status: 200 });
-  return json({ discovered: true, claim: serializeClaimWithCoin(claim, coin) });
+  const claim = await store.createDiscovery(
+    { id, wallet, mint: coin.mint, amount: 1_000_000n, claimId: discoveryClaimId(wallet, epoch), epoch, createdAt: now },
+    mine.remaining,
+  );
+  if (!claim) return { ok: true, discovered: false, reason: "already_dispatched_or_reserve_empty" };
+  return { ok: true, discovered: true, claim, coin, fresh: true };
+}
+
+export async function handleDiscovery(context: GameHandlerContext, request: Request): Promise<Response> {
+  if (gameChainMode(context.env) !== "meteora") return apiError("Discovery is handled by the native path");
+  const wallet = await authenticatedWallet(context, request, "discovery");
+  if (!wallet) return apiError("Wallet authentication required", 401);
+  const player = await ensurePlayer(context, wallet);
+  const result = await attemptDiscovery(context, player);
+  if (!result.ok) return apiError(result.message, result.status, result.code);
+  if (!result.discovered) return json({ discovered: false, reason: result.reason }, { status: 200 });
+  return json({ discovered: true, claim: serializeClaimWithCoin(result.claim, result.coin) });
+}
+
+export interface ShiftSweepResult {
+  checked: number;
+  settled: number;
+  failed: number;
+  oreBooked: number;
+  discoveries: number;
+}
+
+/**
+ * The scheduled settlement pass. Settlement is otherwise lazy (it runs when a player reads their
+ * state or activates), so without this a crew that dug while its player was offline showed
+ * nothing until the next visit. Every step is idempotent: ORE and tokens advance per-wallet
+ * cursors, and a discovery is unique per wallet and day.
+ */
+export async function settleActiveShifts(context: GameHandlerContext, limit = 200): Promise<ShiftSweepResult> {
+  const store = contextStore(context);
+  const now = unixNow(context);
+  const wallets = await store.listWalletsToSettle(now, limit);
+  const result: ShiftSweepResult = { checked: wallets.length, settled: 0, failed: 0, oreBooked: 0, discoveries: 0 };
+  const rollDiscoveries = Boolean(context.env.DISCOVERY_SECRET && context.env.DISCOVERY_SECRET.trim().length >= 32);
+  for (const wallet of wallets) {
+    try {
+      const player = await store.getPlayer(wallet);
+      if (!player) continue;
+      const settled = await settlePlayerMining(context, player);
+      result.oreBooked += Math.max(0, settled.oreEarned - player.oreEarned);
+      result.settled += 1;
+      if (rollDiscoveries && isEligibleForBlock(settled.activeUntil, now, settled.activatedAt)) {
+        const attempt = await attemptDiscovery(context, settled);
+        if (attempt.ok && attempt.discovered && attempt.fresh) result.discoveries += 1;
+      }
+    } catch (error) {
+      result.failed += 1;
+      console.error(JSON.stringify({ event: "game.settle_failed", wallet, error: String(error) }));
+    }
+  }
+  return result;
 }
 
 export interface PlayerGameState extends Omit<GamePlayerState, "activeMine"> {

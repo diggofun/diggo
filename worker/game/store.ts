@@ -87,6 +87,11 @@ export interface GameStore {
   getReferralCredit(id: string): Promise<ReferralCreditRecord | null>;
   referralWeekTotals(referrer: string, week: number): Promise<{ count: number; ore: number }>;
   createDiscovery(record: DiscoveryRecord, expectedReserveRemaining: bigint): Promise<GameClaim | null>;
+  /**
+   * Wallets whose current shift has time the ORE cursor has not settled yet, oldest cursor first.
+   * Rows carrying legacy millisecond timestamps are excluded until they are repaired.
+   */
+  listWalletsToSettle(now: number, limit: number): Promise<string[]>;
 }
 
 export function starterCrew(): GamePlayerState["crew"] {
@@ -219,6 +224,14 @@ export class MemoryGameStore implements GameStore {
       }
     }
     return total;
+  }
+
+  async listWalletsToSettle(now: number, limit: number): Promise<string[]> {
+    return [...this.players.values()]
+      .filter((player) => player.activatedAt > 0 && player.activatedAt <= now && player.activeUntil <= 99_999_999_999 && player.lastOreAt < player.activeUntil)
+      .sort((a, b) => a.lastOreAt - b.lastOreAt || a.wallet.localeCompare(b.wallet))
+      .slice(0, Math.max(0, limit))
+      .map((player) => player.wallet);
   }
 
   async saveBalance(balance: GameBalance, expectedClaimable: bigint): Promise<boolean> {

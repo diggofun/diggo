@@ -73,7 +73,7 @@ import {
 } from "./tokens";
 import type { IndexerJob } from "./v2/types";
 import { officialMintFromEnv } from "../shared/officialMint";
-import { handleMeteoraGameRoute, meteoraBootstrap, meteoraConfig, meteoraMineInfo, meteoraPlayerProfile, meteoraPortfolio, meteoraTokenBySlug, runMeteoraScheduled } from "./modes/meteora";
+import { handleMeteoraGameRoute, meteoraBootstrap, meteoraConfig, meteoraMineInfo, meteoraPlayerProfile, meteoraPortfolio, meteoraTokenBySlug, runMeteoraScheduled, runMeteoraSettlement } from "./modes/meteora";
 import { registerMeteoraPool } from "./meteora/registration";
 import { meteoraCandles } from "./candles";
 import { isPosthogProxyPath, proxyPosthog } from "./posthogProxy";
@@ -350,6 +350,15 @@ export default {
       } catch (error) {
         cronStatus = "FAILED";
         console.error(JSON.stringify({ event: "referrals.meteora_failed", error: String(error) }));
+      }
+      try {
+        // Runs even when indexing failed: ORE and pending-token settlement read only D1.
+        const settlement = await runMeteoraSettlement(env);
+        console.log(JSON.stringify({ event: "meteora.settle", ...settlement }));
+      } catch (error) {
+        cronStatus = "FAILED";
+        console.error(JSON.stringify({ event: "meteora.settle_failed", error: String(error) }));
+        ctx.waitUntil(reportError(env, error, { trigger: "scheduled", step: "meteora-settle" }));
       }
       try {
         await recordJobRun(env, "cron:meteora", cronStatus, {
