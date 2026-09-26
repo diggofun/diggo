@@ -1,27 +1,29 @@
 /**
- * Regression tests for the consent gate on PostHog capture.
+ * The consent gate on PostHog, plus the privacy boundary on what an event may carry.
  *
- * The bug these cover: startAnalytics() cached its import promise, and the only consent
- * subscription was created on the "no decision yet" path. So a player who withdrew consent and then
- * allowed analytics again in the same page load kept a loaded-but-opted-out client: every later
- * track() was dropped, and nothing ever called opt_in_capturing() a second time. Withdrawing consent
- * after a decision had been made at load was not followed at all.
- *
- * The modules are re-imported per test (vi.resetModules) because both keep their state in module
- * scope, which is exactly the state that made this bug live for the rest of the page load.
+ * Nothing may load or send before "Allow analytics"; "Essential only" or a withdrawal must opt the
+ * client out and stop replay in the same page load; a re-grant must switch capture back on, because
+ * posthog's opt-out is sticky for the session. The modules are re-imported per test
+ * (vi.resetModules) because both keep their state in module scope.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const posthog = vi.hoisted(() => ({
   init: vi.fn(),
   capture: vi.fn(),
+  identify: vi.fn(),
+  reset: vi.fn(),
   opt_in_capturing: vi.fn(),
   opt_out_capturing: vi.fn(),
+  startSessionRecording: vi.fn(),
+  stopSessionRecording: vi.fn(),
 }));
 
 vi.mock("posthog-js", () => ({ default: posthog }));
 
-const CONFIG = { posthogApiKey: "ph-key", posthogHost: "https://us.i.posthog.com" };
+const CONFIG = { posthogApiKey: "phc_test", posthogHost: "/ph" };
+const MINT = "12cens35GKeZH8is6R1gdbJ1faktyLrXgHvHyBB6veb7";
+const WALLET = "H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT";
 
 /** A page-load scope for consent.ts: window.localStorage plus the events it dispatches. */
 function installWindow(): void {
@@ -55,232 +57,192 @@ function installWindow(): void {
   globalThis.window = win as unknown as Window & typeof globalThis;
 }
 
-async function loadConsent() {
-  return await import("./components/legal/consent");
+async function load() {
+  const consent = await import("./components/legal/consent");
+  const analytics = await import("./analytics");
+  return { consent, ...analytics };
 }
 
-async function loadAnalytics() {
-  return await import("./analytics");
-}
-
-describe("analytics consent", () => {
+describe("analytics consent gate", () => {
   beforeEach(() => {
     installWindow();
     vi.clearAllMocks();
     vi.resetModules();
   });
 
-  it("does not load the client while the config arrives without a decision", async () => {
-    const { startAnalytics, track } = await loadAnalytics();
+  it("loads nothing and captures nothing before a decision", async () => {
+    const { startAnalytics, track, identifyWallet } = await load();
     await startAnalytics(CONFIG);
-    track("before_any_decision");
+    track("wallet_signed_in");
+    identifyWallet(WALLET);
+
+    expect(posthog.init).not.toHaveBeenCalled();
+    expect(posthog.capture).not.toHaveBeenCalled();
+    expect(posthog.identify).not.toHaveBeenCalled();
+  });
+
+  it("loads nothing and captures nothing after 'Essential only'", async () => {
+    const { consent, startAnalytics, track } = await load();
+    consent.recordConsent("essential");
+    await startAnalytics(CONFIG);
+    track("launch_started");
+
     expect(posthog.init).not.toHaveBeenCalled();
     expect(posthog.capture).not.toHaveBeenCalled();
   });
 
-  it("re-opts-in when analytics is allowed again after a withdrawal", async () => {
-    const consent = await loadConsent();
-    const { startAnalytics, track } = await loadAnalytics();
+  it("initialises the EU proxy client with SPA pageviews, masked replay and identified-only profiles", async () => {
+    const { consent, startAnalytics } = await load();
     consent.recordConsent("all");
     await startAnalytics(CONFIG);
-    track("before_withdrawal");
-    expect(posthog.capture).toHaveBeenCalledWith("before_withdrawal", {});
 
-    consent.recordConsent("essential");
-    track("while_withdrawn");
-    expect(posthog.capture).not.toHaveBeenCalledWith("while_withdrawn", {});
-    expect(posthog.opt_out_capturing).toHaveBeenCalledTimes(1);
-
-    consent.recordConsent("all");
-    track("after_regrant");
-    expect(posthog.capture).toHaveBeenCalledWith("after_regrant", {});
-    expect(posthog.opt_in_capturing).toHaveBeenCalledTimes(2);
     expect(posthog.init).toHaveBeenCalledTimes(1);
+    expect(posthog.init).toHaveBeenCalledWith("phc_test", expect.objectContaining({
+      api_host: "/ph",
+      ui_host: "https://eu.posthog.com",
+      capture_pageview: "history_change",
+      capture_pageleave: true,
+      person_profiles: "identified_only",
+      session_recording: expect.objectContaining({ maskAllInputs: true }),
+    }));
+    expect(posthog.opt_in_capturing).toHaveBeenCalledTimes(1);
   });
 
-  it("re-opts-in when the decision was made after the config arrived", async () => {
-    const consent = await loadConsent();
-    const { startAnalytics, track } = await loadAnalytics();
+  it("starts when analytics is allowed after the config arrived", async () => {
+    const { consent, startAnalytics, track } = await load();
     await startAnalytics(CONFIG);
+    expect(posthog.init).not.toHaveBeenCalled();
 
     consent.recordConsent("all");
-    // The decision starts the import asynchronously; wait for the client to be opted in.
     await vi.waitFor(() => expect(posthog.opt_in_capturing).toHaveBeenCalledTimes(1));
-    track("after_decision");
-    expect(posthog.capture).toHaveBeenCalledWith("after_decision", {});
+    track("alerts_enabled");
+
+    expect(posthog.capture).toHaveBeenCalledWith("alerts_enabled", {});
+  });
+
+  it("opts out and stops replay on withdrawal, then re-opts-in on a re-grant", async () => {
+    const { consent, startAnalytics, track } = await load();
+    consent.recordConsent("all");
+    await startAnalytics(CONFIG);
+    track("alerts_enabled");
+    expect(posthog.capture).toHaveBeenCalledWith("alerts_enabled", {});
 
     consent.recordConsent("essential");
-    track("while_withdrawn");
-    expect(posthog.capture).not.toHaveBeenCalledWith("while_withdrawn", {});
+    track("alerts_disabled");
+    expect(posthog.opt_out_capturing).toHaveBeenCalledTimes(1);
+    expect(posthog.stopSessionRecording).toHaveBeenCalledTimes(1);
+    expect(posthog.capture).not.toHaveBeenCalledWith("alerts_disabled", {});
 
     consent.recordConsent("all");
-    track("after_regrant");
-    expect(posthog.capture).toHaveBeenCalledWith("after_regrant", {});
-    expect(posthog.opt_in_capturing).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(posthog.opt_in_capturing).toHaveBeenCalledTimes(2));
+    track("referral_link_copied");
+    expect(posthog.startSessionRecording).toHaveBeenCalledTimes(1);
+    expect(posthog.capture).toHaveBeenCalledWith("referral_link_copied", {});
     expect(posthog.init).toHaveBeenCalledTimes(1);
   });
 
-  it("is a no-op when the deployment has no analytics configured", async () => {
-    const consent = await loadConsent();
-    const { startAnalytics, track } = await loadAnalytics();
+  it("stops capture when consent is cleared from the legal pages", async () => {
+    const { consent, startAnalytics, track } = await load();
     consent.recordConsent("all");
-    await startAnalytics({});
-    track("never_sent");
+    await startAnalytics(CONFIG);
+    consent.clearConsent();
+    track("launch_started");
+
+    expect(posthog.opt_out_capturing).toHaveBeenCalledTimes(1);
+    expect(posthog.capture).not.toHaveBeenCalled();
+  });
+
+  it("does not flush an event queued during startup once consent is withdrawn", async () => {
+    const { consent, startAnalytics, track } = await load();
+    consent.recordConsent("all");
+    const started = startAnalytics(CONFIG);
+    track("launch_started");
+    consent.recordConsent("essential");
+    await started;
+
     expect(posthog.capture).not.toHaveBeenCalled();
   });
 
   it("flushes a consented startup event once the client finishes loading", async () => {
-    const consent = await loadConsent();
-    const { startAnalytics, track } = await loadAnalytics();
+    const { consent, startAnalytics, track } = await load();
     consent.recordConsent("all");
-
     const started = startAnalytics(CONFIG);
-    track("startup_action");
+    track("launch_started");
     expect(posthog.capture).not.toHaveBeenCalled();
-
     await started;
-    expect(posthog.capture).toHaveBeenCalledWith("startup_action", {});
+
+    expect(posthog.capture).toHaveBeenCalledWith("launch_started", {});
   });
 
-  it("does not flush a queued event after consent is withdrawn during startup", async () => {
-    const consent = await loadConsent();
-    const { startAnalytics, track } = await loadAnalytics();
+  it("is a no-op when the deployment has no analytics configured", async () => {
+    const { consent, startAnalytics, track } = await load();
     consent.recordConsent("all");
+    await startAnalytics({});
+    track("launch_started");
 
-    const started = startAnalytics(CONFIG);
-    track("withdrawn_startup_action");
-    consent.recordConsent("essential");
-
-    await started;
-    expect(posthog.capture).not.toHaveBeenCalled();
-  });
-
-  it("deduplicates one-shot page observations across rerenders", async () => {
-    const consent = await loadConsent();
-    const { startAnalytics, trackOnce } = await loadAnalytics();
-    consent.recordConsent("all");
-    await startAnalytics(CONFIG);
-
-    trackOnce("discoveries_viewed", { network: "mainnet-beta" });
-    trackOnce("discoveries_viewed", { network: "mainnet-beta" });
-
-    expect(posthog.capture).toHaveBeenCalledTimes(1);
-    expect(posthog.capture).toHaveBeenCalledWith("discoveries_viewed", { network: "mainnet-beta" });
-  });
-
-  it("records a current-view one-shot once when consent is granted after it was observed", async () => {
-    const consent = await loadConsent();
-    const { startAnalytics, trackOnce } = await loadAnalytics();
-    await startAnalytics(CONFIG);
-
-    trackOnce("discoveries_viewed", { network: "mainnet-beta" });
     expect(posthog.init).not.toHaveBeenCalled();
     expect(posthog.capture).not.toHaveBeenCalled();
+  });
+
+  it("records a view observed before consent once consent is granted, and not after it unmounted", async () => {
+    const { consent, startAnalytics, trackOnce } = await load();
+    await startAnalytics(CONFIG);
+    trackOnce("trade_diggo_viewed");
+    const endView = trackOnce("coin_viewed", { mint: MINT, is_official_diggo: true });
+    endView();
 
     consent.recordConsent("all");
     await vi.waitFor(() => expect(posthog.capture).toHaveBeenCalledTimes(1));
-    trackOnce("discoveries_viewed", { network: "mainnet-beta" });
+    trackOnce("trade_diggo_viewed");
 
     expect(posthog.capture).toHaveBeenCalledTimes(1);
-    expect(posthog.capture).toHaveBeenCalledWith("discoveries_viewed", { network: "mainnet-beta" });
+    expect(posthog.capture).toHaveBeenCalledWith("trade_diggo_viewed", {});
   });
 
-  it("does not replay a one-shot from a view that ended before consent", async () => {
-    const consent = await loadConsent();
-    const { startAnalytics, trackOnce } = await loadAnalytics();
+  it("identifies the signed-in wallet only after consent and resets it on logout", async () => {
+    const { consent, startAnalytics, identifyWallet, resetAnalyticsIdentity } = await load();
     await startAnalytics(CONFIG);
+    identifyWallet(WALLET);
+    expect(posthog.identify).not.toHaveBeenCalled();
 
-    const endView = trackOnce("discoveries_viewed", { network: "mainnet-beta" });
-    endView();
     consent.recordConsent("all");
-    await vi.waitFor(() => expect(posthog.opt_in_capturing).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(posthog.identify).toHaveBeenCalledWith(WALLET));
+    identifyWallet(WALLET);
+    expect(posthog.identify).toHaveBeenCalledTimes(1);
 
-    expect(posthog.capture).not.toHaveBeenCalled();
+    resetAnalyticsIdentity();
+    expect(posthog.reset).toHaveBeenCalledTimes(1);
+    resetAnalyticsIdentity();
+    expect(posthog.reset).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("analytics privacy boundary", () => {
+  beforeEach(() => {
+    installWindow();
+    vi.clearAllMocks();
+    vi.resetModules();
   });
 
-  it("clears a held one-shot on denial so a later re-grant cannot replay it", async () => {
-    const consent = await loadConsent();
-    const { startAnalytics, trackOnce } = await loadAnalytics();
-    await startAnalytics(CONFIG);
-
-    trackOnce("referral_landed");
-    consent.recordConsent("essential");
-    consent.recordConsent("all");
-    await vi.waitFor(() => expect(posthog.opt_in_capturing).toHaveBeenCalledTimes(1));
-
-    expect(posthog.capture).not.toHaveBeenCalled();
-  });
-
-  it("can record a fresh current-view observation after a denial and later grant", async () => {
-    const consent = await loadConsent();
-    const { startAnalytics, trackOnce } = await loadAnalytics();
-    await startAnalytics(CONFIG);
-    consent.recordConsent("essential");
-
-    trackOnce("discoveries_viewed", { network: "mainnet-beta" });
-    consent.recordConsent("all");
-    await vi.waitFor(() => expect(posthog.capture).toHaveBeenCalledTimes(1));
-
-    expect(posthog.capture).toHaveBeenCalledWith("discoveries_viewed", { network: "mainnet-beta" });
-  });
-
-  it("never sends account, transaction, amount, referral-code, or name properties", async () => {
-    const consent = await loadConsent();
-    const { startAnalytics, track } = await loadAnalytics();
+  it("sends only allowlisted properties", async () => {
+    const { consent, startAnalytics, track } = await load();
     consent.recordConsent("all");
     await startAnalytics(CONFIG);
-
-    track("privacy_boundary", {
-      network: "mainnet-beta",
-      wallet: "wallet-id",
-      mint: "mint-id",
-      signature: "signature",
-      amount: 12,
-      referralCode: "private-code",
-      name: "PII",
+    track("swap_submitted", {
+      side: "buy",
+      mint: MINT,
+      amount_sol: 0.5,
+      ...({ signature: "5igSig", privateKey: "secret", email: "a@b.c", transaction: "AQID" } as object),
     });
 
-    expect(posthog.capture).toHaveBeenCalledWith("privacy_boundary", { network: "mainnet-beta" });
+    expect(posthog.capture).toHaveBeenCalledWith("swap_submitted", { side: "buy", mint: MINT, amount_sol: 0.5 });
   });
 
-  it("does not retain sensitive properties while a one-shot waits for consent", async () => {
-    const consent = await loadConsent();
-    const { startAnalytics, trackOnce } = await loadAnalytics();
-    await startAnalytics(CONFIG);
-
-    trackOnce("privacy_boundary", { network: "mainnet-beta", wallet: "wallet-id", signature: "secret" });
-    consent.recordConsent("all");
-    await vi.waitFor(() => expect(posthog.capture).toHaveBeenCalledTimes(1));
-
-    expect(posthog.capture).toHaveBeenCalledWith("privacy_boundary", { network: "mainnet-beta" });
-  });
-
-  it("suppresses the legacy pre-confirmation launch event", async () => {
-    const consent = await loadConsent();
-    const { startAnalytics, track } = await loadAnalytics();
-    consent.recordConsent("all");
-    await startAnalytics(CONFIG);
-
-    track("launch_submitted", { network: "mainnet-beta" });
-    track("launch_succeeded", { network: "mainnet-beta" });
-    await Promise.resolve();
-
-    expect(posthog.capture).toHaveBeenCalledTimes(1);
-    expect(posthog.capture).toHaveBeenCalledWith("launch_succeeded", { network: "mainnet-beta" });
-  });
-
-  it("counts a recovered launch once in both funnel steps", async () => {
-    const consent = await loadConsent();
-    const { startAnalytics, track } = await loadAnalytics();
-    consent.recordConsent("all");
-    await startAnalytics(CONFIG);
-
-    track("launch_succeeded", { chain_mode: "meteora", network: "mainnet-beta" });
-    track("launch_recovered", { network: "mainnet-beta" });
-    await Promise.resolve();
-
-    expect(posthog.capture).toHaveBeenCalledTimes(2);
-    expect(posthog.capture).toHaveBeenCalledWith("launch_succeeded", { chain_mode: "meteora", network: "mainnet-beta" });
-    expect(posthog.capture).toHaveBeenCalledWith("launch_recovered", { network: "mainnet-beta" });
+  it("turns failures into short reasons without addresses or signatures", async () => {
+    const { failureReason } = await load();
+    expect(failureReason(new Error("User rejected the request."))).toBe("user_rejected");
+    const reason = failureReason(new Error("Program failed for account " + WALLET + " with custom error 6042"));
+    expect(reason).not.toContain(WALLET);
+    expect(reason.length).toBeLessThanOrEqual(80);
   });
 });

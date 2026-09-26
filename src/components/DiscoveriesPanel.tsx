@@ -86,7 +86,7 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
         <EmptyState
           icon={<IconDiscoveries size={26} />}
           title="Hidden finds are waiting underground."
-          action={<button className="btn btn-primary" onClick={requestWalletMenu}>Connect wallet</button>}
+          action={<button className="btn btn-primary" onClick={() => requestWalletMenu("discoveries")}>Connect wallet</button>}
         >
           An eligible crew has one random discovery opportunity per window. Sign in to review the
           memecoins it has mined. Rewards from a coin that has not graduated stay pending; mining

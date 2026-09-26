@@ -76,6 +76,7 @@ import { officialMintFromEnv } from "../shared/officialMint";
 import { handleMeteoraGameRoute, meteoraBootstrap, meteoraConfig, meteoraMineInfo, meteoraPlayerProfile, meteoraPortfolio, meteoraTokenBySlug, runMeteoraScheduled } from "./modes/meteora";
 import { registerMeteoraPool } from "./meteora/registration";
 import { meteoraCandles } from "./candles";
+import { isPosthogProxyPath, proxyPosthog } from "./posthogProxy";
 
 // The TokenMarket Durable Object is exported from the entry module so the MARKETS binding in
 // wrangler.jsonc resolves; it is defined in ./market.
@@ -85,6 +86,8 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
   const url = new URL(request.url);
   const { pathname } = url;
   try {
+    // First-party PostHog proxy (/ph/* -> EU cloud). Mode-independent and never touches the index.
+    if (isPosthogProxyPath(pathname)) return await proxyPosthog(request, ctx);
     // Temporary Meteora mode owns the off-chain game routes and the alternate indexed data. Keep
     // this block separate from the native router so native behaviour remains unchanged.
     if (String(env.CHAIN_MODE || "meteora") !== "native") {

@@ -37,7 +37,6 @@ import {
   type DiggoWallet,
   type SponsorAdminState,
 } from "../solanaProgram";
-import { track } from "../analytics";
 import { usePendingTransaction } from "../onchain";
 
 const LAMPORTS_PER_SOL = 1_000_000_000n;
@@ -140,7 +139,6 @@ export function SponsorEventsPanel({
         await refresh();
         onChanged?.();
       }
-      track("sponsor_action", { action: label, mode, network: "solana-mainnet" });
     } catch (failure) {
       if (!pendingTransaction.record(failure, done.replace(/\.$/, "") || "Sponsor action")) {
         setError(failure instanceof Error ? failure.message : "That sponsor action failed.");

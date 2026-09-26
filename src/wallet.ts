@@ -87,6 +87,7 @@ export function useDiggoWallet(): ConnectedDiggoWallet | null {
 /** Event the header's wallet control listens for, so any "Connect wallet" CTA can open it. */
 export const OPEN_WALLET_EVENT = "diggo:open-wallet";
 
-export function requestWalletMenu(): void {
-  window.dispatchEvent(new CustomEvent(OPEN_WALLET_EVENT));
+/** Opens the header's wallet menu. `location` names the CTA for analytics (wallet_connect_clicked). */
+export function requestWalletMenu(location: string): void {
+  window.dispatchEvent(new CustomEvent<{ location: string }>(OPEN_WALLET_EVENT, { detail: { location } }));
 }

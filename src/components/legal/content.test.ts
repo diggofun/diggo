@@ -85,6 +85,6 @@ describe("terms of service compliance clauses", () => {
 
   it("dates the Terms separately from the documents that were not revised", () => {
     expect(terms.updated).toBe(TERMS_UPDATED);
-    expect(LEGAL_DOCUMENTS.privacy.updated).toBe("22 September 2026");
+    expect(LEGAL_DOCUMENTS.privacy.updated).toBe("26 September 2026");
   });
 });

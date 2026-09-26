@@ -307,7 +307,7 @@ export async function verifyWallet(
   nonce: string,
   signature: string,
   referralCode?: string | null,
-): Promise<{ wallet: string; expiresIn: number }> {
+): Promise<{ wallet: string; expiresIn: number; referralCaptured?: boolean }> {
   const query = referralCode ? "?ref=" + encodeURIComponent(referralCode) : "";
   return postJson("/api/auth/verify" + query, { wallet, nonce, signature });
 }

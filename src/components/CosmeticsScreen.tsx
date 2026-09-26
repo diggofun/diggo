@@ -11,6 +11,7 @@
  * where it will be seen while digging.
  */
 import { useCallback, useEffect, useState } from "react";
+import { track } from "../analytics";
 import type { CosmeticsView } from "../../shared/types";
 import { equipCosmetic, getCosmetics, unequipCosmetic } from "../api";
 import { setEquippedCosmetics } from "../cosmetics";
@@ -59,6 +60,7 @@ export function CosmeticsScreen({ signedIn, previewTier = 3 }: CosmeticsScreenPr
     try {
       const result = await equipCosmetic(cosmeticId);
       setEquippedCosmetics(result.equipped);
+      track("cosmetic_equipped", { item: cosmeticId });
       setView((current) =>
         current
           ? {

@@ -6,6 +6,7 @@
  * the only estimate in the product is the server's, shown in the mine info panel with its label.
  */
 import { useMemo, useState } from "react";
+import { track } from "../analytics";
 import {
   IconArrowDownRight,
   IconArrowUpRight,
@@ -145,7 +146,7 @@ export function HomeHero({
           )}
           {error && <p className="form-message console-error" role="alert">{error}</p>}
           {!connected ? (
-            <button className="mine-button" type="button" onClick={requestWalletMenu}>
+            <button className="mine-button" type="button" onClick={() => requestWalletMenu("home_hero")}>
               <IconMine size={20} /> Connect wallet to mine
             </button>
           ) : isMiningActive ? (
@@ -476,7 +477,7 @@ export function SiteFooter() {
         <nav className="site-footer-product" aria-label="Product">
           <a href="/mines">Mines</a><a href="/leaderboards">Leaderboards</a><a href="/create">Launch</a>
         </nav>
-        <a className="site-footer-x" href="https://x.com/Diggo_Fun" target="_blank" rel="noopener noreferrer" aria-label="Diggo on X">
+        <a className="site-footer-x" href="https://x.com/Diggo_Fun" target="_blank" rel="noopener noreferrer" aria-label="Diggo on X" onClick={() => track("x_link_clicked", { location: "footer" })}>
           <img className="x-logo" src="/assets/icons/x.png" srcSet="/assets/icons/x.png 1x, /assets/icons/x@2x.png 2x" width={18} height={18} alt="" />
           <span>@Diggo_Fun</span>
         </a>

@@ -19,7 +19,7 @@ import { createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from 
 import { CandleChart } from "./CandleChart";
 import type { MarketTrade, TokenSummary } from "../../shared/types";
 import { recordTrade } from "../api";
-import { track } from "../analytics";
+import { failureReason, track } from "../analytics";
 import { compact, solAmount } from "../format";
 import { requestWalletMenu } from "../wallet";
 import {
@@ -69,12 +69,14 @@ function MeteoraSwapPanel({
   token,
   cluster,
   configPubkey,
+  isOfficialDiggo,
   signer,
   onTraded,
 }: {
   token: TokenSummary;
   cluster: string;
   configPubkey: string;
+  isOfficialDiggo: boolean;
   signer: DiggoWallet | null;
   onTraded(): void;
 }) {
@@ -114,6 +116,7 @@ function MeteoraSwapPanel({
     }).catch(() => { if (!cancelled) setQuote(null); });
     return () => { cancelled = true; };
   }, [amount, poolAddress, rawAmount, side]);
+  useQuoteRequestedEvent(Boolean(poolAddress && rawAmount), side, token.mint, isOfficialDiggo, amount);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -121,15 +124,21 @@ function MeteoraSwapPanel({
     if (!signer) { setError("Connect a wallet that can sign transactions first."); return; }
     if (!poolAddress || !rawAmount) { setError("Enter an amount."); return; }
     setBusy(true);
+    const amountSol = side === "buy" ? Number(amount) : quote ? Number(quote.amountOut) / 1_000_000_000 : undefined;
+    track("swap_submitted", { side, mint: token.mint, amount_sol: amountSol });
     try {
       const result = await executeMeteoraSwap({ wallet: signer, poolAddress, side, amount: rawAmount, slippageBps: 100 });
       setSignature(result.signature);
+      track("swap_confirmed", { side, mint: token.mint, amount_sol: amountSol });
       await recordTrade(token.mint, { signature: result.signature, side, amount: rawAmountToDecimalString(result.amountOut, token.decimals) });
       setAmount("");
       onTraded();
       await refresh();
     } catch (cause) {
-      if (!pendingTransaction.record(cause, "Trade")) setError(cause instanceof Error ? cause.message : "Trade failed");
+      if (!pendingTransaction.record(cause, "Trade")) {
+        setError(cause instanceof Error ? cause.message : "Trade failed");
+        track("swap_failed", { side, mint: token.mint, reason: failureReason(cause) });
+      }
     } finally {
       setBusy(false);
     }
@@ -146,7 +155,7 @@ function MeteoraSwapPanel({
           <div className="swap-quote"><span>YOU RECEIVE (EST., 1% SLIPPAGE FLOOR)</span><strong>{output === null ? "—" : side === "buy" ? `${formatTokenAmount(output, token.decimals)} $${token.symbol}` : `${(Number(output) / 1_000_000_000).toFixed(6)} SOL`}</strong></div>
           {error && <p className="form-message" role="alert">{error}</p>}
           {signature && <a className="tx-success" href={explorerTxUrl(signature, cluster)} target="_blank" rel="noreferrer">View transaction</a>}
-          {signer ? <button className="primary-button swap-submit" disabled={busy || !quote || quote.minimumAmountOut <= 0n || !pendingTransaction.canSubmit()}>{busy ? "Confirming…" : side === "buy" ? "Buy on Meteora" : "Sell on Meteora"}</button> : <button type="button" className="primary-button swap-submit" onClick={requestWalletMenu}>Connect wallet <IconWallet size={16} /></button>}
+          {signer ? <button className="primary-button swap-submit" disabled={busy || !quote || quote.minimumAmountOut <= 0n || !pendingTransaction.canSubmit()}>{busy ? "Confirming…" : side === "buy" ? "Buy on Meteora" : "Sell on Meteora"}</button> : <button type="button" className="primary-button swap-submit" onClick={() => requestWalletMenu("swap")}>Connect wallet <IconWallet size={16} /></button>}
           <p className="swap-note">Mining rewards unlock at graduation. Dynamic fees and the Meteora anti-sniper schedule are active.</p>
         </form></div></section>
   );
@@ -158,6 +167,7 @@ export function SwapPanel({
   cluster = "mainnet-beta",
   chainMode = "native",
   meteoraConfigPubkey = "",
+  isOfficialDiggo = false,
   signer,
   onTraded,
 }: {
@@ -166,19 +176,36 @@ export function SwapPanel({
   cluster?: string;
   chainMode?: ChainMode;
   meteoraConfigPubkey?: string;
+  /** True on the official $DIGGO coin, for the swap_quote_requested analytics property. */
+  isOfficialDiggo?: boolean;
   signer: DiggoWallet | null;
   onTraded(): void;
 }) {
   if (chainMode === "meteora") {
-    return <MeteoraSwapPanel token={token} cluster={cluster} configPubkey={meteoraConfigPubkey} signer={signer} onTraded={onTraded} />;
+    return <MeteoraSwapPanel token={token} cluster={cluster} configPubkey={meteoraConfigPubkey} isOfficialDiggo={isOfficialDiggo} signer={signer} onTraded={onTraded} />;
   }
-  return <NativeSwapPanel token={token} programAddress={programAddress} cluster={cluster} signer={signer} onTraded={onTraded} />;
+  return <NativeSwapPanel token={token} programAddress={programAddress} cluster={cluster} isOfficialDiggo={isOfficialDiggo} signer={signer} onTraded={onTraded} />;
 }
 
-function NativeSwapPanel({ token, programAddress, cluster, signer, onTraded }: {
+/**
+ * One swap_quote_requested per settled input rather than per keystroke: the quote itself refreshes
+ * on every change, the analytics event waits until the amount has stopped moving.
+ */
+function useQuoteRequestedEvent(active: boolean, side: "buy" | "sell", mint: string, isOfficialDiggo: boolean, amountKey: string): void {
+  useEffect(() => {
+    if (!active) return;
+    const timer = window.setTimeout(() => {
+      track("swap_quote_requested", { side, mint, is_official_diggo: isOfficialDiggo });
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [active, side, mint, isOfficialDiggo, amountKey]);
+}
+
+function NativeSwapPanel({ token, programAddress, cluster, isOfficialDiggo, signer, onTraded }: {
   token: TokenSummary;
   programAddress: string;
   cluster: string;
+  isOfficialDiggo: boolean;
   signer: DiggoWallet | null;
   onTraded(): void;
 }) {
@@ -318,6 +345,7 @@ function NativeSwapPanel({ token, programAddress, cluster, signer, onTraded }: {
    * priced again — and refused — in submitTrade; the button says so before it is clicked.
    */
   const quoteReady = quote !== null && quote.minOutRaw > 0n;
+  useQuoteRequestedEvent(Number.isFinite(parsedAmount) && parsedAmount > 0, side, token.mint, isOfficialDiggo, amount);
 
   const slippageLabel = `${(slippageBps / 100).toFixed(0)}%`;
   const feeSol = quote ? Number(quote.feeRaw) / 1_000_000_000 : 0;
@@ -337,6 +365,8 @@ function NativeSwapPanel({ token, programAddress, cluster, signer, onTraded }: {
       return;
     }
     setBusy(true);
+    const amountSol = side === "buy" ? parsedAmount : quoteOut !== null ? Number(quoteOut) / 1_000_000_000 : undefined;
+    track("swap_submitted", { side, mint: token.mint, amount_sol: amountSol });
     try {
       // The displayed quote may be stale and the venue read behind it may have failed outright, so
       // the trade is priced again from a fresh account read here, immediately before signing. A
@@ -357,12 +387,13 @@ function NativeSwapPanel({ token, programAddress, cluster, signer, onTraded }: {
         amount: execution.recordedAmount,
       });
       setLastSignature(execution.signature);
-      track(side === "buy" ? "swap_buy" : "swap_sell", { network: cluster });
+      track("swap_confirmed", { side, mint: token.mint, amount_sol: amountSol });
       setAmount("");
       onTraded();
     } catch (tradeError) {
       if (!pendingTransaction.record(tradeError, "Trade")) {
         setError(tradeError instanceof Error ? tradeError.message : "Trade failed");
+        track("swap_failed", { side, mint: token.mint, reason: failureReason(tradeError) });
       } else setError("");
     } finally {
       setBusy(false);
@@ -449,7 +480,7 @@ function NativeSwapPanel({ token, programAddress, cluster, signer, onTraded }: {
               {busy ? "Confirming…" : side === "buy" ? "Buy on-chain" : "Sell on-chain"}
             </button>
           ) : (
-            <button type="button" className="primary-button swap-submit" onClick={requestWalletMenu}>
+            <button type="button" className="primary-button swap-submit" onClick={() => requestWalletMenu("swap")}>
               Connect wallet <IconWallet size={16} />
             </button>
           )}

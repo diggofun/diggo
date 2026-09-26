@@ -22,7 +22,7 @@ import {
   verifyWallet,
   type DiggoConfig,
 } from "../api";
-import { track } from "../analytics";
+import { failureReason, track } from "../analytics";
 import { clearRememberedReferral, readRememberedReferral } from "../referralLink";
 import {
   LAUNCH_DISCOVERY_RESERVE_BPS,
@@ -86,6 +86,11 @@ export function LaunchModal({
   const dialogRef = useDialog<HTMLElement>(onClose);
   const onTurnstileToken = useCallback((token: string) => setTurnstileToken(token), []);
 
+  // The builder opening is the start of the launch flow, whichever CTA opened it.
+  useEffect(() => {
+    track("launch_started");
+  }, []);
+
   useEffect(() => {
     if (config.chainMode === "meteora" || !config.programId) return;
     let cancelled = false;
@@ -133,7 +138,8 @@ export function LaunchModal({
     const verified = await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature), referralCode);
     clearRememberedReferral();
     onAuthenticated(verified.wallet);
-    track("wallet_signed_in", { network: config.cluster });
+    track("wallet_signed_in");
+    if (referralCode && verified.referralCaptured) track("referral_signup", { ref_code: referralCode });
   }
 
   async function submit(event: FormEvent) {
@@ -148,10 +154,12 @@ export function LaunchModal({
     }
     if (!pendingTransaction.canSubmit()) return;
     setState("working");
+    track("launch_form_submitted");
     try {
       if (session !== connected.address) await authenticate();
       setMessage(file ? "Uploading artwork…" : "Preparing your launch…");
       const imageUrl = file ? await uploadTokenImage(file) : undefined;
+      if (imageUrl) track("launch_image_uploaded");
 
       if (config.chainMode === "meteora") {
         setMessage("Preparing the Meteora bonding-curve launch…");
@@ -163,7 +171,7 @@ export function LaunchModal({
           configPubkey: config.meteoraConfigPubkey,
           initialBuySol: Math.max(0, Number(initialBuy) || 0),
         });
-        track("launch_submitted", { has_artwork: Boolean(file), sponsored: false, network: config.cluster });
+        track("launch_confirmed", { mint: launch.mint });
         const registration = await registerMeteoraPool(launch.pool);
         setMessage("Registering your launch…");
         const bootstrap = await getBootstrap();
@@ -218,11 +226,7 @@ export function LaunchModal({
           initialBuySol: Math.max(0, Number(initialBuy) || 0),
         },
       });
-      track("launch_submitted", {
-        has_artwork: Boolean(file),
-        sponsored: launch.sponsored,
-        network: config.cluster,
-      });
+      track("launch_confirmed", { mint: launch.mint });
 
       setMessage("Registering your launch…");
       const token = await registerLaunchedToken(launch.mint, { description, imageUrl });
@@ -236,6 +240,7 @@ export function LaunchModal({
       } else {
         setMessage(error instanceof Error ? error.message : "Launch failed");
         setState("idle");
+        track("launch_failed", { reason: failureReason(error) });
       }
     }
   }
@@ -253,7 +258,6 @@ export function LaunchModal({
       const token = await registerLaunchedToken(recoveryMint.trim(), {});
       onLaunched(token);
       setRecoveryMessage(`${token.symbol} is now indexed and live in Diggo.`);
-      track("launch_recovered", { network: config.cluster });
     } catch (error) {
       setRecoveryMessage(error instanceof Error ? error.message : "Could not recover this launch");
     } finally {

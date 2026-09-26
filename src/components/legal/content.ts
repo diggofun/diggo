@@ -33,7 +33,7 @@ export const LEGAL_CONTACT = "[legal@example.com - replace with a monitored addr
 export const PRIVACY_CONTACT = "[privacy@example.com - replace with a monitored address]";
 export const GOVERNING_LAW_PLACEHOLDER = "[GOVERNING LAW AND COURTS - to be confirmed]";
 
-export const UPDATED = "22 September 2026";
+export const UPDATED = "26 September 2026";
 /** The Terms were revised on their own date; the other documents were not revised with them. */
 export const TERMS_UPDATED = "23 September 2026";
 /** The operator fills this in with the jurisdictions its counsel has cleared or excluded. */
@@ -258,7 +258,7 @@ const PRIVACY: LegalDocument = {
       heading: "4. Analytics",
       paragraphs: [
         "Analytics is off by default and only starts after you choose 'Allow analytics' in the consent banner. Until then, nothing is loaded from our analytics provider and nothing is sent to it.",
-        "When it is on, we use PostHog: page views and the product events we explicitly record (for example launching a mine or opening a screen), with autocapture, session recording and surveys all switched off. You can withdraw consent at any time from the Cookie & Storage Notice or the banner, and analytics stops on the next page load.",
+        "When it is on, we use PostHog (EU cloud, reached through diggo.fun itself): page views, the product events we explicitly record (for example launching a mine, a swap or a reward claim) and session replays of how pages are used, with every form input masked. Once you sign in with a wallet, these are linked to that wallet's public address. We never send private keys, signatures, transaction contents or email addresses. Autocapture and surveys are off. You can withdraw consent at any time from the Cookie & Storage Notice or the banner, and analytics and replay stop straight away.",
       ],
     },
     {
@@ -439,7 +439,7 @@ const COOKIES: LegalDocument = {
       heading: "3. Optional: only with your permission",
       paragraphs: ["Each of these is off until you turn it on, and each can be turned off again."],
       bullets: [
-        "Analytics (PostHog) - starts only after 'Allow analytics'. It records page views and the product events the site explicitly sends, with autocapture, session recording and surveys disabled. Withdraw it at any time; analytics stops on the next page load.",
+        "Analytics (PostHog) - starts only after 'Allow analytics'. It keeps its own identifier in localStorage and a first-party cookie, and records page views, the product events the site explicitly sends and session replays with all form inputs masked; after wallet sign-in it is linked to the wallet's public address. Autocapture and surveys are disabled. Withdraw it at any time; analytics and replay stop straight away.",
         "Push alerts (service worker and subscription) - if you switch alerts on, your browser registers the push-only service worker at /sw.js and creates a subscription with your browser vendor's push service. Switching alerts off removes the registration and the server-side record.",
         "Telegram alerts - if you link a chat with a one-time code. Send /stop to the bot, or turn it off in the app, to unlink.",
       ],
