@@ -17,6 +17,7 @@ export const LAUNCH = {
   symbol: "DIGGO",
   website: "https://diggo.fun",
   twitter: "https://x.com/Diggo_Fun",
+  telegram: "https://t.me/DiggoDotFun",
   metadataKey: "official-diggo-fun-metadata-v1.json",
   imageKey: "official-diggo-fun-logo-v2.png",
   metadataUrl: "https://diggo.fun/media/official-diggo-fun-metadata-v1.json",
@@ -43,6 +44,7 @@ export const OFFICIAL_METADATA = {
   extensions: {
     website: LAUNCH.website,
     twitter: LAUNCH.twitter,
+    telegram: LAUNCH.telegram,
   },
   properties: {
     files: [{ uri: LAUNCH.imageUrl, type: "image/png" }],

@@ -43,7 +43,11 @@ describe("official coin launch guards", () => {
     const json = officialMetadataJson();
     expect(JSON.parse(json)).toEqual(OFFICIAL_METADATA);
     expect(json).toBe(officialMetadataJson());
-    expect(OFFICIAL_METADATA.extensions).toEqual({ website: "https://diggo.fun", twitter: "https://x.com/Diggo_Fun" });
+    expect(OFFICIAL_METADATA.extensions).toEqual({
+      website: "https://diggo.fun",
+      twitter: "https://x.com/Diggo_Fun",
+      telegram: "https://t.me/DiggoDotFun",
+    });
   });
 });
 

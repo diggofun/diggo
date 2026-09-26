@@ -210,6 +210,10 @@ async function main(): Promise<void> {
   const standIn = await buildLaunchTransaction(connection, simulationPayer, computeUnitLimit, options.priorityMicroLamports);
   const measured = await simulate(connection, standIn);
   const real = await buildLaunchTransaction(connection, LAUNCH_PAYER, computeUnitLimit, options.priorityMicroLamports);
+  if (payerKeypair && mintKeypair) {
+    await simulate(connection, real, [payerKeypair, mintKeypair]);
+    console.log("Real-payer simulation: SUCCESS (signature verification enabled)");
+  }
   const fee = await networkFee(connection, real);
   const cost = measureLaunchCost(measured.changes, simulationPayer.toBase58(), fee);
   const budget = planLaunchBudget(cost, rentExemptMinimum, payerBalance);

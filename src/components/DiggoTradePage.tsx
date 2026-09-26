@@ -178,6 +178,10 @@ function DiggoHeader({
           {name || OFFICIAL_COIN_NAME} <span>${symbol || OFFICIAL_COIN_SYMBOL}</span>
         </h1>
         {mint && <code className="diggo-mint">{shortAddress(mint)}</code>}
+        <nav className="diggo-social-links" aria-label="Official Diggo links">
+          <a href="https://x.com/Diggo_Fun" target="_blank" rel="noopener noreferrer">X</a>
+          <a href="https://t.me/DiggoDotFun" target="_blank" rel="noopener noreferrer">Telegram</a>
+        </nav>
       </div>
     </div>
   );
