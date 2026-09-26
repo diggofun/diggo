@@ -81,6 +81,37 @@ describe("D1 game store", () => {
     expect(await store.getMine(MINT)).toMatchObject({ released: 100n, committed: 96n, remaining: MINING_RESERVE - 96n });
   });
 
+  it("keeps settling after the first commitment", async () => {
+    // Regression: the ledger guard compared the stored remainder with the full reserve, so every
+    // settlement after a mine's first one was rejected and pending balances stopped growing.
+    const store = harness();
+    let mine = await store.ensureMine(MINT, 0, 10, 1);
+    let claimable = 0n;
+    for (let step = 1n; step <= 3n; step += 1n) {
+      const committed = mine.committed + 50n;
+      expect(await store.settleMining(
+        { ...mine, released: step * 100n, committed, remaining: MINING_RESERVE - committed },
+        { wallet: WALLET, mint: MINT, claimable: claimable + 50n, lastSettledAt: Number(step) },
+        mine.version,
+        claimable,
+        Number(step),
+      )).toBe(true);
+      claimable += 50n;
+      mine = (await store.getMine(MINT))!;
+    }
+    expect(mine).toMatchObject({ committed: 150n, remaining: MINING_RESERVE - 150n, version: 3 });
+    expect(await store.getBalance(WALLET, MINT)).toMatchObject({ claimable: 150n, lastSettledAt: 3 });
+    // A stale version is still rejected.
+    expect(await store.settleMining(
+      { ...mine, released: 400n, committed: 200n, remaining: MINING_RESERVE - 200n },
+      { wallet: WALLET, mint: MINT, claimable: 200n, lastSettledAt: 4 },
+      mine.version - 1,
+      150n,
+      4,
+    )).toBe(false);
+    expect(await store.saveMine({ ...mine, released: 400n, committed: 150n, remaining: MINING_RESERVE - 150n }, mine.version)).toBe(true);
+  });
+
   it("counts only active, already-activated players with positive power", async () => {
     const store = harness();
     const now = 200;
