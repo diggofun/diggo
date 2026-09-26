@@ -20,7 +20,9 @@ export const VIRTUAL_POOL_DISCRIMINATOR = Uint8Array.of(213, 224, 5, 209, 98, 69
 export const TRANSFER_HOOK_POOL_DISCRIMINATOR = Uint8Array.of(237, 219, 184, 23, 42, 189, 169, 35);
 // PoolConfig is a fixed-layout bytemuck account. These offsets include the
 // Anchor discriminator and the complete fee/vesting/padding prefix.
-export const POOL_CONFIG_TOKEN_DECIMAL_OFFSET = 236;
+// token_decimal sits at 235; 236 is the config version (checked against the SDK decoder in
+// pool-config-layout.test.ts).
+export const POOL_CONFIG_TOKEN_DECIMAL_OFFSET = 235;
 export const POOL_CONFIG_MIGRATION_THRESHOLD_OFFSET = 264;
 
 export interface MeteoraRpcAccount {
