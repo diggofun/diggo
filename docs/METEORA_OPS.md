@@ -145,9 +145,34 @@ its pool graduates and its 200M leftover reaches the mining vault.
 (`public/brand/official-diggo-fun-logo-v2.png`, sha256
 `d5ac4b0620c96aa18aada472fce491a581edc6daed2d0670fff1f58c28f6f016`). It is a dry run unless given
 `--send`. The dry run simulates the exact transaction with a funded public account as the fee payer
-while the real payer is empty, and prints the measured cost and the SOL to send. Measured on
-2026-09-26: 0.032403413 SOL (0.0100 pool creation fee, 0.0100 Metaplex protocol fee, account rents,
-0.000013293 network fee), so the payer needs **0.035 SOL**.
+while the real payer is empty, and prints the measured cost and the SOL to send. Verified on
+2026-09-26 with the provided mint keypair (signature verification disabled for the funded stand-in):
+128,870 compute units, 4 instructions, 1,017-byte transaction. Cost is 0.032403413 SOL: 0.010 SOL
+pool creation fee, 0.010 SOL Metaplex protocol fee, 0.012390120 SOL rent across the mint, token
+vaults and metadata accounts, and 0.000013293 SOL network fee. Keep 0.001650240 SOL for the payer's
+rent-exempt minimum plus margin, rounded up to a 0.001 SOL boundary. The single funding amount is
+**0.035 SOL**; after the simulated launch the payer retains 0.002596587 SOL.
+
+This checkout's `wrangler.jsonc` now selects the new mint for official-coin display; the config has
+not been deployed. That setting does not rewrite mining accounting. Mining claims and balances
+retain their mint, so the approximately
+45,500 DIGGO already committed to six wallets remains owed in legacy mint
+`12cens35GKeZH8is6R1gdbJ1faktyLrXgHvHyBB6veb7`. Its pool
+`4g7i7aWVvwnSn6K6VKyvzG5UFf2nFCXgYJ7uJUymhhMB` has not migrated; the 200M-token leftover is still
+reserved for vault `H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT` after migration. Do not relabel,
+merge, or pay those old-mint claims from the new mint's supply. The owner still needs to choose how
+future mining works:
+
+1. Keep legacy mining on the old mint until its pool migrates and its vault inventory is available;
+   launch the new coin for trading and official display only.
+2. Pause new legacy accrual and direct future mining to the new mint, while preserving the old
+   45,500-token liability and arranging its eventual payout from the old pool/vault.
+3. Run both mines independently, with explicit per-mint accounting and funding. This supports both
+   communities but requires separate vault inventory and payout readiness for each mint.
+
+The new coin's 200M reserve will only be available to its own mining vault after its own pool
+migrates and the leftover withdrawal is completed. Changing `DIGGO_OFFICIAL_MINT` alone does not
+choose among these reward policies or fund either vault.
 
 Post-approval order (each step only after the previous one succeeded):
 
