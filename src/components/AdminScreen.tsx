@@ -139,10 +139,16 @@ export function adminJobHealth(
 }
 
 function AdminDashboardView({ data }: { data: AdminDashboardPayload }) {
+  const fees = data.fees;
+  const feesLive = fees.status === "live";
   const feeRows = [
-    { label: "Partner trading fees", fee: data.fees.partnerTrading },
-    { label: "Partner creation fees", fee: data.fees.creation },
+    { label: "Partner trading fees", fee: fees.partnerTrading },
+    { label: "Partner creation fees", fee: fees.creation },
   ];
+  const feeReadAt = metricStamp(fees.readAt);
+  const feeNote = feesLive
+    ? `on-chain · ${metricSol(fees.partnerTrading.lifetimeSol)} lifetime trading`
+    : "on-chain read unavailable";
   const jobRows = [
     { label: "Indexer", job: data.jobs.indexer },
     { label: "Vault sweep", job: data.jobs.vaultSweep },
@@ -160,10 +166,10 @@ function AdminDashboardView({ data }: { data: AdminDashboardPayload }) {
       <div className="admin-kpi-grid">
         <DashboardKpi label="Coins launched" value={metricNumber(data.launches.total)} note={`${metricNumber(data.launches.last24h)} in 24h · ${metricNumber(data.launches.last7d)} in 7d`} />
         <DashboardKpi label="Graduated coins" value={metricNumber(data.graduated.total)} note={`${metricNumber(data.graduated.last24h)} in 24h · ${metricNumber(data.graduated.last7d)} in 7d`} />
-        <DashboardKpi label="Trading volume · 24h" value={metricSol(data.tradingVolume.last24h.sol)} note={data.tradingVolume.last24h.estimated ? "estimated from indexed fills" : undefined} />
-        <DashboardKpi label="Trading volume · 7d" value={metricSol(data.tradingVolume.last7d.sol)} note={data.tradingVolume.last7d.estimated ? "estimated from indexed fills" : undefined} />
-        <DashboardKpi label="Trading volume · all" value={metricSol(data.tradingVolume.all.sol)} note={data.tradingVolume.all.estimated ? "estimated from indexed fills" : undefined} />
-        <DashboardKpi label="Fees" value={metricSol(data.fees.partnerTrading.accruedSol)} note="partner trading share" />
+        <DashboardKpi label="Indexed volume · 24h" value={metricSol(data.tradingVolume.last24h.sol)} note="from indexed fills" />
+        <DashboardKpi label="Indexed volume · 7d" value={metricSol(data.tradingVolume.last7d.sol)} note="from indexed fills" />
+        <DashboardKpi label="Indexed volume · all" value={metricSol(data.tradingVolume.all.sol)} note="from indexed fills" />
+        <DashboardKpi label="Fees claimable now" value={metricSol(fees.claimableSol)} note={feeNote} />
         <DashboardKpi label="Vault" value={metricSol(data.vault.solBalance)} note={data.vault.address ? "SOL balance" : "address unavailable"} />
         <DashboardKpi label="Claims" value={metricNumber(data.claims.pending)} note={`${metricNumber(data.claims.paid)} paid`} />
         <DashboardKpi label="Players" value={metricNumber(data.players.total)} note={`${metricNumber(data.players.last24h)} new in 24h · ${metricNumber(data.crews.active24h)} active crews`} />
@@ -173,16 +179,29 @@ function AdminDashboardView({ data }: { data: AdminDashboardPayload }) {
       <div className="admin-dashboard-grid">
         <DashboardSection title="Partner fees">
           <div className="admin-compact-table">
-            <div className="admin-compact-row admin-compact-head"><span>Fee</span><span>Accrued</span><span>Claimable</span></div>
+            <div className="admin-compact-row admin-compact-head"><span>Fee</span><span>Claimable now</span><span>Lifetime</span></div>
             {feeRows.map(({ label, fee }) => (
               <div className="admin-compact-row" key={label}>
-                <span>{label}{fee.estimated && <em className="admin-estimate">estimated</em>}</span>
-                <span>{metricSol(fee.accruedSol)}</span>
+                <span>{label}</span>
                 <span>{metricSol(fee.claimableSol)}</span>
+                <span>{metricSol(fee.lifetimeSol)}{fee.claimedSol !== null && <small>{fee.claimedSol} SOL claimed</small>}</span>
               </div>
             ))}
+            <div className="admin-compact-row">
+              <span>Total claimable now</span>
+              <strong>{metricSol(fees.claimableSol)}</strong>
+              <span />
+            </div>
+            <div className="admin-compact-row">
+              <span>Meteora protocol share<small>kept by Meteora, not claimable by the platform</small></span>
+              <span>{metricSol(fees.protocol.tradingUnclaimedSol)}<small>unclaimed by Meteora</small></span>
+              <span>{metricSol(fees.protocol.tradingLifetimeSol)}<small>+ {fees.protocol.creationLifetimeSol ?? "-"} SOL creation</small></span>
+            </div>
           </div>
           <div className="admin-address-links">
+            <span>{feesLive
+              ? `Read on-chain from ${metricNumber(fees.pools)} pools${feeReadAt ? " at " + feeReadAt : ""}.`
+              : "On-chain fee read unavailable. No estimate is shown."}</span>
             <span>Fee claimer: <SolscanLink href={data.links.feeClaimer}>{data.addresses.feeClaimer ?? "-"}</SolscanLink></span>
             <span>Treasury: <SolscanLink href={data.links.treasury}>{data.addresses.treasury ?? "Unavailable"}</SolscanLink></span>
           </div>

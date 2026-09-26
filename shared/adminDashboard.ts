@@ -11,10 +11,37 @@ export interface AdminDashboardVolume {
   estimated: boolean;
 }
 
+/** One partner fee stream, read from the Meteora DBC accounts. Null means the read failed. */
 export interface AdminDashboardFee {
-  accruedSol: string | null;
+  /** Unclaimed and collectable by the config fee claimer right now. */
   claimableSol: string | null;
-  estimated: boolean;
+  /** Everything the partner has earned since the pools were created, claimed or not. */
+  lifetimeSol: string | null;
+  /** lifetimeSol minus claimableSol. */
+  claimedSol: string | null;
+}
+
+/**
+ * Partner fees across every pool under the published DBC config, read on-chain. When the read
+ * fails every amount is null and status is "unavailable"; the Worker never substitutes an estimate.
+ */
+export interface AdminDashboardFees {
+  status: "live" | "unavailable";
+  /** Partner trading fee plus unclaimed creation fees: what a claim would collect now. */
+  claimableSol: string | null;
+  partnerTrading: AdminDashboardFee;
+  creation: AdminDashboardFee;
+  /** Meteora's own share, shown for reference only; the platform cannot claim it. */
+  protocol: {
+    tradingLifetimeSol: string | null;
+    tradingUnclaimedSol: string | null;
+    creationLifetimeSol: string | null;
+  };
+  pools: number | null;
+  config: string | null;
+  /** Unix seconds of the on-chain read the figures come from. */
+  readAt: number | null;
+  error: string | null;
 }
 
 export interface AdminDashboardVaultBalance {
@@ -60,10 +87,7 @@ export interface AdminDashboardPayload {
     last7d: AdminDashboardVolume;
     all: AdminDashboardVolume;
   };
-  fees: {
-    partnerTrading: AdminDashboardFee;
-    creation: AdminDashboardFee;
-  };
+  fees: AdminDashboardFees;
   vault: AdminDashboardVault;
   claims: AdminDashboardClaimCounts;
   players: AdminDashboardCount;
