@@ -185,6 +185,14 @@ export class D1GameStore implements GameStore {
     return Number.isSafeInteger(total) && total > 0 ? total : 0;
   }
 
+  async listWalletsToSettle(now: number, limit: number): Promise<string[]> {
+    const result = await this.db.prepare(
+      "SELECT wallet FROM game_players WHERE activated_at > 0 AND activated_at <= ?1 AND active_until <= 99999999999" +
+        " AND last_ore_at < active_until ORDER BY last_ore_at ASC, wallet ASC LIMIT ?2",
+    ).bind(now, Math.max(0, Math.floor(limit))).all<{ wallet: string }>();
+    return (result.results ?? []).map((row) => String(row.wallet));
+  }
+
   async saveBalance(balance: GameBalance, expectedClaimable: bigint): Promise<boolean> {
     const result = await this.db.prepare(
       "INSERT INTO game_balances (wallet, mint, claimable, last_settled_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)" +

@@ -2,6 +2,14 @@ import { applyActivation, type ActivationRecord } from "../../shared/streak";
 import { crewPower } from "../../shared/crew";
 import { discoveryDayIndex } from "../../shared/discovery";
 import { bytesToHex, sha256 } from "../../shared/epochSeed";
+import {
+  onchainOreCapacity,
+  onchainOreEfficiencyBps,
+  onchainOreForActiveSeconds,
+  onchainOreFromActivation,
+  onchainOreMaturityBps,
+  onchainStoreOre,
+} from "../../shared/ore";
 import type { GameCoin, GamePlayerState } from "./contracts";
 import { MINING_RESERVE as RESERVE } from "./contracts";
 
@@ -125,6 +133,85 @@ export function applyGameActivation(player: GamePlayerState, now: number) {
 
 export function playerCrewPower(player: GamePlayerState): number {
   return crewPower(player.crew);
+}
+
+/**
+ * Every game timestamp is Unix seconds. Anything larger than this is a millisecond value that
+ * leaked in from `Date.now()` and must never be compared with a seconds clock.
+ */
+export const MAX_UNIX_SECONDS = 99_999_999_999;
+
+/** The game clock: whole Unix seconds. */
+export function unixSeconds(nowMs: number = Date.now()): number {
+  return Math.floor(nowMs / 1_000);
+}
+
+/** ORE maturity for one shift, fixed at the shift's start so re-settling never re-rates it. */
+export function shiftOreMaturityBps(player: Pick<GamePlayerState, "createdAt" | "activatedAt">): number {
+  return onchainOreMaturityBps(Math.max(0, player.activatedAt - player.createdAt));
+}
+
+/** Cumulative ORE a shift has dug after `seconds` of activity, before the storage clamp. */
+export function shiftOreAfter(player: Pick<GamePlayerState, "createdAt" | "activatedAt" | "crew">, seconds: number): number {
+  return onchainOreForActiveSeconds(seconds, shiftOreMaturityBps(player), onchainOreEfficiencyBps(player.crew));
+}
+
+export interface ShiftOreSettlement {
+  /** ORE actually stored this settlement (after the storage clamp). */
+  stored: number;
+  /** ORE the crew dug but storage could not hold. */
+  overflow: number;
+  oreBalance: number;
+  oreEarned: number;
+  /** The new ORE cursor: never before the shift start, never past the shift end. */
+  lastOreAt: number;
+}
+
+/**
+ * Settles the ORE an active shift dug since the last settlement. The crew digs inside
+ * [activatedAt, activeUntil) whether or not the player is online, so the end of the interval is
+ * min(now, activeUntil), not "now if still active". The amount is a difference of the cumulative
+ * shift total, so settling every five minutes or once at the end books exactly the same ORE and
+ * no per-settlement rounding is lost. Returns null when there is nothing new to settle.
+ */
+export function settleShiftOre(player: GamePlayerState, now: number): ShiftOreSettlement | null {
+  if (player.activatedAt <= 0 || player.activeUntil <= player.activatedAt) return null;
+  if (player.activatedAt > MAX_UNIX_SECONDS || player.activeUntil > MAX_UNIX_SECONDS) return null;
+  const from = Math.max(player.lastOreAt, player.activatedAt);
+  const to = Math.min(now, player.activeUntil);
+  if (to <= from) return null;
+  const dug = shiftOreAfter(player, to - player.activatedAt) - shiftOreAfter(player, from - player.activatedAt);
+  const stored = onchainStoreOre(player.oreBalance, Math.max(0, dug), onchainOreCapacity(player.crew));
+  return {
+    stored: stored.stored,
+    overflow: stored.overflow,
+    oreBalance: stored.balance,
+    oreEarned: player.oreEarned + stored.stored,
+    lastOreAt: to,
+  };
+}
+
+/** The activation bonus the native `activate` books, throttled by the same maturity ramp. */
+export function activationBonusOre(player: Pick<GamePlayerState, "createdAt">, now: number): number {
+  return onchainOreFromActivation(onchainOreMaturityBps(Math.max(0, now - player.createdAt)));
+}
+
+/**
+ * The window a mining-token settlement may pay for: the part of the current shift after the
+ * wallet's own cursor and after the mine opened, ending at min(now, activeUntil). A gap between
+ * two shifts is never paid, and a shift that ended while the player was offline is still paid.
+ */
+export function miningSettlementWindow(
+  player: Pick<GamePlayerState, "activatedAt" | "activeUntil">,
+  lastSettledAt: number,
+  miningStartsAt: number,
+  now: number,
+): { start: number; end: number } | null {
+  if (player.activatedAt <= 0 || player.activeUntil <= player.activatedAt) return null;
+  if (player.activatedAt > MAX_UNIX_SECONDS || player.activeUntil > MAX_UNIX_SECONDS || lastSettledAt > MAX_UNIX_SECONDS) return null;
+  const start = Math.max(lastSettledAt, player.activatedAt, miningStartsAt);
+  const end = Math.min(now, player.activeUntil);
+  return end > start ? { start, end } : null;
 }
 
 export interface DiscoverySeedInput {
