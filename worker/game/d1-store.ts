@@ -146,7 +146,8 @@ export class D1GameStore implements GameStore {
     const result = await this.db.prepare(
       "UPDATE game_mines SET released = ?1, remaining = ?2, committed = ?3, paid = ?4, total_eligible_power = ?5," +
         " version = version + 1, updated_at = ?6 WHERE mint = ?7 AND version = ?8 AND initial_reserve = ?9" +
-        " AND ?2 = ?9 AND ?3 <= ?1 AND ?4 <= ?3",
+        " AND CAST(?2 AS INTEGER) = CAST(?9 AS INTEGER) - CAST(?3 AS INTEGER)" +
+        " AND CAST(?3 AS INTEGER) <= CAST(?1 AS INTEGER) AND CAST(?4 AS INTEGER) <= CAST(?3 AS INTEGER)",
     ).bind(
       mine.released.toString(), mine.remaining.toString(), mine.committed.toString(), mine.paid.toString(),
       mine.totalEligiblePower, Math.floor(Date.now() / 1_000), mine.mint, expectedVersion, MINING_RESERVE.toString(),
@@ -220,14 +221,18 @@ export class D1GameStore implements GameStore {
         "INSERT OR IGNORE INTO game_balances (wallet, mint, claimable, last_settled_at, updated_at) VALUES (?1, ?2, 0, 0, ?3)",
       ).bind(balance.wallet, balance.mint, now),
       this.db.prepare(
+        // The version guard is the concurrency check. The old `remaining = remaining + committed`
+        // guard compared the stored remainder with the full reserve, so only the very first
+        // settlement of a mine could ever succeed; every later one failed silently.
         "UPDATE game_mines SET released = ?1, remaining = ?2, committed = ?3, total_eligible_power = ?4," +
-          " version = version + 1, updated_at = ?5 WHERE mint = ?6 AND version = CAST(?7 AS INTEGER) AND remaining = CAST(?8 AS TEXT)" +
+          " version = version + 1, updated_at = ?5 WHERE mint = ?6 AND version = CAST(?7 AS INTEGER)" +
+          " AND CAST(committed AS INTEGER) <= CAST(?3 AS INTEGER)" +
           " AND CAST(?2 AS INTEGER) = CAST(initial_reserve AS INTEGER) - CAST(?3 AS INTEGER)" +
           " AND CAST(?3 AS INTEGER) <= CAST(?1 AS INTEGER)" +
-          " AND EXISTS (SELECT 1 FROM game_balances WHERE wallet = ?9 AND mint = ?6 AND claimable = CAST(?10 AS TEXT))",
+          " AND EXISTS (SELECT 1 FROM game_balances WHERE wallet = ?8 AND mint = ?6 AND claimable = CAST(?9 AS TEXT))",
       ).bind(
         mine.released.toString(), mine.remaining.toString(), mine.committed.toString(), mine.totalEligiblePower,
-        now, mine.mint, expectedMineVersion, (mine.remaining + mine.committed).toString(), balance.wallet, expectedClaimable.toString(),
+        now, mine.mint, expectedMineVersion, balance.wallet, expectedClaimable.toString(),
       ),
       this.db.prepare(
         "INSERT INTO game_balances (wallet, mint, claimable, last_settled_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)" +
