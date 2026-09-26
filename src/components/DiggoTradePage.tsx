@@ -18,6 +18,7 @@
  * thing this page must never do.
  */
 import { useEffect, useState } from "react";
+import { OFFICIAL_COIN_LOGO, OFFICIAL_COIN_NAME, OFFICIAL_COIN_SYMBOL } from "../../shared/officialMint";
 import type { TokenSummary } from "../../shared/types";
 import { getToken } from "../api";
 import { compact, shortAddress } from "../format";
@@ -123,9 +124,14 @@ export function DiggoTradePage({
     );
   }
 
-  // The coin's own name and symbol are authoritative once it is indexed; only the name is forced to
-  // the brand spelling so the heading is never a placeholder row.
-  const official: TokenSummary = { ...token, name: "Diggo", symbol: token.symbol || "DIGGO" };
+  // The coin's own symbol is authoritative once it is indexed; only the name is forced to the brand
+  // spelling so the heading is never a placeholder row, and the shipped logo covers a missing image.
+  const official: TokenSummary = {
+    ...token,
+    name: OFFICIAL_COIN_NAME,
+    symbol: token.symbol || OFFICIAL_COIN_SYMBOL,
+    imageUrl: token.imageUrl || OFFICIAL_COIN_LOGO,
+  };
 
   return (
     <section className="diggo-page">
@@ -169,7 +175,7 @@ function DiggoHeader({
       <div className="diggo-hero-text">
         <span className="eyebrow">OFFICIAL COIN</span>
         <h1>
-          {name || "Diggo"} <span>${symbol || "DIGGO"}</span>
+          {name || OFFICIAL_COIN_NAME} <span>${symbol || OFFICIAL_COIN_SYMBOL}</span>
         </h1>
         {mint && <code className="diggo-mint">{shortAddress(mint)}</code>}
       </div>

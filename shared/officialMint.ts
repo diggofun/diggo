@@ -13,6 +13,12 @@
 
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
+/** The official coin's on-chain name and symbol, as written into its mint metadata at launch. */
+export const OFFICIAL_COIN_NAME = "Diggo.fun";
+export const OFFICIAL_COIN_SYMBOL = "DIGGO";
+/** The official coin's logo as shipped with the site: the same bytes its hosted metadata points at. */
+export const OFFICIAL_COIN_LOGO = "/brand/official-diggo-fun-logo-v2.png";
+
 /** A Solana pubkey is a 32-byte account address. */
 const PUBKEY_BYTES = 32;
 

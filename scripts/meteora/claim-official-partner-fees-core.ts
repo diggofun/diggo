@@ -3,7 +3,10 @@ import { deriveDbcPoolAddress, type PoolConfig, type VirtualPool } from "@meteor
 import { PublicKey, Transaction } from "@solana/web3.js";
 import { DBC_PROGRAM_ID, NATIVE_SOL_MINT, PLATFORM_FEE_WALLET } from "./common.ts";
 
-export const OFFICIAL_MINT = new PublicKey("12cens35GKeZH8is6R1gdbJ1faktyLrXgHvHyBB6veb7");
+// The current official coin (Diggo.fun, launched by launch-official-coin.ts). The first official
+// pool (mint 12cens35GKeZH8is6R1gdbJ1faktyLrXgHvHyBB6veb7) is now a regular pool; claim its partner
+// fees from the Platform fees card, which lists every pool under the config.
+export const OFFICIAL_MINT = new PublicKey("AvsnWvXkgKqfD1ciFFJyVkgjz3CeGPz38e2KS8uDPawN");
 export const OFFICIAL_CONFIG = new PublicKey("5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF");
 export const OFFICIAL_POOL = deriveDbcPoolAddress(new PublicKey(NATIVE_SOL_MINT), OFFICIAL_MINT, OFFICIAL_CONFIG);
 export const FEE_RECEIVER = new PublicKey(PLATFORM_FEE_WALLET);

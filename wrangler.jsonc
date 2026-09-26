@@ -30,11 +30,13 @@
     "MINING_CLAIM_PER_CLAIM": "250000000",
     "MINING_CLAIM_PER_DAY": "1000000000",
     "MINING_VAULT_SWEEP_LIMIT": "50",
-    // The platform official coin, $DIGGO, surfaced by GET /api/config as `officialMint` and traded
-    // on /diggo. Not a secret - it is a public mint address - but also not a constant: the coin has
-    // not launched yet, so it ships empty. An empty or malformed value reads as "not launched" and
-    // the UI shows its empty state rather than a fabricated market (shared/officialMint.ts).
-    "DIGGO_OFFICIAL_MINT": "12cens35GKeZH8is6R1gdbJ1faktyLrXgHvHyBB6veb7",
+    // The platform official coin, Diggo.fun ($DIGGO), surfaced by GET /api/config as `officialMint`
+    // and traded on /diggo. Not a secret - it is a public mint address. An empty or malformed value
+    // reads as "not launched" and the UI shows its empty state (shared/officialMint.ts).
+    // AvsnWv... replaced the first official mint 12cens35GKeZH8is6R1gdbJ1faktyLrXgHvHyBB6veb7, which
+    // stays listed and mineable as a regular coin; its mining balances are keyed by its own mint.
+    // Deploy this value only after scripts/meteora/launch-official-coin.ts --send has confirmed.
+    "DIGGO_OFFICIAL_MINT": "AvsnWvXkgKqfD1ciFFJyVkgjz3CeGPz38e2KS8uDPawN",
     // DIGGO_RPC_URL is a deployed Worker secret and must be a mainnet endpoint. The public
     // fallbacks below are only a last-resort availability path; browser RPC always uses /api/rpc.
     "DIGGO_RPC_URLS": "https://api.mainnet-beta.solana.com",

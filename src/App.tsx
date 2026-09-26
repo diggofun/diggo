@@ -120,7 +120,7 @@ const PAGE_TITLES: Partial<Record<PageId, string>> = {
   crew: "Crew",
   discoveries: "Discoveries",
   explore: "Explore mines",
-  diggo: "Trade $DIGGO",
+  diggo: "Trade Diggo.fun ($DIGGO)",
   trade: "Trade",
   leaderboards: "Leaderboards",
   mines: "Mine details",
