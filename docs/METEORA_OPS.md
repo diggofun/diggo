@@ -128,16 +128,102 @@ already-funded fee payer so the DBC instruction could execute. It succeeded with
 After funding, run the same command without `--allow-mainnet` and require a successful simulation
 before any signing. `--allow-mainnet` is intentionally absent from this runbook's commands.
 
+## Official Diggo.fun coin launch
+
+The official platform coin is **Diggo.fun ($DIGGO)**, mint
+`AvsnWvXkgKqfD1ciFFJyVkgjz3CeGPz38e2KS8uDPawN`, DBC pool
+`9rZSuwKnRY1KptHEpHYDZDnG29bK6BTdA8zDRxGxfdDn`, on config
+`5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF`, created by payer/creator
+`GkCYyWzSjhSFEjKNx1ebWThtVLzQj7L84ktAHe31MBSx` with no first buy. It replaces the first official
+mint `12cens35GKeZH8is6R1gdbJ1faktyLrXgHvHyBB6veb7` (pool `4g7i7aWVvwnSn6K6VKyvzG5UFf2nFCXgYJ7uJUymhhMB`),
+which stays listed, tradable and mineable as a regular coin. Mining balances are keyed by mint, so
+pending rewards on the old mint are untouched by the switch and remain payable in the old token once
+its pool graduates and its 200M leftover reaches the mining vault.
+
+`scripts/meteora/launch-official-coin.ts` pins the mint, config, payer, name, symbol, metadata URI
+(`https://diggo.fun/media/official-diggo-fun-metadata-v1.json`) and logo
+(`public/brand/official-diggo-fun-logo-v2.png`, sha256
+`d5ac4b0620c96aa18aada472fce491a581edc6daed2d0670fff1f58c28f6f016`). It is a dry run unless given
+`--send`. The dry run simulates the exact transaction with a funded public account as the fee payer
+while the real payer is empty, and prints the measured cost and the SOL to send. Verified on
+2026-09-26 with the provided mint keypair (signature verification disabled for the funded stand-in):
+128,870 compute units, 4 instructions, 1,017-byte transaction. Cost is 0.032403413 SOL: 0.010 SOL
+pool creation fee, 0.010 SOL Metaplex protocol fee, 0.012390120 SOL rent across the mint, token
+vaults and metadata accounts, and 0.000013293 SOL network fee. Keep 0.001650240 SOL for the payer's
+rent-exempt minimum plus margin, rounded up to a 0.001 SOL boundary. The single funding amount is
+**0.035 SOL**; after the simulated launch the payer retains 0.002596587 SOL.
+
+This checkout's `wrangler.jsonc` now selects the new mint for official-coin display; the config has
+not been deployed. That setting does not rewrite mining accounting. Mining claims and balances
+retain their mint, so the approximately
+45,500 DIGGO already committed to six wallets remains owed in legacy mint
+`12cens35GKeZH8is6R1gdbJ1faktyLrXgHvHyBB6veb7`. Its pool
+`4g7i7aWVvwnSn6K6VKyvzG5UFf2nFCXgYJ7uJUymhhMB` has not migrated; the 200M-token leftover is still
+reserved for vault `H5TTpszeSNneNNxypM3UjaWMjVRNTvmWSCXfgXtzdELT` after migration. Do not relabel,
+merge, or pay those old-mint claims from the new mint's supply. The owner still needs to choose how
+future mining works:
+
+1. Keep legacy mining on the old mint until its pool migrates and its vault inventory is available;
+   launch the new coin for trading and official display only.
+2. Pause new legacy accrual and direct future mining to the new mint, while preserving the old
+   45,500-token liability and arranging its eventual payout from the old pool/vault.
+3. Run both mines independently, with explicit per-mint accounting and funding. This supports both
+   communities but requires separate vault inventory and payout readiness for each mint.
+
+The new coin's 200M reserve will only be available to its own mining vault after its own pool
+migrates and the leftover withdrawal is completed. Changing `DIGGO_OFFICIAL_MINT` alone does not
+choose among these reward policies or fund either vault.
+
+Post-approval order (each step only after the previous one succeeded):
+
+1. Set the private RPC for the session:
+   `$env:DIGGO_MAINNET_RPC_URL = (Get-Content -Raw C:\Users\Jurek\.diggo-mainnet\helius-mainnet-rpc-url.txt).Trim()`
+2. Send the printed amount (0.035 SOL) to `GkCYyWzSjhSFEjKNx1ebWThtVLzQj7L84ktAHe31MBSx`.
+3. Publish the logo, then the metadata JSON, to the production media store and verify both URLs:
+   `npx tsx scripts/meteora/upload-official-coin-media.ts --upload`
+4. Re-run the dry run. With the payer funded it now simulates with the real payer:
+
+   ```powershell
+   npx tsx scripts/meteora/launch-official-coin.ts `
+     --payer-keypair C:\Users\Jurek\.diggo-mainnet\payer.json `
+     --mint-keypair C:\Users\Jurek\.diggo-mainnet\official-diggo-fun-mint.json `
+     --out-dir C:\Users\Jurek\.diggo-mainnet\official-diggo-fun
+   ```
+
+5. Launch. The command re-checks the hosted bytes, signs, simulates with signature verification and
+   broadcasts once:
+
+   ```powershell
+   npx tsx scripts/meteora/launch-official-coin.ts `
+     --payer-keypair C:\Users\Jurek\.diggo-mainnet\payer.json `
+     --mint-keypair C:\Users\Jurek\.diggo-mainnet\official-diggo-fun-mint.json `
+     --out-dir C:\Users\Jurek\.diggo-mainnet\official-diggo-fun `
+     --send --confirm-mint AvsnWvXkgKqfD1ciFFJyVkgjz3CeGPz38e2KS8uDPawN
+   ```
+
+6. Check the signature and mint on an explorer; the wallet view should show Diggo.fun / DIGGO with
+   the logo.
+7. Merge and deploy the app change that sets `DIGGO_OFFICIAL_MINT` in `wrangler.jsonc` (run
+   `npm run check` first, then follow DEPLOYMENT.md). Confirm `/api/config` returns the new
+   `officialMint`, `/diggo` shows the Diggo.fun market once indexed, and the old coin still appears
+   in Explore.
+
+Deploying the app change before the launch is harmless: `/diggo` shows its "not indexed yet"
+state. To roll back the app, set `DIGGO_OFFICIAL_MINT` back to the previous mint and redeploy.
+
 ## Fees and leftover tokens
 
 For the **official mainnet $DIGGO pool**, use the combined partner claim command. It pins the
-official mint `12cens35GKeZH8is6R1gdbJ1faktyLrXgHvHyBB6veb7`, DBC pool
-`4g7i7aWVvwnSn6K6VKyvzG5UFf2nFCXgYJ7uJUymhhMB`, config
+official mint `AvsnWvXkgKqfD1ciFFJyVkgjz3CeGPz38e2KS8uDPawN`, DBC pool
+`9rZSuwKnRY1KptHEpHYDZDnG29bK6BTdA8zDRxGxfdDn`, config
 `5yxCKEmi1rc5ebKmWdHbzj2pEe7caqS8xqvQh5V8duMF`, and fee destination
 `6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ`. It verifies the live program owners, pool
 derivation, mint, quote mint, config, and fee claimer. It includes partner trading and pool creation
 claims in one transaction when both are available, skipping either claim when its fees are zero or
 already claimed. The payer needs SOL for the network fee and any account creation needed by the SDK.
+Until the Diggo.fun pool exists this command stops with "Official pool or config is missing". The
+first official pool (`4g7i7aWVvwnSn6K6VKyvzG5UFf2nFCXgYJ7uJUymhhMB`) is a regular pool now; claim its
+partner fees from the **Platform fees** card described below.
 
 Public-key-only dry run (no secret key needed, never broadcasts):
 
