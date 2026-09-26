@@ -1147,12 +1147,6 @@ export default function App() {
                   />
                 </Suspense>
               )}
-              <section className="page-shell" aria-label="Rent reclaim status">
-                <p className="form-message">
-                  Rent reclaim is unavailable in Meteora mode. The native-program account authority
-                  does not support this action, so no reclaim transaction can be started here.
-                </p>
-              </section>
             </>
           )}
           {page === "profile" && connected && config.chainMode !== "meteora" && (
