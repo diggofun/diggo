@@ -80,9 +80,9 @@ export function WatchlistPanel({ tokens = [], onSelectCoin, onConnect }: Watchli
             <IconWatchlist size={14} /> Watchlist
           </div>
           <h2 id="watchlist-title">
-            COINS YOU
+            Coins you
             <br />
-            ARE WATCHING.
+            are watching.
           </h2>
         </div>
         <p className="mono-label">

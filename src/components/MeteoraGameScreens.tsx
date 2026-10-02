@@ -5,6 +5,7 @@ import { compact, countdown, oreAmount, tokenAmount } from "../format";
 import type { GameCrewComponent, GameState, MeteoraPortfolio } from "../api";
 import { IconDiscoveries, IconHammer, IconMine, IconOre, IconProfile, IconStreak, IconTimer } from "../icons";
 import { MineScene } from "./MineScene";
+import { Critter, critterAt } from "./Critter";
 import { TokenOrb } from "./TokenOrb";
 
 interface MineProps {
@@ -31,7 +32,7 @@ export function MeteoraMineDashboard({ game, mine, now, connected, activating, e
   return (
     <section className="meteora-dashboard page-shell" id="mine">
       <div className="section-heading">
-        <div><div className="eyebrow"><IconMine size={14} /> Mine dashboard</div><h1>YOUR CREW<br /><span>{active ? "ON SHIFT." : "STANDBY."}</span></h1></div>
+        <div><div className="eyebrow"><IconMine size={14} /> Mine dashboard</div><h1>Your crew<br /><span>{active ? "on shift." : "on standby."}</span></h1></div>
       </div>
       <div className={"meteora-status " + (active ? "is-active" : "is-paused")} role="status">
         <div><span className={"badge " + (active ? "badge-active" : "badge-paused")}><i /> {active ? "Active" : "Ready"}</span><strong>{active ? "Crew on shift" : "Start your next shift"}</strong><small>{active ? "Your crew is digging while you are away." : "Activate once a day to keep the streak and ORE flowing."}</small></div>
@@ -83,7 +84,7 @@ function hasGraduated(tokens: TokenSummary[], mint: string): boolean {
 }
 
 export function MeteoraCrewScreen({ game, pending, error, notice, onUpgrade }: CrewProps) {
-  if (!game) return <section className="crew-screen page-shell"><div className="empty-state"><p>Sign in to see your crew.</p></div></section>;
+  if (!game) return <section className="crew-screen page-shell"><div className="empty-state"><span className="loading-crew">{[0, 1, 2, 3].map((index) => <Critter key={index} {...critterAt(index)} size={52} mood={index === 1 ? "dig" : "idle"} phase={index * 0.5} />)}</span><p>Sign in to see your crew.</p></div></section>;
   const crew = validCrew(game);
   const tier = crewTier(crew);
   return <section className="crew-screen page-shell meteora-crew" id="crew"><div className="crew-head"><div><span className="eyebrow"><IconHammer size={14} /> Crew upgrades</span><h2>{tier.name}</h2><p>{compact(crewPower(crew))} Mining Power · {oreAmount(game.oreBalance)} ORE banked</p></div><MineScene tier={tier.tier} active={game.activation.active} label={tier.name} /></div><div className="crew-board">{CREW_COMPONENTS.map((component) => { const level = crew[component]; const cost = upgradeOreCost(component, level, crew.foreman); return <article className="crew-card" key={component}><header><span className="crew-card-glyph">{component.slice(0, 1).toUpperCase()}</span><div><strong>{CREW_COMPONENT_LABELS[component]}</strong><small>{CREW_ROLES[component].deltaLabel}</small></div><b className="crew-card-level">LV. {level}</b></header><p className="crew-card-role">{CREW_ROLES[component].role}</p><button className="btn btn-primary btn-block crew-upgrade-button" disabled={game.oreBalance < cost || pending === component} onClick={() => onUpgrade(component)}>{pending === component ? "Upgrading…" : <>Upgrade <IconOre size={13} /> {cost.toLocaleString()} ORE</>}</button></article>; })}</div>{notice && <p className="form-message crew-notice">{notice}</p>}{error && <p className="form-message" role="alert">{error}</p>}<p className="crew-note">Crew upgrades cost ORE earned from active shifts. ORE cannot be bought or withdrawn.</p></section>;
@@ -117,7 +118,7 @@ export function MeteoraDiscoveriesScreen({ game, tokens, connected, busy, error,
       <div className="section-heading">
         <div>
           <div className="eyebrow"><IconDiscoveries size={14} /> Discoveries</div>
-          <h1>YOUR MINING LEDGER.<br /><span>CLAIM WHEN READY.</span></h1>
+          <h1>Your mining ledger.<br /><span>Claim when ready.</span></h1>
         </div>
         <button className="btn btn-primary" type="button" disabled={!connected || !eligible || busy} onClick={onDiscover}>
           {busy ? "Digging…" : "Run this window's discovery"}
@@ -196,5 +197,5 @@ export function MeteoraPortfolioScreen({ game, portfolio, tokens }: { game: Game
   const quoteReserve = Number(token?.quoteReserve ?? 0);
   const reserve = threshold > 0 && quoteReserve > 0 ? Math.max(0, Math.min(1, quoteReserve / threshold)) : 0;
   const graduated = mine?.coin.graduated ?? portfolio?.graduated ?? false;
-  return <section className="portfolio-screen page-shell meteora-portfolio" id="portfolio"><div className="section-heading"><div><div className="eyebrow"><IconProfile size={14} /> Portfolio</div><h1>YOUR MINES.<br /><span>YOUR PAYOUTS.</span></h1></div></div><div className="meteora-portfolio-grid"><article className="meteora-balance-card"><span><IconOre size={15} /> ORE BALANCE</span><strong>{oreAmount(game?.oreBalance ?? 0)}</strong><small>Available for crew upgrades</small></article><article className="meteora-balance-card"><span><IconStreak size={15} /> STREAK</span><strong>{game?.streak ?? 0} days</strong><small>Best {game?.longestStreak ?? 0} days</small></article></div>{mine ? <article className="meteora-claim-card"><div className="dash-mine-token">{token ? <TokenOrb symbol={token.symbol} imageUrl={token.imageUrl} large /> : <span className="token-orb token-orb-large"><IconMine size={20} /></span>}<div><span className="mono-label">{token ? `$${token.symbol}` : "Active mine"}</span><h2>{mine.coin.name}</h2></div></div><div className="meteora-claim-state"><span className={"badge " + (graduated ? "badge-active" : "badge-paused")}>{graduated ? "READY FOR COLLECTION" : "PRE-GRADUATION PAYOUTS MAY BE PENDING"}</span><strong>{tokenAmount(claimable)} {token ? `$${token.symbol}` : "tokens"}</strong><small>Collect every accrued coin in Discoveries with one wallet-approved batch transaction.</small><div className="progress" aria-label="Progress to graduation"><i style={{ width: `${Math.round(reserve * 100)}%` }} /></div><div className="meteora-claim-foot"><span>{Math.round(reserve * 100)}% of graduation target</span><a className="btn btn-primary" href="/discoveries">Open Discoveries</a></div></div></article> : <div className="empty-state"><p>Mining rewards appear in Discoveries after a launched coin is assigned automatically.</p></div>}</section>;
+  return <section className="portfolio-screen page-shell meteora-portfolio" id="portfolio"><div className="section-heading"><div><div className="eyebrow"><IconProfile size={14} /> Portfolio</div><h1>Your mines.<br /><span>Your payouts.</span></h1></div></div><div className="meteora-portfolio-grid"><article className="meteora-balance-card"><span><IconOre size={15} /> ORE BALANCE</span><strong>{oreAmount(game?.oreBalance ?? 0)}</strong><small>Available for crew upgrades</small></article><article className="meteora-balance-card"><span><IconStreak size={15} /> STREAK</span><strong>{game?.streak ?? 0} days</strong><small>Best {game?.longestStreak ?? 0} days</small></article></div>{mine ? <article className="meteora-claim-card"><div className="dash-mine-token">{token ? <TokenOrb symbol={token.symbol} imageUrl={token.imageUrl} large /> : <span className="token-orb token-orb-large"><IconMine size={20} /></span>}<div><span className="mono-label">{token ? `$${token.symbol}` : "Active mine"}</span><h2>{mine.coin.name}</h2></div></div><div className="meteora-claim-state"><span className={"badge " + (graduated ? "badge-active" : "badge-paused")}>{graduated ? "READY FOR COLLECTION" : "PRE-GRADUATION PAYOUTS MAY BE PENDING"}</span><strong>{tokenAmount(claimable)} {token ? `$${token.symbol}` : "tokens"}</strong><small>Collect every accrued coin in Discoveries with one wallet-approved batch transaction.</small><div className="progress" aria-label="Progress to graduation"><i style={{ width: `${Math.round(reserve * 100)}%` }} /></div><div className="meteora-claim-foot"><span>{Math.round(reserve * 100)}% of graduation target</span><a className="btn btn-primary" href="/discoveries">Open Discoveries</a></div></div></article> : <div className="empty-state"><p>Mining rewards appear in Discoveries after a launched coin is assigned automatically.</p></div>}</section>;
 }

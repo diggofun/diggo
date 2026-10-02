@@ -91,7 +91,7 @@ export function ReferralsScreen({ signedIn }: { signedIn: boolean }) {
   return (
     <section className="page-shell referrals-page" aria-labelledby="referrals-title">
       <div className="section-heading">
-        <div><div className="eyebrow"><IconUserGroup size={14} /> Referrals</div><h1 id="referrals-title">GROW THE<br />DIGGO CREW.</h1><p className="section-intro">Share your link. A referral qualifies after {sol(threshold)} of buys and sells, excluding trades between you and the referred wallet.</p></div>
+        <div><div className="eyebrow"><IconUserGroup size={14} /> Referrals</div><h1 id="referrals-title">Grow the<br />Diggo crew.</h1><p className="section-intro">Share your link. A referral qualifies after {sol(threshold)} of buys and sells, excluding trades between you and the referred wallet.</p></div>
       </div>
       {error && <p className="form-message referral-error">{error}</p>}
       {message && <p className="form-message referral-message">{message}</p>}

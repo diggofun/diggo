@@ -140,7 +140,7 @@ export function PlayerOnboarding({
       <div className="section-heading">
         <div>
           <div className="eyebrow"><IconMine size={14} /> Your player</div>
-          <h2>START<br />DIGGING.</h2>
+          <h2>Start<br />digging.</h2>
         </div>
         <div className="onboarding-state">
           <span className={"badge " + (step === "ready" ? "badge-curve" : "badge-reserve")}>

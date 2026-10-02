@@ -5,7 +5,7 @@
  * Numbers here are the Worker's token summaries as-is. Nothing in this file estimates a reward:
  * the only estimate in the product is the server's, shown in the mine info panel with its label.
  */
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { track } from "../analytics";
 import {
   IconArrowDownRight,
@@ -37,6 +37,7 @@ import { BrandMark } from "./AppHeader";
 import { LEGAL_ROUTES } from "./legal/routes";
 import { EmptyState } from "./StatusViews";
 import { TokenOrb } from "./TokenOrb";
+import { Critter, critterAt, CRITTER_COLORS } from "./Critter";
 
 export function HomeHero({
   featured,
@@ -49,8 +50,11 @@ export function HomeHero({
   onManageCrew,
   onLaunch,
   onClaimRewards,
+  coinSymbols = [],
 }: {
   featured: TokenSummary | null;
+  /** Tickers the hero crew digs up; the featured coin's comes first. */
+  coinSymbols?: string[];
   player: PlayerProfile | null;
   connected: boolean;
   now: number;
@@ -71,9 +75,9 @@ export function HomeHero({
           {featured ? "A memecoin mine is available" : "No memecoins launched yet"}
         </div>
         <h1>
-          LAUNCH MEMECOINS.
+          Launch memecoins.
           <br />
-          RUN A <span>MINING CREW.</span>
+          Run a <span>mining crew.</span>
         </h1>
         <p className="hero-lead">
           <strong>Diggo.fun is a Solana memecoin launchpad with a mining game built in.</strong>{" "}
@@ -101,10 +105,11 @@ export function HomeHero({
           <div className="console-top">
             <div className="featured-token">
               <span className="token-orb token-orb-large orb-empty"><IconMine size={20} /></span>
-              <div><span>NO ACTIVE MINE</span><h2>Nothing launched yet</h2></div>
+              <div><span>No active mine</span><h2>Nothing launched yet</h2></div>
             </div>
-            <span className="active-pill idle"><i /> EMPTY</span>
+            <span className="active-pill idle"><i /> Empty</span>
           </div>
+          <CritterMine symbols={[]} fast={false} layer={1} paused />
           <div className="empty-body">
             <p>
               No token has been launched on this protocol yet, so there is nothing to mine. Block
@@ -120,23 +125,21 @@ export function HomeHero({
           <div className="console-top">
             <div className="featured-token">
               <TokenOrb symbol={featured.symbol} imageUrl={featured.imageUrl} large />
-              <div><span>{isMiningActive ? "NOW MINING" : "FEATURED MINE"}</span><h2>{featured.name}</h2></div>
+              <div><span>{isMiningActive ? "Now mining" : "Featured mine"}</span><h2>{featured.name}</h2></div>
             </div>
             <span className={"active-pill " + (isMiningActive ? "" : "idle")}>
-              <i /> {isMiningActive ? "CREW ACTIVE" : player ? "CREW PAUSED" : "NOT ACTIVATED"}
+              <i /> {isMiningActive ? "Crew active" : player ? "Crew paused" : "Not activated"}
             </span>
           </div>
-          <div className="mine-scene" aria-hidden="true">
-            <div className="grid-lines" />
-            <div className="ore ore-one" /><div className="ore ore-two" /><div className="ore ore-three" />
-            <div className="pickaxe-wrap"><IconMine size={82} /></div>
-            <div className="impact"><span /><span /><span /></div>
-            <div className="depth-label">LAYER 0{Math.max(1, Math.round((100 - reservePercent) / 15))}</div>
-          </div>
+          <CritterMine
+            symbols={[featured.symbol, ...coinSymbols.filter((symbol) => symbol !== featured.symbol)]}
+            fast={isMiningActive}
+            layer={Math.max(1, Math.round((100 - reservePercent) / 15))}
+          />
           <div className="block-stats">
-            <div><span>NEXT BLOCK</span><strong>{featured.networkPower > 0 ? countdown(featured.nextBlockAt, now) : "AWAITING MINERS"}</strong></div>
-            <div><span>BLOCK REWARD</span><strong>{compact(featured.rewardPerBlock)} <small>${featured.symbol}</small></strong></div>
-            <div><span>NETWORK POWER</span><strong>{compact(featured.networkPower)}</strong></div>
+            <div><span>Next block</span><strong>{featured.networkPower > 0 ? countdown(featured.nextBlockAt, now) : "Awaiting miners"}</strong></div>
+            <div><span>Block reward</span><strong>{compact(featured.rewardPerBlock)} <small>${featured.symbol}</small></strong></div>
+            <div><span>Network power</span><strong>{compact(featured.networkPower)}</strong></div>
           </div>
           {player && (
             <div className="crew-strip">
@@ -170,6 +173,42 @@ export function HomeHero({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * The hero's mine: four critters, each a different shape and colour, swinging at a seam while the
+ * coins they knock loose float up. Decorative only - the tickers are real listed coins, but nothing
+ * here reports what any player has mined.
+ */
+function CritterMine({ symbols, fast, layer, paused = false }: { symbols: string[]; fast: boolean; layer: number; paused?: boolean }) {
+  const crew = [0, 1, 2, 3];
+  const tempo = fast ? 0.7 : 1.05;
+  return (
+    <div className={"critter-mine" + (paused ? " is-paused" : "")} aria-hidden="true" style={{ "--critter-tempo": tempo + "s" } as CSSProperties}>
+      <div className="critter-mine-hud">
+        <span>Layer <b>0{layer}</b></span>
+        <span>{paused ? "Crew waiting for a mine" : fast ? "Crew digging" : "Crew on standby"}</span>
+      </div>
+      <div className="critter-mine-ground" />
+      <div className="critter-mine-row" style={{ "--crew": crew.length } as CSSProperties}>
+        {crew.map((index) => {
+          const look = critterAt(index);
+          const phase = index * 0.23;
+          return (
+            <div className="critter-slot" key={index}>
+              <Critter shape={look.shape} color={look.color} mood={paused ? "idle" : "dig"} phase={phase} tempo={tempo} />
+              <span className="critter-rock" style={{ "--rock-vein": CRITTER_COLORS[(index * 3 + 5) % CRITTER_COLORS.length] } as CSSProperties} />
+              {!paused && symbols.length > 0 && (
+                <span className="critter-coin" style={{ "--coin-delay": -(phase + index * tempo) + "s" } as CSSProperties}>
+                  ${symbols[index % symbols.length]}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -229,7 +268,7 @@ export function ExploreBoard({ tokens, limit, onLaunch }: { tokens: TokenSummary
     <section className="discover page-shell" id="explore" aria-labelledby="explore-title">
       <div className="section-heading">
         <div>
-          <h2 id="explore-title">FIND YOUR<br />NEXT MINE.</h2>
+          <h2 id="explore-title">Find your<br />next mine.</h2>
         </div>
         {tokens.length > 1 && (
           <div className="filter-tabs" role="group" aria-label="Sort mines">
@@ -452,7 +491,7 @@ export function AboutDiggo() {
     <section className="about-section page-shell" id="about" aria-labelledby="about-title">
       <div className="about-intro">
         <span className="section-kicker">What is Diggo.fun?</span>
-        <h2 id="about-title">A LAUNCHPAD<br />WITH A MINE<br />UNDER IT.</h2>
+        <h2 id="about-title">A launchpad<br />with a mine<br />under it.</h2>
         <p>
           Most launchpads stop at the launch. Diggo keeps people coming back: every coin launched
           here becomes a <strong>mine</strong>, and players run a <strong>crew</strong> that digs
@@ -462,7 +501,10 @@ export function AboutDiggo() {
       </div>
       <div className="about-audiences">
         <article className="audience-card">
-          <span className="audience-icon"><IconMine size={22} /></span>
+          <span className="audience-critters">
+            <Critter shape="blob" color="#ff6a00" size={48} mood="dig" phase={0.1} />
+            <Critter shape="drop" color="#3b82f6" size={40} mood="idle" phase={1.2} />
+          </span>
           <h3>For players</h3>
           <ul>
             <li><IconCheck size={14} /> Connect a Solana wallet and open a 24-hour mining shift.</li>
@@ -474,7 +516,10 @@ export function AboutDiggo() {
           <a className="btn btn-primary" href="/mine">Start mining <IconMine size={18} /></a>
         </article>
         <article className="audience-card is-dark">
-          <span className="audience-icon"><IconRocket size={22} /></span>
+          <span className="audience-critters">
+            <Critter shape="hexagon" color="#a855f7" size={48} mood="busy" phase={0.4} />
+            <span className="audience-rocket"><IconRocket size={20} /></span>
+          </span>
           <h3>For creators</h3>
           <ul>
             <li><IconCheck size={14} /> Launch a fixed-supply SPL coin from your own wallet.</li>
@@ -542,7 +587,7 @@ export function HowItWorks() {
         <div className="section-heading light">
           <div>
             <span className="section-kicker">How it works</span>
-            <h2>ONE MINING DAY,<br />FOUR STEPS.</h2>
+            <h2>One mining day,<br />four steps.</h2>
           </div>
           <p>
             The whole loop takes a minute of your time per day. Wallet signatures authorize every
@@ -553,7 +598,10 @@ export function HowItWorks() {
           {MINING_DAY.map((step, index) => (
             <li key={step.title}>
               <b>{String(index + 1).padStart(2, "0")}</b>
-              <span className="step-icon">{step.icon}</span>
+              <span className="step-critter">
+                <Critter {...critterAt(index + 4)} size={58} mood={index === 1 ? "dig" : index === 3 ? "busy" : "idle"} phase={index * 0.6} />
+                <span className="step-icon">{step.icon}</span>
+              </span>
               <h3>{step.title}</h3>
               <p>{step.body}</p>
             </li>
@@ -596,7 +644,7 @@ export function HomeFaq() {
     <section className="home-faq page-shell" id="faq" aria-labelledby="faq-title">
       <div className="home-faq-intro">
         <span className="section-kicker">Questions</span>
-        <h2 id="faq-title">STRAIGHT<br />ANSWERS.</h2>
+        <h2 id="faq-title">Straight<br />answers.</h2>
         <p>
           Still unsure? Read the <a href="/terms">Terms</a> and <a href="/risk">Risk notice</a>, or
           ask us on <a href="https://x.com/Diggo_Fun" target="_blank" rel="noopener noreferrer">X</a>.
@@ -618,9 +666,13 @@ export function FinalCta({ onLaunch }: { onLaunch(): void }) {
   return (
     <section className="final-cta">
       <div className="page-shell">
-        <span className="huge-pick" aria-hidden="true"><IconMine /></span>
+        <span className="huge-pick final-cta-crew" aria-hidden="true">
+          <Critter shape="pill" color="#ff6a00" size={64} mood="dig" phase={0.2} />
+          <Critter shape="cloud" color="#06b6d4" size={52} mood="busy" phase={0.7} />
+          <Critter shape="triangle" color="#ec4899" size={46} mood="attention" phase={1.1} />
+        </span>
         <div>
-          <h2>MINE OR LAUNCH.</h2>
+          <h2>Mine or launch.</h2>
           <p className="final-cta-sub">Pick a side. Both end up in the same mine.</p>
         </div>
         <div className="hero-actions">

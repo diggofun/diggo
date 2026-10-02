@@ -75,9 +75,9 @@ export function LeaderboardsScreen({ tokens, onSelectMine }: LeaderboardsScreenP
             <IconLeaderboards size={14} /> Leaderboards
           </div>
           <h2>
-            TOP OF
+            Top of
             <br />
-            THE SHAFT.
+            the shaft.
           </h2>
         </div>
         <div className="filter-tabs">

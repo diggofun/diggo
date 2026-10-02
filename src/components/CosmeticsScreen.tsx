@@ -115,9 +115,9 @@ export function CosmeticsScreen({ signedIn, previewTier = 3 }: CosmeticsScreenPr
             <IconCosmetics size={14} /> Cosmetics
           </div>
           <h2>
-            DRESS THE
+            Dress the
             <br />
-            SHIFT.
+            shift.
           </h2>
         </div>
         <div className="cosmetics-summary">

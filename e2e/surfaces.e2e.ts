@@ -18,7 +18,7 @@ test("the discoveries page renders and the roll control is wired to the wallet",
   await startSignedIn(page);
 
   await page.goto("/discoveries");
-  await expect(page.getByRole("heading", { level: 1, name: /YOUR MINING LEDGER/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /your mining ledger/i })).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
 
   // The control exists and is offered; clicking it is not asserted here. In v2 the roll is a

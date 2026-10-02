@@ -189,7 +189,7 @@ export function SponsorEventsPanel({
       <div className="section-heading">
         <div>
           <div className="eyebrow"><IconLandmark size={14} /> Sponsorship</div>
-          <h2>SPONSOR<br />EVENTS.</h2>
+          <h2>Sponsor<br />events.</h2>
         </div>
       </div>
       <p className="sponsor-intro">

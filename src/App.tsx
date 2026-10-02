@@ -59,6 +59,7 @@ import { crewPower } from "../shared/economics";
 import { crewTier } from "../shared/crew";
 import { MeteoraCrewScreen, MeteoraDiscoveriesScreen, MeteoraMineDashboard, MeteoraPortfolioScreen } from "./components/MeteoraGameScreens";
 import { RouteErrorBoundary } from "./components/RouteErrorBoundary";
+import { CritterDefs } from "./components/Critter";
 
 /*
  * Every screen below the landing page is its own chunk: the swap terminal (lightweight-charts and
@@ -912,6 +913,7 @@ export default function App() {
 
   return (
     <div className={"app page-" + page}>
+      <CritterDefs />
       <a className="skip-link" href="#content">Skip to content</a>
       <AppHeader
         page={page}
@@ -956,6 +958,7 @@ export default function App() {
                 onManageCrew={() => setCrewOpen(true)}
                 onLaunch={openLaunch}
                 onClaimRewards={config.chainMode === "meteora" ? undefined : () => void handleClaimRewards()}
+                coinSymbols={tokens.map((token) => token.symbol)}
               />
               <Ticker tokens={tokens} />
               <AboutDiggo />
@@ -1122,7 +1125,7 @@ export default function App() {
           {page === "create" && (
             <section className="create-coin-page page-shell">
               <div>
-                <h1>START A<br /><span>NEW MINE.</span></h1>
+                <h1>Start a<br /><span>new mine.</span></h1>
                 <p>Create a fixed-supply Solana coin, allocate its mining reserve, and optionally make the first real buy into its bonding curve.</p>
               </div>
               <div className="create-coin-card">

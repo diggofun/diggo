@@ -83,9 +83,9 @@ export function DashboardPanel({
       <div className="dashboard-head">
         <div>
           <h1 id="dashboard-title">
-            YOUR CREW IS
+            Your crew is
             <br />
-            <span>{active ? "ON SHIFT." : "WAITING."}</span>
+            <span>{active ? "on shift." : "waiting."}</span>
           </h1>
         </div>
       </div>

@@ -62,7 +62,7 @@ test("the drawer holds the destinations the tab bar leaves out, and they navigat
 
   await drawer.getByRole("link", { name: "Discoveries", exact: true }).click();
   await expect(page).toHaveURL(/\/discoveries$/);
-  await expect(page.getByRole("heading", { level: 1, name: /YOUR MINING LEDGER/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /your mining ledger/i })).toBeVisible();
   // Following a drawer link is a real page load, so the panel is shut again on arrival.
   await expect(page.locator(".app-sidebar.is-open")).toHaveCount(0);
 

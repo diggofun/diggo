@@ -148,7 +148,7 @@ function MeteoraSwapPanel({
   const output = quote?.amountOut ?? null;
   return (
     <section className="swap-terminal page-shell" id="swap">
-      <div className="section-heading"><div><h2>TRADE<br />${token.symbol}.</h2></div><div className="swap-price-tag"><span>METEORA DBC</span><strong>{snapshot ? `${snapshot.metrics.priceSol.toFixed(9)} SOL` : "—"}</strong><span>{snapshot?.metrics.graduated ? "GRADUATED · DAMM v2" : "BONDING CURVE"}</span></div></div>
+      <div className="section-heading"><div><h2>Trade<br />${token.symbol}.</h2></div><div className="swap-price-tag"><span>METEORA DBC</span><strong>{snapshot ? `${snapshot.metrics.priceSol.toFixed(9)} SOL` : "—"}</strong><span>{snapshot?.metrics.graduated ? "GRADUATED · DAMM v2" : "BONDING CURVE"}</span></div></div>
       <div className="swap-grid"><div className="swap-chart-panel"><CandleChart mint={token.mint} symbol={token.symbol} /><div className="swap-capacity"><span>GRADUATION PROGRESS</span><strong>{Math.round(progress * 100)}%</strong><progress max="1" value={progress} /><small>{snapshot?.metrics.graduated ? "Mining rewards are unlocked." : "Mining rewards unlock at graduation."}</small></div></div>
         <form className="swap-form" onSubmit={submit}><div className="swap-tabs"><button type="button" className={side === "buy" ? "active" : ""} onClick={() => setSide("buy")}>Buy</button><button type="button" className={side === "sell" ? "active" : ""} onClick={() => setSide("sell")}>Sell</button></div>
           <label>{side === "buy" ? "Pay (SOL)" : `Sell ($${token.symbol})`}<input type="number" min="0" step="any" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" /></label>
@@ -230,16 +230,16 @@ function NativeSwapPanel({ token, programAddress, cluster, isOfficialDiggo, sign
     if (!chartContainerRef.current) return;
     const chart = createChart(chartContainerRef.current, {
       height: 260,
-      layout: { background: { color: "transparent" }, textColor: "#79796e", fontFamily: "monospace", fontSize: 10 },
-      grid: { vertLines: { visible: false }, horzLines: { color: "rgba(23,24,19,.08)" } },
+      layout: { background: { color: "transparent" }, textColor: "#a1a1aa", fontFamily: "monospace", fontSize: 10 },
+      grid: { vertLines: { visible: false }, horzLines: { color: "rgba(255,255,255,.06)" } },
       rightPriceScale: { borderVisible: false },
       timeScale: { borderVisible: false, timeVisible: true, secondsVisible: true },
       crosshair: { horzLine: { visible: false }, vertLine: { visible: false } },
     });
     const series = chart.addAreaSeries({
-      lineColor: "#7657ff",
-      topColor: "rgba(118,87,255,.28)",
-      bottomColor: "rgba(118,87,255,.02)",
+      lineColor: "#a855f7",
+      topColor: "rgba(168,85,247,.28)",
+      bottomColor: "rgba(168,85,247,.02)",
       lineWidth: 2,
       priceFormat: { type: "price", precision: 9, minMove: 0.000000001 },
     });
@@ -405,7 +405,7 @@ function NativeSwapPanel({ token, programAddress, cluster, isOfficialDiggo, sign
   return (
     <section className="swap-terminal page-shell" id="swap">
       <div className="section-heading">
-        <div><h2>TRADE<br />${token.symbol}.</h2></div>
+        <div><h2>Trade<br />${token.symbol}.</h2></div>
         <div className="swap-price-tag">
           <span>SPOT PRICE</span>
           <strong>{spotPriceSol < 0.000001 ? spotPriceSol.toExponential(3) : spotPriceSol.toFixed(9)} SOL</strong>

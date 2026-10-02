@@ -542,9 +542,9 @@ export function AdminScreen({ signedIn, chainMode, programId, meteoraConfigPubke
             Anti-abuse
           </div>
           <h2>
-            OPERATOR
+            Operator
             <br />
-            CONSOLE.
+            console.
           </h2>
         </div>
         <button className="btn btn-ghost" disabled={loading} onClick={() => void load()}>

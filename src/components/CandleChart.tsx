@@ -21,8 +21,8 @@ import { solAmount } from "../format";
 
 const POLL_MS = 15_000;
 const INTERVALS = Object.keys(CANDLE_INTERVALS) as CandleInterval[];
-const UP = "#2f9e5b";
-const DOWN = "#c7361f";
+const UP = "#10b981";
+const DOWN = "#f43f5e";
 
 type Currency = "SOL" | "USD";
 
@@ -85,15 +85,15 @@ export function CandleChart({ mint, symbol }: { mint: string; symbol: string }) 
     if (!container) return;
     const chart = createChart(container, {
       autoSize: true,
-      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#5f6057", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 10 },
-      grid: { vertLines: { color: "rgba(23,24,19,.05)" }, horzLines: { color: "rgba(23,24,19,.08)" } },
+      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#a1a1aa", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 10 },
+      grid: { vertLines: { color: "rgba(255,255,255,.04)" }, horzLines: { color: "rgba(255,255,255,.06)" } },
       crosshair: {
         mode: CrosshairMode.Normal,
-        vertLine: { color: "rgba(23,24,19,.45)", labelBackgroundColor: "#171813" },
-        horzLine: { color: "rgba(23,24,19,.45)", labelBackgroundColor: "#171813" },
+        vertLine: { color: "rgba(255,255,255,.35)", labelBackgroundColor: "#2a2a2a" },
+        horzLine: { color: "rgba(255,255,255,.35)", labelBackgroundColor: "#2a2a2a" },
       },
-      rightPriceScale: { borderColor: "rgba(23,24,19,.17)", scaleMargins: { top: 0.08, bottom: 0.26 } },
-      timeScale: { borderColor: "rgba(23,24,19,.17)", timeVisible: true, secondsVisible: false, rightOffset: 4 },
+      rightPriceScale: { borderColor: "rgba(255,255,255,.08)", scaleMargins: { top: 0.08, bottom: 0.26 } },
+      timeScale: { borderColor: "rgba(255,255,255,.08)", timeVisible: true, secondsVisible: false, rightOffset: 4 },
       localization: { priceFormatter: (price: number) => formatChartPrice(price) },
       handleScale: { axisPressedMouseMove: { time: true, price: false } },
     });
@@ -104,7 +104,7 @@ export function CandleChart({ mint, symbol }: { mint: string; symbol: string }) 
       borderDownColor: DOWN,
       wickUpColor: UP,
       wickDownColor: DOWN,
-      priceLineColor: "#7657ff",
+      priceLineColor: "#a855f7",
     });
     const volumeSeries = chart.addHistogramSeries({
       priceScaleId: "volume",
@@ -151,7 +151,7 @@ export function CandleChart({ mint, symbol }: { mint: string; symbol: string }) 
     volumeSeries.setData(shown.map((candle) => ({
       time: candle.time as UTCTimestamp,
       value: candle.volumeSol,
-      color: candle.close >= candle.open ? "rgba(47,158,91,.35)" : "rgba(199,54,31,.35)",
+      color: candle.close >= candle.open ? "rgba(16,185,129,.35)" : "rgba(244,63,94,.35)",
     })));
     chart.timeScale().applyOptions({ secondsVisible: false, timeVisible: CANDLE_INTERVALS[interval] < 86_400 });
     const key = interval + ":" + unit + ":" + (shown.length > 0);

@@ -61,9 +61,9 @@ export function DiscoveriesPanel(props: DiscoveriesPanelProps) {
             <IconDiscoveries size={14} /> Discoveries
           </div>
           <h1>
-            YOUR MINING
+            Your mining
             <br />
-            DISCOVERIES.
+            discoveries.
           </h1>
         </div>
         <div className="discovery-roll">
