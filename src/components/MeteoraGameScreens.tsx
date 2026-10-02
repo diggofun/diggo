@@ -5,7 +5,7 @@ import { compact, countdown, oreAmount, tokenAmount } from "../format";
 import type { GameCrewComponent, GameState, MeteoraPortfolio } from "../api";
 import { IconDiscoveries, IconHammer, IconMine, IconOre, IconProfile, IconStreak, IconTimer } from "../icons";
 import { MineScene } from "./MineScene";
-import { Critter, critterAt } from "./Critter";
+import { Bot, botAt } from "./Bot";
 import { TokenOrb } from "./TokenOrb";
 
 interface MineProps {
@@ -84,7 +84,7 @@ function hasGraduated(tokens: TokenSummary[], mint: string): boolean {
 }
 
 export function MeteoraCrewScreen({ game, pending, error, notice, onUpgrade }: CrewProps) {
-  if (!game) return <section className="crew-screen page-shell"><div className="empty-state"><span className="loading-crew">{[0, 1, 2, 3].map((index) => <Critter key={index} {...critterAt(index)} size={52} mood={index === 1 ? "dig" : "idle"} phase={index * 0.5} />)}</span><p>Sign in to see your crew.</p></div></section>;
+  if (!game) return <section className="crew-screen page-shell"><div className="empty-state"><span className="loading-crew">{[0, 1, 2, 3].map((index) => <Bot key={index} {...botAt(index)} size={52} mood={index === 1 ? "dig" : "idle"} phase={index * 0.5} />)}</span><p>Sign in to see your crew.</p></div></section>;
   const crew = validCrew(game);
   const tier = crewTier(crew);
   return <section className="crew-screen page-shell meteora-crew" id="crew"><div className="crew-head"><div><span className="eyebrow"><IconHammer size={14} /> Crew upgrades</span><h2>{tier.name}</h2><p>{compact(crewPower(crew))} Mining Power · {oreAmount(game.oreBalance)} ORE banked</p></div><MineScene tier={tier.tier} active={game.activation.active} label={tier.name} /></div><div className="crew-board">{CREW_COMPONENTS.map((component) => { const level = crew[component]; const cost = upgradeOreCost(component, level, crew.foreman); return <article className="crew-card" key={component}><header><span className="crew-card-glyph">{component.slice(0, 1).toUpperCase()}</span><div><strong>{CREW_COMPONENT_LABELS[component]}</strong><small>{CREW_ROLES[component].deltaLabel}</small></div><b className="crew-card-level">LV. {level}</b></header><p className="crew-card-role">{CREW_ROLES[component].role}</p><button className="btn btn-primary btn-block crew-upgrade-button" disabled={game.oreBalance < cost || pending === component} onClick={() => onUpgrade(component)}>{pending === component ? "Upgrading…" : <>Upgrade <IconOre size={13} /> {cost.toLocaleString()} ORE</>}</button></article>; })}</div>{notice && <p className="form-message crew-notice">{notice}</p>}{error && <p className="form-message" role="alert">{error}</p>}<p className="crew-note">Crew upgrades cost ORE earned from active shifts. ORE cannot be bought or withdrawn.</p></section>;

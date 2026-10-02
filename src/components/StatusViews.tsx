@@ -3,14 +3,14 @@
  * reads the same everywhere instead of as a blank page.
  */
 import type { ReactNode } from "react";
-import { Critter, critterAt } from "./Critter";
+import { Bot, botAt } from "./Bot";
 
 export function LoadingScreen({ label = "Digging up the data…" }: { label?: string }) {
   return (
     <div className="loading-screen" role="status" aria-live="polite">
       <span className="loading-crew" aria-hidden="true">
         {[0, 1, 2].map((index) => (
-          <Critter key={index} {...critterAt(index)} size={44} mood="busy" phase={index * 0.18} />
+          <Bot key={index} {...botAt(index)} size={44} mood="busy" phase={index * 0.18} />
         ))}
       </span>
       <span>{label}</span>
@@ -46,7 +46,7 @@ export function EmptyState({
 }) {
   return (
     <div className="empty-state">
-      {icon ? <span className="empty-state-icon" aria-hidden="true">{icon}</span> : <Critter {...critterAt(title.length)} size={56} mood="idle" phase={title.length % 4} />}
+      {icon ? <span className="empty-state-icon" aria-hidden="true">{icon}</span> : <Bot {...botAt(title.length)} size={56} mood="idle" phase={title.length % 4} />}
       <h3>{title}</h3>
       {children && <p>{children}</p>}
       {action}

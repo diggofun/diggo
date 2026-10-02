@@ -97,8 +97,7 @@ export function WatchlistPanel({ tokens = [], onSelectCoin, onConnect }: Watchli
       {rows.length === 0 ? (
         <div className="empty-state">
           <p>
-            Nothing watched yet. Tap the star on any coin to keep it here
-            {watchlist.signedIn ? "." : ", and it stays in this browser until you sign in."}
+            Nothing watched yet. Tap the star on any coin to keep it here.
           </p>
           {!watchlist.signedIn && onConnect && (
             <button type="button" className="btn btn-primary btn-sm" onClick={onConnect}>

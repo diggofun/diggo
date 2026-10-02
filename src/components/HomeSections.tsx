@@ -22,7 +22,6 @@ import {
   IconMine,
   IconOre,
   IconPlus,
-  IconRocket,
   IconStreak,
   IconTimer,
   IconWallet,
@@ -37,7 +36,7 @@ import { BrandMark } from "./AppHeader";
 import { LEGAL_ROUTES } from "./legal/routes";
 import { EmptyState } from "./StatusViews";
 import { TokenOrb } from "./TokenOrb";
-import { Critter, critterAt, CRITTER_COLORS } from "./Critter";
+import { Bot, botAt, BOT_COLORS } from "./Bot";
 
 export function HomeHero({
   featured,
@@ -80,10 +79,8 @@ export function HomeHero({
           Run a <span>mining crew.</span>
         </h1>
         <p className="hero-lead">
-          <strong>Diggo.fun is a Solana memecoin launchpad with a mining game built in.</strong>{" "}
-          Creators launch fixed-supply coins on a Meteora bonding curve. Players put a crew to work
-          in those coins&apos; mines once a day and claim what they dig up straight to their own
-          wallet.
+          Launch a memecoin on Solana, or send your bots to mine one.
+          <strong> What they dig up, you claim to your own wallet.</strong>
         </p>
         <div className="hero-actions">
           <a className="btn btn-primary btn-lg" href="/mine">
@@ -94,9 +91,9 @@ export function HomeHero({
           </a>
         </div>
         <ul className="trust-row" aria-label="Safeguards">
-          <li><IconLock size={15} /> Fixed supply, mint revoked</li>
-          <li><IconLandmark size={15} /> Funded mining vault</li>
-          <li><IconWallet size={15} /> Every payout signed by you</li>
+          <li><IconLock size={15} /> Fixed supply</li>
+          <li><IconLandmark size={15} /> Funded vault</li>
+          <li><IconWallet size={15} /> You sign every payout</li>
         </ul>
       </div>
 
@@ -109,7 +106,7 @@ export function HomeHero({
             </div>
             <span className="active-pill idle"><i /> Empty</span>
           </div>
-          <CritterMine symbols={[]} fast={false} layer={1} paused />
+          <BotMine symbols={[]} fast={false} layer={1} paused />
           <div className="empty-body">
             <p>
               No token has been launched on this protocol yet, so there is nothing to mine. Block
@@ -131,7 +128,7 @@ export function HomeHero({
               <i /> {isMiningActive ? "Crew active" : player ? "Crew paused" : "Not activated"}
             </span>
           </div>
-          <CritterMine
+          <BotMine
             symbols={[featured.symbol, ...coinSymbols.filter((symbol) => symbol !== featured.symbol)]}
             fast={isMiningActive}
             layer={Math.max(1, Math.round((100 - reservePercent) / 15))}
@@ -177,30 +174,30 @@ export function HomeHero({
 }
 
 /**
- * The hero's mine: four critters, each a different shape and colour, swinging at a seam while the
+ * The hero's mine: four bots, each a different shape and colour, swinging at a seam while the
  * coins they knock loose float up. Decorative only - the tickers are real listed coins, but nothing
  * here reports what any player has mined.
  */
-function CritterMine({ symbols, fast, layer, paused = false }: { symbols: string[]; fast: boolean; layer: number; paused?: boolean }) {
+function BotMine({ symbols, fast, layer, paused = false }: { symbols: string[]; fast: boolean; layer: number; paused?: boolean }) {
   const crew = [0, 1, 2, 3];
   const tempo = fast ? 0.7 : 1.05;
   return (
-    <div className={"critter-mine" + (paused ? " is-paused" : "")} aria-hidden="true" style={{ "--critter-tempo": tempo + "s" } as CSSProperties}>
-      <div className="critter-mine-hud">
+    <div className={"bot-mine" + (paused ? " is-paused" : "")} aria-hidden="true" style={{ "--bot-tempo": tempo + "s" } as CSSProperties}>
+      <div className="bot-mine-hud">
         <span>Layer <b>0{layer}</b></span>
         <span>{paused ? "Crew waiting for a mine" : fast ? "Crew digging" : "Crew on standby"}</span>
       </div>
-      <div className="critter-mine-ground" />
-      <div className="critter-mine-row" style={{ "--crew": crew.length } as CSSProperties}>
+      <div className="bot-mine-ground" />
+      <div className="bot-mine-row" style={{ "--crew": crew.length } as CSSProperties}>
         {crew.map((index) => {
-          const look = critterAt(index);
+          const look = botAt(index);
           const phase = index * 0.23;
           return (
-            <div className="critter-slot" key={index}>
-              <Critter shape={look.shape} color={look.color} mood={paused ? "idle" : "dig"} phase={phase} tempo={tempo} />
-              <span className="critter-rock" style={{ "--rock-vein": CRITTER_COLORS[(index * 3 + 5) % CRITTER_COLORS.length] } as CSSProperties} />
+            <div className="bot-slot" key={index}>
+              <Bot shape={look.shape} color={look.color} mood={paused ? "idle" : "dig"} phase={phase} tempo={tempo} />
+              <span className="bot-rock" style={{ "--rock-vein": BOT_COLORS[(index * 3 + 5) % BOT_COLORS.length] } as CSSProperties} />
               {!paused && symbols.length > 0 && (
-                <span className="critter-coin" style={{ "--coin-delay": -(phase + index * tempo) + "s" } as CSSProperties}>
+                <span className="bot-coin" style={{ "--coin-delay": -(phase + index * tempo) + "s" } as CSSProperties}>
                   ${symbols[index % symbols.length]}
                 </span>
               )}
@@ -484,73 +481,52 @@ export function SelectedMine({
 
 /**
  * The plain-language explainer: what the product is, who it is for, and which parts are real
- * on-chain assets versus game progression. Copy mirrors docs/FAQ.md; keep the two in step.
+ * on-chain assets versus game progression. Kept short on purpose; docs/FAQ.md has the long form.
  */
 export function AboutDiggo() {
   return (
     <section className="about-section page-shell" id="about" aria-labelledby="about-title">
       <div className="about-intro">
         <span className="section-kicker">What is Diggo.fun?</span>
-        <h2 id="about-title">A launchpad<br />with a mine<br />under it.</h2>
-        <p>
-          Most launchpads stop at the launch. Diggo keeps people coming back: every coin launched
-          here becomes a <strong>mine</strong>, and players run a <strong>crew</strong> that digs
-          those coins out day after day. Creators get a market and a reason for players to show up.
-          Players get a daily game that pays out in real memecoins.
-        </p>
+        <h2 id="about-title">A launchpad<br />with a mine under it.</h2>
+        <p>Every coin launched here becomes a mine. Your bots dig it daily. What they find is yours.</p>
+      </div>
+      <div className="bot-parade" aria-hidden="true">
+        {Array.from({ length: 8 }, (_, index) => (
+          <Bot key={index} {...botAt(index + 2)} size={56} mood={index % 3 === 0 ? "busy" : "idle"} phase={index * 0.45} />
+        ))}
       </div>
       <div className="about-audiences">
         <article className="audience-card">
-          <span className="audience-critters">
-            <Critter shape="blob" color="#ff6a00" size={48} mood="dig" phase={0.1} />
-            <Critter shape="drop" color="#3b82f6" size={40} mood="idle" phase={1.2} />
-          </span>
-          <h3>For players</h3>
+          <h3>Players</h3>
           <ul>
-            <li><IconCheck size={14} /> Connect a Solana wallet and open a 24-hour mining shift.</li>
-            <li><IconCheck size={14} /> Your crew mines while the shift runs, even with the tab closed.</li>
-            <li><IconCheck size={14} /> Mined memecoins collect in Discoveries.</li>
-            <li><IconCheck size={14} /> Claim up to 12 coins in one wallet-signed transaction.</li>
-            <li><IconCheck size={14} /> Earn ORE to upgrade Miners, Drills and Carts.</li>
+            <li><IconCheck size={14} /> Open a 24-hour shift</li>
+            <li><IconCheck size={14} /> Bots dig while you&apos;re away</li>
+            <li><IconCheck size={14} /> Claim up to 12 coins at once</li>
           </ul>
           <a className="btn btn-primary" href="/mine">Start mining <IconMine size={18} /></a>
         </article>
         <article className="audience-card is-dark">
-          <span className="audience-critters">
-            <Critter shape="hexagon" color="#a855f7" size={48} mood="busy" phase={0.4} />
-            <span className="audience-rocket"><IconRocket size={20} /></span>
-          </span>
-          <h3>For creators</h3>
+          <h3>Creators</h3>
           <ul>
-            <li><IconCheck size={14} /> Launch a fixed-supply SPL coin from your own wallet.</li>
-            <li><IconCheck size={14} /> Trading runs on a Meteora Dynamic Bonding Curve from block one.</li>
-            <li><IconCheck size={14} /> Your coin becomes a mine that players work every day.</li>
-            <li><IconCheck size={14} /> Mint authority is revoked, so supply can never grow.</li>
-            <li><IconCheck size={14} /> Leftover supply is held in the mining vault for player payouts.</li>
+            <li><IconCheck size={14} /> Launch a fixed-supply coin</li>
+            <li><IconCheck size={14} /> Trade on Meteora from block one</li>
+            <li><IconCheck size={14} /> Players mine it every day</li>
           </ul>
           <a className="btn btn-primary" href="/create">Launch a coin <IconArrowUpRight size={18} /></a>
         </article>
       </div>
       <div className="about-ledger" role="group" aria-label="What is real and what is game">
         <div className="ledger-col">
-          <h3><span className="ledger-tag is-real">Real, on Solana</span></h3>
-          <ul>
-            <li><b>Memecoins</b> you mine are real SPL tokens in your wallet once claimed.</li>
-            <li><b>Trades and launches</b> settle on chain through Meteora.</li>
-            <li><b>Every payout</b> is a transaction you review and sign yourself.</li>
-          </ul>
+          <span className="ledger-tag is-real">Real</span>
+          <p>Memecoins you claim are SPL tokens in your wallet.</p>
         </div>
         <div className="ledger-col">
-          <h3><span className="ledger-tag is-game">Game progression only</span></h3>
-          <ul>
-            <li><b>ORE</b> is earned by playing and spent on crew upgrades.</li>
-            <li><b>Mining Power</b> and crew levels decide your share of each block.</li>
-            <li>None of these are tokens: they cannot be bought, sold, transferred or withdrawn.</li>
-          </ul>
+          <span className="ledger-tag is-game">Game only</span>
+          <p>ORE and Mining Power are earned by playing. Never sold, never withdrawn.</p>
         </div>
         <p className="ledger-note">
-          <IconWarning size={15} /> Memecoin prices can rise, fall or go to zero. Mining rewards
-          are not guaranteed and nothing here is investment advice.
+          <IconWarning size={15} /> Memecoins can go to zero. Rewards aren&apos;t guaranteed.
         </p>
       </div>
     </section>
@@ -558,26 +534,10 @@ export function AboutDiggo() {
 }
 
 const MINING_DAY: { icon: ReactNode; title: string; body: string }[] = [
-  {
-    icon: <IconWallet />,
-    title: "Connect & activate",
-    body: "Sign in with your Solana wallet and open a 24-hour shift. Come back each day to keep your streak.",
-  },
-  {
-    icon: <IconCrew />,
-    title: "Your crew digs",
-    body: "Diggo assigns an eligible mine at random. Your crew works it for the whole shift, even while the browser is closed.",
-  },
-  {
-    icon: <IconDiscoveries />,
-    title: "Collect discoveries",
-    body: "Mined memecoins accrue in Discoveries. Coins still on their bonding curve stay pending until the pool graduates.",
-  },
-  {
-    icon: <IconClaim />,
-    title: "Claim all",
-    body: "One transaction pays out up to 12 different coins. You approve it in your wallet; Diggo never moves funds for you.",
-  },
+  { icon: <IconWallet />, title: "Activate", body: "Open a 24-hour shift from your wallet." },
+  { icon: <IconCrew />, title: "Bots dig", body: "They mine a random coin, even with the tab closed." },
+  { icon: <IconDiscoveries />, title: "Discover", body: "Mined coins pile up in Discoveries." },
+  { icon: <IconClaim />, title: "Claim all", body: "Up to 12 coins in one signed transaction." },
 ];
 
 export function HowItWorks() {
@@ -587,19 +547,15 @@ export function HowItWorks() {
         <div className="section-heading light">
           <div>
             <span className="section-kicker">How it works</span>
-            <h2>One mining day,<br />four steps.</h2>
+            <h2>About a minute a day.</h2>
           </div>
-          <p>
-            The whole loop takes a minute of your time per day. Wallet signatures authorize every
-            account, claim and launch action.
-          </p>
         </div>
         <ol className="steps">
           {MINING_DAY.map((step, index) => (
             <li key={step.title}>
               <b>{String(index + 1).padStart(2, "0")}</b>
-              <span className="step-critter">
-                <Critter {...critterAt(index + 4)} size={58} mood={index === 1 ? "dig" : index === 3 ? "busy" : "idle"} phase={index * 0.6} />
+              <span className="step-bot">
+                <Bot {...botAt(index + 4)} size={58} mood={index === 1 ? "dig" : index === 3 ? "busy" : "idle"} phase={index * 0.6} />
                 <span className="step-icon">{step.icon}</span>
               </span>
               <h3>{step.title}</h3>
@@ -613,41 +569,23 @@ export function HowItWorks() {
 }
 
 const HOME_FAQ: { q: string; a: string }[] = [
-  {
-    q: "Do I need to pay to play?",
-    a: "Mining itself is not sold: Mining Power is earned, never bought. You need a Solana wallet with a little SOL to cover network fees when you sign activation and claim transactions.",
-  },
-  {
-    q: "What exactly do I receive when I claim?",
-    a: "Real SPL memecoins, sent to the wallet that signed the claim. Claim all bundles up to 12 distinct coins per transaction; if you have more, run it again for the rest.",
-  },
-  {
-    q: "Why is part of my reward marked pending?",
-    a: "Rewards from a coin that is still on its bonding curve accrue but stay pending. They become claimable after that coin's Meteora pool graduates and its mining inventory reaches the vault.",
-  },
-  {
-    q: "Are ORE and Mining Power crypto tokens?",
-    a: "No. They are game progression stored by Diggo. They have no market price and cannot be transferred, withdrawn or bought with SOL or memecoins.",
-  },
-  {
-    q: "Who holds my coins?",
-    a: "You do. Trades and payouts are transactions your own wallet signs. Leftover launch supply sits in the mining vault and is only paid out to players through claims.",
-  },
-  {
-    q: "What does it cost to launch a coin?",
-    a: "Your wallet signs the launch and covers its network and account costs, plus an optional initial buy that becomes real curve liquidity. The current launch configuration sets the creator trading fee to 0%.",
-  },
+  { q: "Does it cost anything to play?", a: "No. You only need a little SOL for network fees." },
+  { q: "What do I get when I claim?", a: "Real SPL memecoins, sent to the wallet that signs the claim." },
+  { q: "Why is some of my reward pending?", a: "Coins still on their bonding curve pay out once they graduate." },
+  { q: "Are ORE and Mining Power tokens?", a: "No. They're game progress: you can't buy, sell or withdraw them." },
+  { q: "Who holds my coins?", a: "You do. Every payout is a transaction your own wallet signs." },
+  { q: "What does a launch cost?", a: "Network costs, plus an optional first buy. Creator trading fee is 0%." },
 ];
 
 export function HomeFaq() {
   return (
     <section className="home-faq page-shell" id="faq" aria-labelledby="faq-title">
       <div className="home-faq-intro">
-        <span className="section-kicker">Questions</span>
-        <h2 id="faq-title">Straight<br />answers.</h2>
+        <span className="section-kicker">FAQ</span>
+        <h2 id="faq-title">Quick answers.</h2>
         <p>
-          Still unsure? Read the <a href="/terms">Terms</a> and <a href="/risk">Risk notice</a>, or
-          ask us on <a href="https://x.com/Diggo_Fun" target="_blank" rel="noopener noreferrer">X</a>.
+          More in the <a href="/terms">Terms</a> and <a href="/risk">Risk notice</a>, or ask us
+          on <a href="https://x.com/Diggo_Fun" target="_blank" rel="noopener noreferrer">X</a>.
         </p>
       </div>
       <div className="faq-list">
@@ -667,13 +605,13 @@ export function FinalCta({ onLaunch }: { onLaunch(): void }) {
     <section className="final-cta">
       <div className="page-shell">
         <span className="huge-pick final-cta-crew" aria-hidden="true">
-          <Critter shape="pill" color="#ff6a00" size={64} mood="dig" phase={0.2} />
-          <Critter shape="cloud" color="#06b6d4" size={52} mood="busy" phase={0.7} />
-          <Critter shape="triangle" color="#ec4899" size={46} mood="attention" phase={1.1} />
+          <Bot shape="pill" color="#ff6a00" size={64} mood="dig" phase={0.2} />
+          <Bot shape="cloud" color="#06b6d4" size={52} mood="busy" phase={0.7} />
+          <Bot shape="triangle" color="#ec4899" size={46} mood="attention" phase={1.1} />
         </span>
         <div>
           <h2>Mine or launch.</h2>
-          <p className="final-cta-sub">Pick a side. Both end up in the same mine.</p>
+          <p className="final-cta-sub">Both end up in the same mine.</p>
         </div>
         <div className="hero-actions">
           <a className="btn btn-dark btn-lg" href="/mine">Start mining <IconMine size={20} /></a>

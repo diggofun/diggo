@@ -59,7 +59,7 @@ import { crewPower } from "../shared/economics";
 import { crewTier } from "../shared/crew";
 import { MeteoraCrewScreen, MeteoraDiscoveriesScreen, MeteoraMineDashboard, MeteoraPortfolioScreen } from "./components/MeteoraGameScreens";
 import { RouteErrorBoundary } from "./components/RouteErrorBoundary";
-import { CritterDefs } from "./components/Critter";
+import { BotDefs } from "./components/Bot";
 
 /*
  * Every screen below the landing page is its own chunk: the swap terminal (lightweight-charts and
@@ -913,7 +913,7 @@ export default function App() {
 
   return (
     <div className={"app page-" + page}>
-      <CritterDefs />
+      <BotDefs />
       <a className="skip-link" href="#content">Skip to content</a>
       <AppHeader
         page={page}
@@ -968,7 +968,7 @@ export default function App() {
                 onSelectCoin={openTokenPage}
                 onConnect={() => requestWalletMenu("watchlist")}
               />
-              {economy}
+              {signedIn && economy}
               <HowItWorks />
               <HomeFaq />
               <FinalCta onLaunch={openLaunch} />

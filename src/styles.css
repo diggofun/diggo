@@ -1859,9 +1859,9 @@ body.has-modal { overflow: hidden; }
 }
 
 /* ------------------------------------------------------------------------------------------------
-   Critters - the crew (src/components/Critter.tsx). Motion ported from LowBot's ghosts:
+   Bots - the crew (src/components/Bot.tsx). Motion ported from LowBot's ghosts:
    idle float + look around + blink, busy hop with darting eyes, attention wiggle, tap squish.
-   Diggo adds "dig": the critter leans in and swings its pickaxe, with sparks on the strike.
+   Diggo adds "dig": the bot leans in and swings its pickaxe, with sparks on the strike.
    ------------------------------------------------------------------------------------------------ */
 @keyframes lbFloat { 0%, 100% { transform: translateY(0) rotate(0deg); } 25% { transform: translateY(-2.5px) rotate(-1.5deg); } 75% { transform: translateY(-1px) rotate(1.5deg); } }
 @keyframes lbHop { 0%, 100% { transform: translateY(0) scale(1, 1); } 15% { transform: translateY(0) scale(1.08, .9); } 45% { transform: translateY(-14%) scale(.95, 1.06); } 70% { transform: translateY(0) scale(1.06, .94); } 85% { transform: translateY(0) scale(.98, 1.02); } }
@@ -1874,64 +1874,60 @@ body.has-modal { overflow: hidden; }
 @keyframes lbRise { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
 @keyframes lbPop { 0% { opacity: 0; transform: scale(.6); } 70% { opacity: 1; transform: scale(1.08); } 100% { transform: scale(1); } }
 /* Dig: wind up (lean back, pick raised), strike (squash forward, pick down), recover. */
-@keyframes critterDigBody { 0%, 100% { transform: rotate(-4deg) translateY(0) scale(1, 1); } 40% { transform: rotate(-8deg) translateY(-3%) scale(.97, 1.04); } 58% { transform: rotate(7deg) translateY(2%) scale(1.07, .92); } 72% { transform: rotate(2deg) translateY(0) scale(.99, 1.01); } }
-@keyframes critterSwing { 0%, 100% { transform: rotate(-30deg); } 40% { transform: rotate(-52deg); } 58% { transform: rotate(68deg); } 72% { transform: rotate(52deg); } }
-@keyframes critterSpark { 0%, 54% { opacity: 0; transform: rotate(var(--a)) translateY(0) scaleY(.3); } 60% { opacity: 1; transform: rotate(var(--a)) translateY(-6px) scaleY(1); } 80%, 100% { opacity: 0; transform: rotate(var(--a)) translateY(-16px) scaleY(.4); } }
+@keyframes botDigBody { 0%, 100% { transform: rotate(-4deg) translateY(0) scale(1, 1); } 40% { transform: rotate(-8deg) translateY(-3%) scale(.97, 1.04); } 58% { transform: rotate(7deg) translateY(2%) scale(1.07, .92); } 72% { transform: rotate(2deg) translateY(0) scale(.99, 1.01); } }
+@keyframes botSwing { 0%, 100% { transform: rotate(-30deg); } 40% { transform: rotate(-52deg); } 58% { transform: rotate(68deg); } 72% { transform: rotate(52deg); } }
+@keyframes botSpark { 0%, 54% { opacity: 0; transform: rotate(var(--a)) translateY(0) scaleY(.3); } 60% { opacity: 1; transform: rotate(var(--a)) translateY(-6px) scaleY(1); } 80%, 100% { opacity: 0; transform: rotate(var(--a)) translateY(-16px) scaleY(.4); } }
 
-.critter { position: relative; display: inline-flex; flex: none; align-items: center; justify-content: center; --critter-tempo: .9s; -webkit-tap-highlight-color: transparent; }
-.critter-svg { width: 100%; height: 100%; overflow: visible; display: block; }
-.critter-body { transform-box: view-box; transform-origin: 50% 85%; animation: lbFloat 4.2s ease-in-out infinite; animation-delay: var(--critter-phase, 0s); }
-.critter-eyes { animation: lbLook 7s ease-in-out infinite; animation-delay: var(--critter-phase, 0s); }
-.critter-eye { transform-box: fill-box; transform-origin: center; animation: lbBlink 5s infinite; animation-delay: var(--critter-phase, 0s); }
-.critter.is-busy .critter-body { animation: lbHop .9s cubic-bezier(.3, 0, .3, 1) infinite; animation-delay: var(--critter-phase, 0s); }
-.critter.is-busy .critter-eyes, .critter.is-dig .critter-eyes { animation: lbDart 1.8s steps(1, end) infinite; animation-delay: var(--critter-phase, 0s); }
-.critter.is-attention .critter-body { animation: lbWiggle 2.4s ease-in-out infinite; }
-.critter.is-dig .critter-body { animation: critterDigBody var(--critter-tempo) cubic-bezier(.5, 0, .3, 1) infinite; animation-delay: var(--critter-phase, 0s); }
-.critter-tool { transform-box: view-box; transform-origin: 80px 64px; transform: rotate(-20deg); }
-.critter.is-dig .critter-tool { animation: critterSwing var(--critter-tempo) cubic-bezier(.6, 0, .25, 1) infinite; animation-delay: var(--critter-phase, 0s); }
-.critter.is-squish .critter-body { animation: lbSquish .45s var(--ease-spring) 1; }
-.critter-shadow { position: absolute; left: 20%; right: 20%; bottom: 0; height: 8%; border-radius: 50%; background: #000; filter: blur(2px); animation: lbShadow .9s ease-in-out infinite; }
-.critter.is-dig .critter-shadow { animation-duration: var(--critter-tempo); animation-delay: var(--critter-phase, 0s); }
-.critter-sparks { position: absolute; left: 118%; top: 64%; width: 0; height: 0; pointer-events: none; }
-.critter-sparks i { position: absolute; left: -2px; top: -12px; width: 4px; height: 12px; border-radius: 4px; background: #fde68a; box-shadow: 0 0 8px rgba(253, 230, 138, .8); transform-origin: 2px 12px; opacity: 0; animation: critterSpark var(--critter-tempo) ease-out infinite; animation-delay: var(--critter-phase, 0s); }
-.critter-sparks i:nth-child(1) { --a: -50deg; }
-.critter-sparks i:nth-child(2) { --a: 0deg; }
-.critter-sparks i:nth-child(3) { --a: 50deg; }
-.critter.is-still .critter-body, .critter.is-still .critter-eyes, .critter.is-still .critter-eye, .critter.is-still .critter-tool { animation: none; }
+.bot { position: relative; display: inline-flex; flex: none; align-items: center; justify-content: center; --bot-tempo: .9s; -webkit-tap-highlight-color: transparent; }
+.bot-svg { width: 100%; height: 100%; overflow: visible; display: block; }
+.bot-body { transform-box: view-box; transform-origin: 50% 85%; animation: lbFloat 4.2s ease-in-out infinite; animation-delay: var(--bot-phase, 0s); }
+.bot-eyes { animation: lbLook 7s ease-in-out infinite; animation-delay: var(--bot-phase, 0s); }
+.bot-eye { transform-box: fill-box; transform-origin: center; animation: lbBlink 5s infinite; animation-delay: var(--bot-phase, 0s); }
+.bot.is-busy .bot-body { animation: lbHop .9s cubic-bezier(.3, 0, .3, 1) infinite; animation-delay: var(--bot-phase, 0s); }
+.bot.is-busy .bot-eyes, .bot.is-dig .bot-eyes { animation: lbDart 1.8s steps(1, end) infinite; animation-delay: var(--bot-phase, 0s); }
+.bot.is-attention .bot-body { animation: lbWiggle 2.4s ease-in-out infinite; }
+.bot.is-dig .bot-body { animation: botDigBody var(--bot-tempo) cubic-bezier(.5, 0, .3, 1) infinite; animation-delay: var(--bot-phase, 0s); }
+.bot-tool { transform-box: view-box; transform-origin: 80px 64px; transform: rotate(-20deg); }
+.bot.is-dig .bot-tool { animation: botSwing var(--bot-tempo) cubic-bezier(.6, 0, .25, 1) infinite; animation-delay: var(--bot-phase, 0s); }
+.bot.is-squish .bot-body { animation: lbSquish .45s var(--ease-spring) 1; }
+.bot-shadow { position: absolute; left: 20%; right: 20%; bottom: 0; height: 8%; border-radius: 50%; background: #000; filter: blur(2px); animation: lbShadow .9s ease-in-out infinite; }
+.bot.is-dig .bot-shadow { animation-duration: var(--bot-tempo); animation-delay: var(--bot-phase, 0s); }
+.bot-sparks { position: absolute; left: 118%; top: 64%; width: 0; height: 0; pointer-events: none; }
+.bot-sparks i { position: absolute; left: -2px; top: -12px; width: 4px; height: 12px; border-radius: 4px; background: #fde68a; box-shadow: 0 0 8px rgba(253, 230, 138, .8); transform-origin: 2px 12px; opacity: 0; animation: botSpark var(--bot-tempo) ease-out infinite; animation-delay: var(--bot-phase, 0s); }
+.bot-sparks i:nth-child(1) { --a: -50deg; }
+.bot-sparks i:nth-child(2) { --a: 0deg; }
+.bot-sparks i:nth-child(3) { --a: 50deg; }
+.bot.is-still .bot-body, .bot.is-still .bot-eyes, .bot.is-still .bot-eye, .bot.is-still .bot-tool { animation: none; }
 
-/* The home hero's mine: a line of critters swinging at a seam of memecoins. */
-.critter-mine { position: relative; height: 270px; overflow: hidden; background:
+/* The home hero's mine: a line of bots swinging at a seam of memecoins. */
+.bot-mine { position: relative; height: 270px; overflow: hidden; background:
   radial-gradient(120% 80% at 50% 0%, rgba(255, 106, 0, .14), transparent 60%),
   linear-gradient(180deg, #17171a 0%, #111113 58%, #0c0c0e 100%); }
-.critter-mine::before { content: ""; position: absolute; inset: 0; opacity: .5; background-image: radial-gradient(rgba(255,255,255,.07) 1px, transparent 1px); background-size: 18px 18px; }
-.critter-mine-ground { position: absolute; left: 0; right: 0; bottom: 0; height: 64px; background: linear-gradient(180deg, #232327, #18181b); border-top: 1px solid rgba(255,255,255,.08); }
-.critter-mine-ground::before { content: ""; position: absolute; inset: 10px 0 0; background: repeating-linear-gradient(100deg, transparent 0 26px, rgba(255,255,255,.035) 26px 28px); }
-.critter-mine-row { position: absolute; left: 0; right: 0; bottom: 52px; display: grid; grid-template-columns: repeat(var(--crew, 4), 1fr); align-items: end; padding-inline: 4%; }
-.critter-slot { position: relative; display: flex; align-items: flex-end; justify-content: flex-start; height: 120px; padding-left: 6%; }
-.critter-slot .critter { width: clamp(46px, 6vw, 68px) !important; height: clamp(46px, 6vw, 68px) !important; z-index: 2; }
-.critter-rock { position: absolute; left: calc(6% + clamp(46px, 6vw, 68px) * 1.05); bottom: -8px; width: clamp(30px, 3.6vw, 42px); height: clamp(22px, 2.6vw, 30px); border-radius: 46% 54% 40% 60% / 60% 55% 45% 40%; background: linear-gradient(160deg, #3f3f46, #27272a); box-shadow: inset 0 2px 0 rgba(255,255,255,.08); z-index: 1; }
-.critter-rock::after { content: ""; position: absolute; left: 30%; top: 30%; width: 34%; height: 34%; border-radius: 50%; background: var(--rock-vein, #eab308); opacity: .75; filter: blur(.5px); }
-.critter-coin { position: absolute; left: calc(6% + clamp(46px, 6vw, 68px) * 1.05); bottom: 8px; z-index: 3; min-width: 30px; height: 30px; padding: 0 7px; display: grid; place-items: center; border-radius: 999px; background: linear-gradient(160deg, #fde68a, #eab308 60%, #b45309); color: #1c1917; font: 800 9px/1 var(--font-mono); box-shadow: 0 6px 14px -4px rgba(234, 179, 8, .55), inset 0 1px 0 rgba(255,255,255,.6); opacity: 0; animation: critterCoin calc(var(--critter-tempo, .9s) * 3) var(--ease-out) infinite; animation-delay: var(--coin-delay, 0s); white-space: nowrap; }
-@keyframes critterCoin { 0%, 18% { opacity: 0; transform: translate(0, 0) scale(.4) rotate(0deg); } 22% { opacity: 1; transform: translate(4px, -18px) scale(1.05) rotate(-8deg); } 60% { opacity: 1; transform: translate(18px, -86px) scale(1) rotate(10deg); } 78%, 100% { opacity: 0; transform: translate(26px, -120px) scale(.85) rotate(16deg); } }
-.critter-mine-hud { position: absolute; left: 16px; right: 16px; top: 14px; display: flex; justify-content: space-between; gap: 10px; z-index: 4; }
-.critter-mine-hud span { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; background: rgba(20, 20, 20, .6); border: 1px solid rgba(255,255,255,.08); color: var(--muted); font: 600 11px/1 var(--font-sans); backdrop-filter: blur(8px); }
-.critter-mine-hud b { color: var(--fg); font-weight: 700; }
-.critter-mine.is-paused .critter-coin { animation-play-state: paused; opacity: 0; }
+.bot-mine::before { content: ""; position: absolute; inset: 0; opacity: .5; background-image: radial-gradient(rgba(255,255,255,.07) 1px, transparent 1px); background-size: 18px 18px; }
+.bot-mine-ground { position: absolute; left: 0; right: 0; bottom: 0; height: 64px; background: linear-gradient(180deg, #232327, #18181b); border-top: 1px solid rgba(255,255,255,.08); }
+.bot-mine-ground::before { content: ""; position: absolute; inset: 10px 0 0; background: repeating-linear-gradient(100deg, transparent 0 26px, rgba(255,255,255,.035) 26px 28px); }
+.bot-mine-row { position: absolute; left: 0; right: 0; bottom: 52px; display: grid; grid-template-columns: repeat(var(--crew, 4), 1fr); align-items: end; padding-inline: 4%; }
+.bot-slot { position: relative; display: flex; align-items: flex-end; justify-content: flex-start; height: 120px; padding-left: 6%; }
+.bot-slot .bot { width: clamp(46px, 6vw, 68px) !important; height: clamp(46px, 6vw, 68px) !important; z-index: 2; }
+.bot-rock { position: absolute; left: calc(6% + clamp(46px, 6vw, 68px) * 1.05); bottom: -8px; width: clamp(30px, 3.6vw, 42px); height: clamp(22px, 2.6vw, 30px); border-radius: 46% 54% 40% 60% / 60% 55% 45% 40%; background: linear-gradient(160deg, #3f3f46, #27272a); box-shadow: inset 0 2px 0 rgba(255,255,255,.08); z-index: 1; }
+.bot-rock::after { content: ""; position: absolute; left: 30%; top: 30%; width: 34%; height: 34%; border-radius: 50%; background: var(--rock-vein, #eab308); opacity: .75; filter: blur(.5px); }
+.bot-coin { position: absolute; left: calc(6% + clamp(46px, 6vw, 68px) * 1.05); bottom: 8px; z-index: 3; min-width: 30px; height: 30px; padding: 0 7px; display: grid; place-items: center; border-radius: 999px; background: linear-gradient(160deg, #fde68a, #eab308 60%, #b45309); color: #1c1917; font: 800 9px/1 var(--font-mono); box-shadow: 0 6px 14px -4px rgba(234, 179, 8, .55), inset 0 1px 0 rgba(255,255,255,.6); opacity: 0; animation: botCoin calc(var(--bot-tempo, .9s) * 3) var(--ease-out) infinite; animation-delay: var(--coin-delay, 0s); white-space: nowrap; }
+@keyframes botCoin { 0%, 18% { opacity: 0; transform: translate(0, 0) scale(.4) rotate(0deg); } 22% { opacity: 1; transform: translate(4px, -18px) scale(1.05) rotate(-8deg); } 60% { opacity: 1; transform: translate(18px, -86px) scale(1) rotate(10deg); } 78%, 100% { opacity: 0; transform: translate(26px, -120px) scale(.85) rotate(16deg); } }
+.bot-mine-hud { position: absolute; left: 16px; right: 16px; top: 14px; display: flex; justify-content: space-between; gap: 10px; z-index: 4; }
+.bot-mine-hud span { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; background: rgba(20, 20, 20, .6); border: 1px solid rgba(255,255,255,.08); color: var(--muted); font: 600 11px/1 var(--font-sans); backdrop-filter: blur(8px); }
+.bot-mine-hud b { color: var(--fg); font-weight: 700; }
+.bot-mine.is-paused .bot-coin { animation-play-state: paused; opacity: 0; }
 
-/* Critters standing in for the miner sprites on the mine illustration. */
-.diorama-critter { position: absolute; aspect-ratio: 1; display: flex; align-items: flex-end; justify-content: center; z-index: 3; pointer-events: auto; }
-.diorama-critter .critter { width: 62% !important; height: 62% !important; margin-bottom: 2%; filter: drop-shadow(0 4px 6px rgba(0,0,0,.45)); }
+/* Bots standing in for the miner sprites on the mine illustration. */
+.diorama-bot { position: absolute; aspect-ratio: 1; display: flex; align-items: flex-end; justify-content: center; z-index: 3; pointer-events: auto; }
+.diorama-bot .bot { width: 62% !important; height: 62% !important; margin-bottom: 2%; filter: drop-shadow(0 4px 6px rgba(0,0,0,.45)); }
 
 @media (prefers-reduced-motion: reduce) {
-  .critter-body, .critter-eyes, .critter-eye, .critter-tool, .critter-shadow, .critter-sparks i, .critter-coin { animation: none !important; }
-  .critter-coin { opacity: 0; }
+  .bot-body, .bot-eyes, .bot-eye, .bot-tool, .bot-shadow, .bot-sparks i, .bot-coin { animation: none !important; }
+  .bot-coin { opacity: 0; }
 }
 
-.step-critter { position: relative; display: inline-flex; width: 64px; height: 64px; align-items: flex-end; }
-.step-critter .step-icon { position: absolute; right: -14px; bottom: -6px; width: 30px; height: 30px; border-radius: 50%; background: var(--control); color: var(--fg); border: 2px solid var(--surface-deep); font-size: 14px; }
-.how-section .steps li:hover .critter-body { animation: lbHop .9s cubic-bezier(.3, 0, .3, 1) infinite; }
-.audience-critters { display: inline-flex; align-items: flex-end; gap: 6px; height: 56px; }
-.audience-rocket { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; background: var(--control); color: var(--fg); }
+.audience-bots { display: inline-flex; align-items: flex-end; gap: 6px; height: 56px; }
 
 /* ------------------------------------------------------------------------------------------------
    LowBot component layer. Placed last so it wins over the converted legacy rules above:
@@ -2083,7 +2079,7 @@ main h1 > span::after { display: none; }
 main#content h1 > span { color: transparent; background: linear-gradient(90deg, #ff6a00, #ec4899 55%, #a855f7); -webkit-background-clip: text; background-clip: text; }
 .loading-screen { text-transform: none; letter-spacing: 0; font: 600 14px/1 var(--font-sans); }
 .loading-crew { display: inline-flex; align-items: flex-end; gap: 12px; height: 64px; }
-.empty-state > .critter { margin-bottom: var(--space-2); }
+.empty-state > .bot { margin-bottom: var(--space-2); }
 .swap-tabs { border: 0; padding: 4px; gap: 4px; border-radius: 999px; background: var(--control); }
 .swap-tabs button { border: 0; border-radius: 999px; color: var(--muted); font: 600 14px/1 var(--font-sans); text-transform: none; letter-spacing: 0; transition: background-color .15s ease, color .15s ease; }
 .swap-tabs button.active { background: #fff; color: #0b0b0c; }
@@ -2099,5 +2095,47 @@ body { font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; 
 .btn-ghost:hover:not(:disabled), .outline-button:hover:not(:disabled) { background: var(--control-hover); }
 .app-sidebar { background: var(--surface-deep); }
 .mine-console { background: var(--card); }
-.critter-mine { background: radial-gradient(120% 80% at 50% 0%, rgba(255,255,255,.06), transparent 60%), linear-gradient(180deg, #232323 0%, #1b1b1b 58%, #171717 100%); }
-.critter-mine-ground { background: linear-gradient(180deg, #2c2c2c, #222); }
+.bot-mine { background: radial-gradient(120% 80% at 50% 0%, rgba(255,255,255,.06), transparent 60%), linear-gradient(180deg, #232323 0%, #1b1b1b 58%, #171717 100%); }
+.bot-mine-ground { background: linear-gradient(180deg, #2c2c2c, #222); }
+
+/* Elliptical controls: every button, chip and nav pill has fully rounded ends. */
+button:not(.token-card):not(.wallet-disconnect), .btn, [role="button"], .card-cta, .mint-address, .sidebar-link, .site-menu-link, .tab-bar a, .site-header nav a, .header-stats, .header-stat, .filter-tabs button, .candle-intervals, .candle-intervals button, .candle-currency, .candle-currency button, .consent-actions .btn, .wallet-menu > button, .notifications-bell, .badge, .economy-badge, .mono-label.badge, .devnet-chip, .active-pill, .change { border-radius: 999px; }
+.wallet-disconnect, .icon-button, .notifications-bell, .site-menu-toggle { border-radius: 50%; }
+
+/* About: one line of copy, a parade of bots, two short cards and a two-line ledger. */
+.about-section { grid-template-columns: 1fr 1fr; align-items: end; }
+.about-intro p { font-size: 19px; line-height: 1.5; max-width: 440px; }
+.bot-parade { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: flex-end; gap: 14px 18px; padding-bottom: 8px; }
+.bot-parade .bot:nth-child(odd) { margin-bottom: 10px; }
+.about-audiences { grid-column: 1 / -1; align-self: stretch; }
+.audience-card { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 14px 24px; }
+.audience-card h3 { flex: 0 0 100%; }
+.audience-card ul { flex: 1 1 260px; gap: 8px; }
+.audience-card li { font-size: 15px; }
+.audience-card .btn { align-self: flex-end; margin-top: 0; }
+.ledger-col { display: flex; align-items: center; gap: 14px; padding: 20px 24px; }
+.ledger-col p { margin: 0; color: var(--fg-2); font-size: 15px; line-height: 1.45; }
+.ledger-col .ledger-tag { flex: none; }
+.ledger-note { padding: 12px 24px; }
+.how-section { padding-block: 72px; }
+.how-section .section-heading { margin-bottom: 24px; }
+.how-section .steps li { min-height: 0; }
+.how-section .steps h3 { margin-top: 28px; }
+.step-bot { position: relative; display: inline-flex; width: 64px; height: 64px; align-items: flex-end; }
+.step-bot .step-icon { position: absolute; right: -14px; bottom: -6px; width: 30px; height: 30px; border-radius: 50%; background: var(--control); color: var(--fg); border: 2px solid var(--card); font-size: 14px; }
+.how-section .steps li:hover .bot-body { animation: lbHop .9s cubic-bezier(.3, 0, .3, 1) infinite; }
+.home-faq { padding-block: 72px; }
+.bot-lamp { filter: drop-shadow(0 0 3px rgba(255, 247, 204, .9)); }
+
+@media (max-width: 1180px) {
+  .about-section { grid-template-columns: 1fr; }
+  .bot-parade { justify-content: flex-start; }
+}
+@media (max-width: 760px) {
+  .bot-parade { gap: 10px 12px; }
+  .bot-parade .bot { width: 44px !important; height: 44px !important; }
+  .ledger-col { flex-direction: column; align-items: flex-start; gap: 8px; padding: 18px; }
+  .audience-card .btn { align-self: flex-start; }
+}
+.ui-bot-gallery { display: grid; gap: 18px; padding-block: 40px; }
+.ui-bot-row { display: flex; gap: 26px; }

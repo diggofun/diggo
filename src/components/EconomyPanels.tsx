@@ -98,20 +98,14 @@ export function EconomyPanels({
             REAL REWARDS
           </span>
           <h3>Token rewards</h3>
-          <p>
-            Block rewards your crew actually earned, settled per token. Claiming one signs a
-            single-use message; the payout itself is settled from the mine's reserve, never invented
-            and never guaranteed to keep paying the same amount. A settled reward then appears in
-            your collect list, where your own wallet signs the payout out of that mine's reserve.
-          </p>
+          <p>Tokens your bots earned, per mine. You sign every payout.</p>
         </header>
 
         {!signedIn && <p className="economy-empty">Sign in with your wallet to see your token rewards.</p>}
         {signedIn && loading && <p className="economy-empty">Loading your reward ledger…</p>}
         {signedIn && !loading && claims.length === 0 && (
           <p className="economy-empty">
-            No token rewards settled yet. Keep the crew active inside a mine and each block pays your
-            share of that mine's reward.
+            Nothing yet. Keep your bots in a mine and each block pays your share.
           </p>
         )}
 
@@ -225,10 +219,7 @@ export function EconomyPanels({
             <IconBadge size={13} /> GAME PROGRESSION
           </span>
           <h3>Your dug-in progress</h3>
-          <p>
-            ORE, Mining Level and Crew Tier are game state. They exist to upgrade your crew inside
-            Diggo and cannot be bought, sold, transferred or withdrawn.
-          </p>
+          <p>ORE, levels and tier upgrade your crew. They can&apos;t be bought, sold or withdrawn.</p>
         </header>
 
         {player ? (
@@ -275,10 +266,6 @@ export function EconomyPanels({
           <p className="economy-empty">Sign in to see your ORE, Mining Level and Crew Tier.</p>
         )}
 
-        <p className="economy-footnote">
-          ORE is not a token and has no market price. Your crew's Mining Power
-          is earned only by playing.
-        </p>
       </article>
     </section>
   );

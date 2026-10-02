@@ -9,6 +9,7 @@ import type { MineInfo, MiningReport, PlayerProfile, TokenSummary } from "../../
 import type { DiscoveryRecord } from "../../shared/types";
 import { DIGGO_CONFIG } from "../../shared/economics";
 import { discoveryVisualEvent } from "../../shared/discoveryVisual";
+import { Bot, BOT_COLORS, BOT_SHAPE_NAMES, type BotEyewear, type BotHat } from "../components/Bot";
 import { CrewScreen } from "../components/CrewScreen";
 import { DashboardPanel } from "../components/DashboardPanel";
 import { DiscoveriesPanel } from "../components/DiscoveriesPanel";
@@ -288,6 +289,25 @@ export function UiGallery() {
         </p>
         <button className="btn btn-ghost btn-sm" onClick={() => { setCollected(false); setReportOpen(true); }}>Open mining report</button>
       </section>
+      {show("bots") && (
+        <section className="page-shell ui-bot-gallery" aria-label="Bots">
+          {BOT_SHAPE_NAMES.map((shape, index) => (
+            <div key={shape} className="ui-bot-row">
+              {(["none", "hardhat", "cap", "beanie", "crown", "party", "bow"] as BotHat[]).map((hat, column) => (
+                <Bot
+                  key={hat}
+                  shape={shape}
+                  color={BOT_COLORS[(index + column * 3) % BOT_COLORS.length]}
+                  hat={hat}
+                  eyewear={(["none", "glasses", "shades"] as BotEyewear[])[(index + column) % 3]}
+                  size={64}
+                  still
+                />
+              ))}
+            </div>
+          ))}
+        </section>
+      )}
       {show("active") && <DashboardPanel {...dashboardProps} player={samplePlayer({})} />}
       {show("paused") && (
         <DashboardPanel

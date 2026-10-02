@@ -20,7 +20,7 @@
  */
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { DiscoveryRarity } from "../../shared/config";
-import { Critter, critterAt } from "./Critter";
+import { Bot, botAt } from "./Bot";
 
 /* ------------------------------------------------------------------------------------------------
    Generated game art
@@ -674,17 +674,18 @@ export function MineScene({ tier, active = false, compact = false, label, cosmet
         />
 
         {/* The crew: sprites standing on the tunnel floors and the ground line of the illustration. */}
-        {/* Miners and the foreman are critters (src/components/Critter.tsx): each crew member keeps
+        {/* Miners and the foreman are bots (src/components/Bot.tsx): each crew member keeps
             the same shape and colour from its slot, and digs only while the shift is active. */}
         {bgArt &&
           crew.filter((spot) => spot.kind === "miner" || spot.kind === "foreman").map((spot, index) => (
             <span
               key={spot.key}
-              className={"diorama-critter diorama-critter-" + spot.kind}
+              className={"diorama-bot diorama-bot-" + spot.kind}
               style={{ left: spot.left, top: spot.top, width: spot.width }}
             >
-              <Critter
-                {...critterAt(index)}
+              <Bot
+                {...botAt(index)}
+                hat={spot.kind === "miner" ? "hardhat" : "crown"}
                 size="100%"
                 mood={spot.kind === "foreman" ? (active ? "attention" : "idle") : active ? "dig" : "idle"}
                 tool={spot.kind === "miner"}
