@@ -43,7 +43,7 @@ import { CREW_COMPONENT_LABELS, CREW_COMPONENTS } from "./crewLabels";
 import { requestWalletMenu, useDiggoWallet } from "./wallet";
 import { clearEquippedCosmetics, loadEquippedCosmetics } from "./cosmetics";
 import { AppHeader, type PageId } from "./components/AppHeader";
-import { ExploreBoard, FinalCta, HomeHero, HowItWorks, SelectedMine, SiteFooter, Ticker } from "./components/HomeSections";
+import { AboutDiggo, ExploreBoard, FinalCta, HomeFaq, HomeHero, HowItWorks, SelectedMine, SiteFooter, Ticker } from "./components/HomeSections";
 import { EmptyState, ErrorState, LoadingScreen, RouteFallback } from "./components/StatusViews";
 import { useVerificationGate } from "./components/VerificationGate";
 import { ConsentBanner } from "./components/ConsentBanner";
@@ -958,7 +958,8 @@ export default function App() {
                 onClaimRewards={config.chainMode === "meteora" ? undefined : () => void handleClaimRewards()}
               />
               <Ticker tokens={tokens} />
-              <ExploreBoard tokens={tokens} limit={3} onLaunch={openLaunch} />
+              <AboutDiggo />
+              <ExploreBoard tokens={tokens} limit={4} onLaunch={openLaunch} />
               <WatchlistPanel
                 tokens={tokens}
                 onSelectCoin={openTokenPage}
@@ -966,6 +967,7 @@ export default function App() {
               />
               {economy}
               <HowItWorks />
+              <HomeFaq />
               <FinalCta onLaunch={openLaunch} />
             </>
           )}

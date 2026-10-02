@@ -5,20 +5,28 @@
  * Numbers here are the Worker's token summaries as-is. Nothing in this file estimates a reward:
  * the only estimate in the product is the server's, shown in the mine info panel with its label.
  */
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { track } from "../analytics";
 import {
   IconArrowDownRight,
   IconArrowUpRight,
+  IconCheck,
+  IconChevronDown,
   IconChevronRight,
+  IconClaim,
+  IconCrew,
   IconDiscoveries,
   IconHammer,
+  IconLandmark,
+  IconLock,
   IconMine,
   IconOre,
   IconPlus,
+  IconRocket,
   IconStreak,
   IconTimer,
   IconWallet,
+  IconWarning,
 } from "../icons";
 import type { MineInfo, PlayerProfile, TokenSummary } from "../../shared/types";
 import { GAMEPLAY_DEFAULTS } from "../../shared/economics";
@@ -67,24 +75,25 @@ export function HomeHero({
           <br />
           RUN A <span>MINING CREW.</span>
         </h1>
-        <p>
-          Creators launch fixed-supply memecoins with the trading and mining rules set on chain.
-          Players activate a crew, mine eligible launches, review random discoveries and claim
-          what reaches their wallet.
+        <p className="hero-lead">
+          <strong>Diggo.fun is a Solana memecoin launchpad with a mining game built in.</strong>{" "}
+          Creators launch fixed-supply coins on a Meteora bonding curve. Players put a crew to work
+          in those coins&apos; mines once a day and claim what they dig up straight to their own
+          wallet.
         </p>
         <div className="hero-actions">
           <a className="btn btn-primary btn-lg" href="/mine">
             Start mining <IconMine size={20} />
           </a>
-          <a className="btn btn-link" href="/create">
-            Launch a coin <IconArrowUpRight size={19} />
+            <a className="btn btn-link" href="#about">
+            What is Diggo? <IconChevronDown size={19} />
           </a>
         </div>
-        <div className="trust-row">
-          <span>Mint revoked</span>
-          <span>Mining vault funded</span>
-          <span><IconWallet size={17} /> Wallet-approved payouts</span>
-        </div>
+        <ul className="trust-row" aria-label="Safeguards">
+          <li><IconLock size={15} /> Fixed supply, mint revoked</li>
+          <li><IconLandmark size={15} /> Funded mining vault</li>
+          <li><IconWallet size={15} /> Every payout signed by you</li>
+        </ul>
       </div>
 
       {!featured ? (
@@ -434,21 +443,172 @@ export function SelectedMine({
   );
 }
 
+/**
+ * The plain-language explainer: what the product is, who it is for, and which parts are real
+ * on-chain assets versus game progression. Copy mirrors docs/FAQ.md; keep the two in step.
+ */
+export function AboutDiggo() {
+  return (
+    <section className="about-section page-shell" id="about" aria-labelledby="about-title">
+      <div className="about-intro">
+        <span className="section-kicker">What is Diggo.fun?</span>
+        <h2 id="about-title">A LAUNCHPAD<br />WITH A MINE<br />UNDER IT.</h2>
+        <p>
+          Most launchpads stop at the launch. Diggo keeps people coming back: every coin launched
+          here becomes a <strong>mine</strong>, and players run a <strong>crew</strong> that digs
+          those coins out day after day. Creators get a market and a reason for players to show up.
+          Players get a daily game that pays out in real memecoins.
+        </p>
+      </div>
+      <div className="about-audiences">
+        <article className="audience-card">
+          <span className="audience-icon"><IconMine size={22} /></span>
+          <h3>For players</h3>
+          <ul>
+            <li><IconCheck size={14} /> Connect a Solana wallet and open a 24-hour mining shift.</li>
+            <li><IconCheck size={14} /> Your crew mines while the shift runs, even with the tab closed.</li>
+            <li><IconCheck size={14} /> Mined memecoins collect in Discoveries.</li>
+            <li><IconCheck size={14} /> Claim up to 12 coins in one wallet-signed transaction.</li>
+            <li><IconCheck size={14} /> Earn ORE to upgrade Miners, Drills and Carts.</li>
+          </ul>
+          <a className="btn btn-primary" href="/mine">Start mining <IconMine size={18} /></a>
+        </article>
+        <article className="audience-card is-dark">
+          <span className="audience-icon"><IconRocket size={22} /></span>
+          <h3>For creators</h3>
+          <ul>
+            <li><IconCheck size={14} /> Launch a fixed-supply SPL coin from your own wallet.</li>
+            <li><IconCheck size={14} /> Trading runs on a Meteora Dynamic Bonding Curve from block one.</li>
+            <li><IconCheck size={14} /> Your coin becomes a mine that players work every day.</li>
+            <li><IconCheck size={14} /> Mint authority is revoked, so supply can never grow.</li>
+            <li><IconCheck size={14} /> Leftover supply is held in the mining vault for player payouts.</li>
+          </ul>
+          <a className="btn btn-primary" href="/create">Launch a coin <IconArrowUpRight size={18} /></a>
+        </article>
+      </div>
+      <div className="about-ledger" role="group" aria-label="What is real and what is game">
+        <div className="ledger-col">
+          <h3><span className="ledger-tag is-real">Real, on Solana</span></h3>
+          <ul>
+            <li><b>Memecoins</b> you mine are real SPL tokens in your wallet once claimed.</li>
+            <li><b>Trades and launches</b> settle on chain through Meteora.</li>
+            <li><b>Every payout</b> is a transaction you review and sign yourself.</li>
+          </ul>
+        </div>
+        <div className="ledger-col">
+          <h3><span className="ledger-tag is-game">Game progression only</span></h3>
+          <ul>
+            <li><b>ORE</b> is earned by playing and spent on crew upgrades.</li>
+            <li><b>Mining Power</b> and crew levels decide your share of each block.</li>
+            <li>None of these are tokens: they cannot be bought, sold, transferred or withdrawn.</li>
+          </ul>
+        </div>
+        <p className="ledger-note">
+          <IconWarning size={15} /> Memecoin prices can rise, fall or go to zero. Mining rewards
+          are not guaranteed and nothing here is investment advice.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+const MINING_DAY: { icon: ReactNode; title: string; body: string }[] = [
+  {
+    icon: <IconWallet />,
+    title: "Connect & activate",
+    body: "Sign in with your Solana wallet and open a 24-hour shift. Come back each day to keep your streak.",
+  },
+  {
+    icon: <IconCrew />,
+    title: "Your crew digs",
+    body: "Diggo assigns an eligible mine at random. Your crew works it for the whole shift, even while the browser is closed.",
+  },
+  {
+    icon: <IconDiscoveries />,
+    title: "Collect discoveries",
+    body: "Mined memecoins accrue in Discoveries. Coins still on their bonding curve stay pending until the pool graduates.",
+  },
+  {
+    icon: <IconClaim />,
+    title: "Claim all",
+    body: "One transaction pays out up to 12 different coins. You approve it in your wallet; Diggo never moves funds for you.",
+  },
+];
+
 export function HowItWorks() {
   return (
     <section className="how-section" id="how">
       <div className="page-shell">
         <div className="section-heading light">
           <div>
-            <h2>TWO WAYS IN.<br />ONE GAME.</h2>
+            <span className="section-kicker">How it works</span>
+            <h2>ONE MINING DAY,<br />FOUR STEPS.</h2>
           </div>
-          <p>Mining rewards and yield are not guaranteed. Wallet signatures authorize account, claim and launch actions.</p>
+          <p>
+            The whole loop takes a minute of your time per day. Wallet signatures authorize every
+            account, claim and launch action.
+          </p>
         </div>
-        <div className="steps">
-          <article><b>01</b><span className="step-icon"><IconPlus /></span><h3>Launch a coin</h3><p>Set its fixed supply and launch with a wallet-signed transaction. Leftovers go to the Diggo-signed mining vault.</p></article>
-          <article><b>02</b><span className="step-icon"><IconMine /></span><h3>Activate a crew</h3><p>Open a 24-hour shift. The server randomly assigns an eligible mine and your crew keeps mining it while the shift is valid.</p></article>
-          <article><b>03</b><span className="step-icon"><IconDiscoveries /></span><h3>Review discoveries</h3><p>Each eligible window has one random opportunity. Mined memecoins accrue in Discoveries until you approve a claim.</p></article>
-        </div>
+        <ol className="steps">
+          {MINING_DAY.map((step, index) => (
+            <li key={step.title}>
+              <b>{String(index + 1).padStart(2, "0")}</b>
+              <span className="step-icon">{step.icon}</span>
+              <h3>{step.title}</h3>
+              <p>{step.body}</p>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
+  );
+}
+
+const HOME_FAQ: { q: string; a: string }[] = [
+  {
+    q: "Do I need to pay to play?",
+    a: "Mining itself is not sold: Mining Power is earned, never bought. You need a Solana wallet with a little SOL to cover network fees when you sign activation and claim transactions.",
+  },
+  {
+    q: "What exactly do I receive when I claim?",
+    a: "Real SPL memecoins, sent to the wallet that signed the claim. Claim all bundles up to 12 distinct coins per transaction; if you have more, run it again for the rest.",
+  },
+  {
+    q: "Why is part of my reward marked pending?",
+    a: "Rewards from a coin that is still on its bonding curve accrue but stay pending. They become claimable after that coin's Meteora pool graduates and its mining inventory reaches the vault.",
+  },
+  {
+    q: "Are ORE and Mining Power crypto tokens?",
+    a: "No. They are game progression stored by Diggo. They have no market price and cannot be transferred, withdrawn or bought with SOL or memecoins.",
+  },
+  {
+    q: "Who holds my coins?",
+    a: "You do. Trades and payouts are transactions your own wallet signs. Leftover launch supply sits in the mining vault and is only paid out to players through claims.",
+  },
+  {
+    q: "What does it cost to launch a coin?",
+    a: "Your wallet signs the launch and covers its network and account costs, plus an optional initial buy that becomes real curve liquidity. The current launch configuration sets the creator trading fee to 0%.",
+  },
+];
+
+export function HomeFaq() {
+  return (
+    <section className="home-faq page-shell" id="faq" aria-labelledby="faq-title">
+      <div className="home-faq-intro">
+        <span className="section-kicker">Questions</span>
+        <h2 id="faq-title">STRAIGHT<br />ANSWERS.</h2>
+        <p>
+          Still unsure? Read the <a href="/terms">Terms</a> and <a href="/risk">Risk notice</a>, or
+          ask us on <a href="https://x.com/Diggo_Fun" target="_blank" rel="noopener noreferrer">X</a>.
+        </p>
+      </div>
+      <div className="faq-list">
+        {HOME_FAQ.map((item) => (
+          <details key={item.q} className="faq-item">
+            <summary>{item.q}<IconChevronDown size={18} /></summary>
+            <p>{item.a}</p>
+          </details>
+        ))}
       </div>
     </section>
   );
@@ -459,7 +619,10 @@ export function FinalCta({ onLaunch }: { onLaunch(): void }) {
     <section className="final-cta">
       <div className="page-shell">
         <span className="huge-pick" aria-hidden="true"><IconMine /></span>
-        <div><h2>MINE OR LAUNCH.</h2></div>
+        <div>
+          <h2>MINE OR LAUNCH.</h2>
+          <p className="final-cta-sub">Pick a side. Both end up in the same mine.</p>
+        </div>
         <div className="hero-actions">
           <a className="btn btn-dark btn-lg" href="/mine">Start mining <IconMine size={20} /></a>
           <button className="btn btn-dark btn-lg" onClick={onLaunch}>Launch a coin <IconArrowUpRight size={20} /></button>

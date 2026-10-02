@@ -1,19 +1,50 @@
 # Diggo.fun
 
-Diggo.fun is a Solana memecoin launchpad combined with a mining game. Creators launch projects
-and tokens into the same ecosystem that players use for repeat participation.
+**Diggo.fun is a Solana memecoin launchpad with a mining game built in.** Creators launch coins;
+players run a crew that mines those coins every day and claims what it digs up to their own wallet.
 
-The player journey is:
+## The idea in one minute
 
-1. Connect a wallet and activate a 24-hour mining window.
-2. Complete a random mining interaction with the active crew.
-3. Review mined memecoins as they accrue in Discoveries.
-4. Use **Claim all** to sign a wallet-approved batch payout for up to 12 distinct coins.
-5. Return for the next mining window, or refer relevant players and creators to the ecosystem.
+Most launchpads stop at the launch: a coin goes live, trades for a while, and attention moves on.
+Diggo gives every launch a second life as a **mine**. Players open a daily mining shift, their
+**crew** digs memecoins out of the mines, and they come back tomorrow to do it again. Creators get
+a market plus a steady reason for players to show up; players get a daily game that pays out in
+real tokens.
 
-ORE and Mining Power are game progression. They are not tokens, cannot be transferred or
-withdrawn, and cannot be bought with SOL or memecoins. Mined memecoins are real SPL tokens and
-their value can change or fall to zero.
+| | For players | For creators |
+| --- | --- | --- |
+| **What you do** | Connect a wallet, activate a 24-hour shift, claim what your crew mined | Launch a fixed-supply SPL coin from your own wallet |
+| **Where it runs** | Mining is tracked by Diggo; payouts are Solana transactions you sign | Trading runs on a Meteora Dynamic Bonding Curve from the first block |
+| **What you get** | Real memecoins in your wallet, plus ORE to upgrade Miners, Drills and Carts | A coin that becomes a mine players work every day |
+
+### The player loop
+
+1. **Connect & activate.** Sign in with a Solana wallet and open a 24-hour mining window.
+2. **Your crew digs.** Diggo assigns an eligible mine at random; the crew keeps working while the
+   window is active, even with the browser closed.
+3. **Collect discoveries.** Mined memecoins accrue in Discoveries. Rewards from a coin still on its
+   bonding curve stay pending until its Meteora pool graduates.
+4. **Claim all.** One wallet-approved transaction pays out up to 12 distinct coins.
+5. **Come back.** Keep your streak, upgrade the crew with ORE, refer players and creators.
+
+### What is real and what is game
+
+- **Real, on Solana:** mined memecoins are SPL tokens; launches and trades settle on chain through
+  Meteora; every payout is a transaction the player reviews and signs.
+- **Game progression only:** ORE, Mining Power and crew levels. They are not tokens, cannot be
+  transferred or withdrawn, and cannot be bought with SOL or memecoins.
+
+Memecoin prices can change or fall to zero. Mining rewards are not guaranteed.
+
+### How it is built
+
+- **Client:** React + Vite (`src/`), wallet connection via Wallet Standard / Reown.
+- **Backend:** a single Cloudflare Worker (`worker/`) with D1 (index and game state), queues,
+  Durable Objects and workflows. Solana is the source of truth for settlement; Cloudflare storage
+  is a cache and index.
+- **Chain:** Meteora Dynamic Bonding Curve for launches and trading (`CHAIN_MODE=meteora`). The
+  native Anchor program in `programs/` is historical / future architecture.
+- **Shared logic:** economics, curve maths and contracts in `shared/`, covered by Vitest.
 
 ## Current mainnet status
 
