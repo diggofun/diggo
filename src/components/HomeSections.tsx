@@ -52,13 +52,13 @@ export function HomeHero({
     <section className="hero page-shell" id="home">
       <div className="hero-copy">
         <h1>
-          Launch memecoins.
+          Launch &amp; earn
           <br />
-          Run a mining <span className="grad-word">crew.</span>
+          memecoins <span className="grad-word">for free.</span>
         </h1>
         <p className="hero-lead">
-          Launch a coin on Solana, or send your bots to mine one. What they dig up, you claim to
-          your own wallet.
+          Launch a coin on Solana, or send your bots to mine one for free. What they dig up, you
+          claim to your own wallet.
         </p>
         <div className="hero-actions">
           <a className="btn btn-primary btn-lg" href="/mine">

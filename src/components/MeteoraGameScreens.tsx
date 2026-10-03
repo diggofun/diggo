@@ -8,6 +8,7 @@ import { MineScene } from "./MineScene";
 import { Bot, botAt } from "./Bot";
 import { useProfileBot } from "../preferences";
 import { MyShareCard } from "./ShareCard";
+import { claimProgress } from "../claimProgress";
 import { PushToggle } from "./PushToggle";
 import { TokenOrb } from "./TokenOrb";
 
@@ -197,14 +198,7 @@ export function MeteoraDiscoveriesScreen({ game, tokens, connected, busy, error,
   const pendingBalances = balances.filter((balance) => !hasGraduated(tokens, balance.mint));
   const availableClaims = claimsWithoutBalance.filter((claim) => hasGraduated(tokens, claim.mint));
   const pendingClaims = claimsWithoutBalance.filter((claim) => !hasGraduated(tokens, claim.mint));
-  const requirements = claim
-    ? [
-        { met: claim.walletAge, label: "Wallet 7+ days old" },
-        { met: claim.activeDays, label: "5 active days" },
-        { met: claim.activations, label: "5 shifts" },
-        { met: claim.portfolio, label: "$10 in your wallet" },
-      ]
-    : [];
+  const progress = claim && game ? claimProgress({ claim, activeDays: game.activeDays, validActivations: game.validActivations }) : null;
   const rewardCounts = discoveryRewardCounts(
     game?.claimAll as (GameState["claimAll"] & DiscoveryClaimCounts) | undefined,
     availableBalances.length + availableClaims.length,
@@ -243,14 +237,26 @@ export function MeteoraDiscoveriesScreen({ game, tokens, connected, busy, error,
       </div>
       {!canClaim && (
         <div className="claim-gate">
-          <p>Digging is open to everyone. To collect your coins you need:</p>
-          <div className="chip-row" aria-label="Claim requirements">
-            {requirements.map((requirement) => (
-              <span className={"chip" + (requirement.met ? " is-met" : "")} key={requirement.label}>
-                {requirement.met && <IconCheck size={14} />} {requirement.label}
-              </span>
-            ))}
+          <div className="claim-gate-head">
+            <strong>{progress ? `Collecting unlocks: ${progress.done} of ${progress.steps.length} done` : "Collecting unlocks soon"}</strong>
+            <p>Digging is open to everyone. These keep the payouts for real players.</p>
           </div>
+          {progress && (
+            <>
+              <div className="progress claim-gate-bar" role="progressbar" aria-label="Progress to collecting" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress.overall * 100)}>
+                <i style={{ width: Math.max(4, Math.round(progress.overall * 100)) + "%" }} />
+              </div>
+              <ul className="claim-steps">
+                {progress.steps.map((step) => (
+                  <li key={step.key} className={step.met ? "is-met" : undefined}>
+                    <span className="claim-step-mark" aria-hidden="true">{step.met ? <IconCheck size={14} /> : null}</span>
+                    <span className="claim-step-label">{step.label}</span>
+                    <span className="claim-step-detail">{step.met ? "Done" : step.detail}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </div>
       )}
       {rewardCounts.available > 0 && (
