@@ -1,0 +1,13 @@
+# Link previews (X, Discord, WhatsApp, Telegram, Slack, Facebook) read the page and its banner.
+User-agent: Twitterbot
+Allow: /
+
+User-agent: Discordbot
+Allow: /
+
+User-agent: facebookexternalhit
+Allow: /
+
+User-agent: *
+Allow: /
+Disallow: /api/
