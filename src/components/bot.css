@@ -140,14 +140,6 @@
   94% { transform: translate(0, 0); }
   100% { transform: translate(0, 0); }
 }
-  48% { transform: translate(0, 0); }
-  51% { transform: translate(-3px, 1px); }
-  54% { transform: translate(3px, -1px); }
-  70% { transform: translate(2px, 0); }
-  78% { transform: translate(-2px, 1px); }
-  86% { transform: translate(0, 0); }
-  100% { transform: translate(0, 0); }
-}
 @keyframes rockHit {
   0% { transform: none; }
   6.96% { transform: translateX(0) rotate(0); }
