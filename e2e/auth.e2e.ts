@@ -23,7 +23,7 @@ test("a Wallet Standard wallet connects, signs in, and keeps its session across 
   await expect(headerWallet(page).getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
 
   await signInWithWallet(page);
-  await expect(signedInButton(page)).toHaveAttribute("title", /Signed in/);
+  await expect(signedInButton(page)).toHaveAttribute("title", /Your account/);
   await expect(signedInButton(page)).toHaveText(shortAddress(wallet.address));
 
   // The session survives a full reload: cookie plus the wallet's silent reconnect.

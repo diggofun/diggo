@@ -59,7 +59,7 @@ export async function installMockWallet(page: Page): Promise<void> {
 
 /** Runs in the page. It may only read its argument: Playwright serializes this function. */
 function injectMockWallet(config: InjectedWalletConfig): void {
-  const chains: string[] = ["solana:devnet"];
+  const chains: string[] = ["solana:mainnet", "solana:devnet"];
   const bindings = window as unknown as Record<string, ((input: number[]) => Promise<number[]>) | undefined>;
 
   const signWith = async (binding: string, bytes: number[]): Promise<Uint8Array> => {

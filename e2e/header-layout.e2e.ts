@@ -33,6 +33,9 @@ function coveredPoints(target: Locator): Promise<string[]> {
     const covered: string[] = [];
     for (let across = 0.1; across <= 0.95; across += 0.2) {
       for (let down = 0.05; down <= 0.98; down += 0.15) {
+        // Controls are pills and circles, and a hit test follows the rounded edge, so only points
+        // inside the inscribed ellipse belong to the control.
+        if ((across - 0.5) ** 2 + (down - 0.5) ** 2 > 0.25) continue;
         const x = Math.round(box.left + box.width * across);
         const y = Math.round(box.top + box.height * down);
         const hit = document.elementFromPoint(x, y);
@@ -104,15 +107,13 @@ test("the signed-in header holds every control inside the viewport", async ({ pa
     const header = page.locator("header.site-header");
     const brand = header.getByRole("link", { name: "Diggo.fun home" });
     const bell = header.getByRole("button", { name: /notifications/i });
-    const disconnect = header.getByRole("button", { name: "Disconnect wallet" });
-    const disclosure = header.getByRole("button", { name: /^(Set username|Public username)$/ });
     const summary = header.getByLabel("Wallet summary");
 
     await expect(signedInButton(page), "wallet button at " + width + "px").toBeVisible();
     await expect(brand, "brand at " + width + "px").toBeVisible();
     await expect(bell, "bell at " + width + "px").toBeVisible();
-    await expect(disconnect, "disconnect at " + width + "px").toBeVisible();
-    await expect(disclosure, "username disclosure at " + width + "px").toBeVisible();
+    // Username, settings and disconnect live in the account menu behind the bot, not on the row.
+    await expect(header.getByRole("button", { name: "Disconnect wallet" })).toHaveCount(0);
     // The drawer button belongs to the widths where the navigation is a drawer.
     await expect(
       header.getByRole("button", { name: "Open navigation" }),
@@ -125,8 +126,6 @@ test("the signed-in header holds every control inside the viewport", async ({ pa
     // control that is squeezed under a neighbour fails here rather than looking merely cramped.
     for (const [name, control] of [
       ["wallet button", signedInButton(page)],
-      ["disconnect", disconnect],
-      ["username disclosure", disclosure],
       ["bell", bell],
       ["brand", brand],
     ] as const) {
@@ -194,9 +193,9 @@ test("the wallet menu and the navigation drawer stand the notice down the same w
   await startSignedIn(page);
   await page.setViewportSize({ width: 1280, height: 700 });
 
-  // The username menu hangs off the header's disclosure and covers the same corner the card does on
-  // a window this short.
-  await page.getByRole("button", { name: /^(Set username|Public username)$/ }).click();
+  // The account menu hangs off the player's bot and covers the same corner the card does on a
+  // window this short.
+  await signedInButton(page).click();
   const menu = page.locator("header .wallet-menu");
   await expect(menu).toBeVisible();
   expect(await coveredPoints(menu)).toEqual([]);

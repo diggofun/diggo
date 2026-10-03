@@ -378,49 +378,42 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
     const isAuthenticated = session === connected.address;
     return (
       <div className="wallet-control signed-wallet" ref={rootRef}>
-        <button
-          className={"wallet-button" + (isAuthenticated ? " is-signed" : "")}
-          disabled={signingIn}
-          onClick={() => void signIn()}
-          title={isAuthenticated ? "Signed in — sign again to refresh your session" : "Sign in with wallet"}
-        >
-          {/* Signed in, the control is an identity badge: the player's own bot replaces the
-              connection dot. A connected-but-unsigned wallet keeps the dot, because there the dot
-              is the "not signed in yet" signal the player acts on. */}
-          {isAuthenticated ? (
-            <ProfileBot wallet={connected.address} size={26} className="wallet-button-icon" />
-          ) : (
-            <i className="wallet-dot" aria-hidden="true" />
-          )}
-          {/* The label keeps its text for the accessible name; the 820px rule clips it visually so
-              the 42px button centres the glyph instead of the name. */}
-          <span className="wallet-button-label">
-            {signingIn ? "Signing…" : isAuthenticated ? displayName(connected.address, viewer.username) : "Sign in"}
-          </span>
-        </button>
-        <button className="wallet-disconnect" onClick={() => void disconnectWallet()} aria-label="Disconnect wallet" title="Disconnect wallet">
-          <IconLogout size={18} />
-        </button>
-        {isAuthenticated && (
+        {isAuthenticated ? (
+          // Signed in, the control is one identity badge: the player's bot. It opens the account
+          // menu (username, settings, disconnect), so the header carries one button, not three,
+          // and still fits a 360px phone next to the balance and the bell.
           <button
-            className="wallet-disconnect"
+            className="wallet-button is-signed"
             aria-expanded={identityOpen}
             aria-haspopup="true"
-            aria-label={viewer.username === null ? "Set username" : "Public username: " + viewer.username}
             onClick={() => setIdentityOpen((value) => !value)}
-            title={viewer.username === null ? "Set a public username" : "Your public username: " + viewer.username}
+            title={"Your account: " + displayName(connected.address, viewer.username)}
           >
-            {/* The disclosure had no glyph, so it read as an empty bordered box next to the
-                disconnect cross. Sliders say "edit your details", which is what the menu holds;
-                the accessible name stays the sr-only text below. */}
-            <IconSettings size={18} />
-            <span className="sr-only">{viewer.username === null ? "Set username" : "Public username"}</span>
+            <ProfileBot wallet={connected.address} size={26} className="wallet-button-icon" />
+            <span className="wallet-button-label">{displayName(connected.address, viewer.username)}</span>
           </button>
+        ) : (
+          <>
+            {/* A connected-but-unsigned wallet keeps the dot: it is the "not signed in yet" signal. */}
+            <button className="wallet-button" disabled={signingIn} onClick={() => void signIn()} title="Sign in with wallet">
+              <i className="wallet-dot" aria-hidden="true" />
+              <span className="wallet-button-label">{signingIn ? "Signing…" : "Sign in"}</span>
+            </button>
+            <button className="wallet-disconnect" onClick={() => void disconnectWallet()} aria-label="Disconnect wallet" title="Disconnect wallet">
+              <IconLogout size={18} />
+            </button>
+          </>
         )}
         {isAuthenticated && identityOpen && (
-          <div className="wallet-menu" role="group" aria-label="Public username">
+          <div className="wallet-menu account-menu" role="group" aria-label="Your account">
             <strong>Public username</strong>
             <UsernameEditor key={connected.address} wallet={connected.address} onChanged={() => setIdentityOpen(false)} />
+            <a className="account-menu-link" href="/settings" onClick={() => setIdentityOpen(false)}>
+              <IconSettings size={18} /> Settings and your bot
+            </a>
+            <button type="button" onClick={() => void disconnectWallet()}>
+              <IconLogout size={18} /> Disconnect wallet
+            </button>
           </div>
         )}
       </div>

@@ -135,6 +135,8 @@ input:focus, select:focus, textarea:focus { outline: 3px solid rgba(255, 255, 25
 .wallet-menu img { width: 24px; height: 24px; border-radius: 8px; }
 .wallet-menu p, .wallet-menu small { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
 .notifications-menu { width: min(380px, calc(100vw - 24px)); max-height: min(70vh, 560px); overflow: auto; }
+.account-menu-link { min-height: 46px; padding: 0 14px; display: flex; align-items: center; gap: 10px; border-radius: 16px; background: var(--control); color: var(--fg); font: 600 14px/1 var(--font-sans); text-decoration: none; }
+.account-menu-link:hover { background: var(--control-hover); }
 .notifications-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0; }
 .notifications-title { display: inline-flex; align-items: center; gap: 8px; }
 .notifications-action { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%; background: var(--control); color: var(--fg); }
@@ -487,6 +489,9 @@ progress::-moz-progress-bar { background: #ff6a00; border-radius: 999px; }
   .account-summary { padding: 2px; }
   .account-summary > span { min-height: 34px; padding: 0 8px; }
   .account-summary small { display: none; }
+  /* Popovers pin to the viewport on phones: anchored to a button near the right edge they ran off
+     the left side of the screen and dragged the page sideways. */
+  .wallet-menu, .notifications-menu, .site-menu { position: fixed; top: calc(var(--header-h) + 4px); left: 10px; right: 10px; width: auto; }
 }
 .screen.crew-screen { padding-block: 40px 24px; }
 .crew-grid.crew-board { grid-template-columns: repeat(5, minmax(0, 1fr)); margin-top: 0; }
