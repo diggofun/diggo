@@ -7,6 +7,7 @@
  * only names those roles for the UI; it never redefines them.
  */
 import type { CrewComponent } from "../shared/config";
+import type { BotLook } from "./components/Bot";
 
 export const CREW_COMPONENTS: readonly CrewComponent[] = ["miners", "drills", "carts", "foreman", "storage"];
 
@@ -55,4 +56,13 @@ export const CREW_COMPONENT_GLYPHS: Record<CrewComponent, string> = {
   carts: "C",
   foreman: "F",
   storage: "S",
+};
+
+/** The bot that stands for each branch on the crew screens, dressed for its job. */
+export const CREW_BOTS: Record<CrewComponent, BotLook> = {
+  miners: { shape: "blob", color: "#ff6a00", hat: "hardhat", eyewear: "none" },
+  drills: { shape: "square", color: "#3b82f6", hat: "none", eyewear: "goggles" },
+  carts: { shape: "pill", color: "#10b981", hat: "cap", eyewear: "none" },
+  foreman: { shape: "circle", color: "#a855f7", hat: "crown", eyewear: "glasses" },
+  storage: { shape: "octagon", color: "#eab308", hat: "beanie", eyewear: "none" },
 };

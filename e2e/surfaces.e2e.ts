@@ -18,7 +18,7 @@ test("the discoveries page renders and the roll control is wired to the wallet",
   await startSignedIn(page);
 
   await page.goto("/discoveries");
-  await expect(page.getByRole("heading", { level: 1, name: /your mining ledger/i })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /discoveries/i })).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
 
   // The control exists and is offered; clicking it is not asserted here. In v2 the roll is a
@@ -29,9 +29,10 @@ test("the discoveries page renders and the roll control is wired to the wallet",
   await expect(roll).toBeVisible();
 });
 
-test("the notification bell stays inert until sign-in, then lists what the Worker generated", async ({ page }) => {
+test("the notification bell appears once signed in, then lists what the Worker generated", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator(".notifications-bell.is-disabled")).toBeVisible();
+  // Signed out, the header carries no bell at all: there is nothing to be notified about yet.
+  await expect(page.locator(".notifications-bell")).toHaveCount(0);
 
   await startSignedIn(page);
 
@@ -52,7 +53,7 @@ test("the notification bell stays inert until sign-in, then lists what the Worke
 
 test("the leaderboards page renders its tables without a wallet", async ({ page }) => {
   await page.goto("/leaderboards");
-  await expect(page.getByRole("heading", { level: 2, name: /TOP OF/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: /top of/i })).toBeVisible();
   await expect(page.getByText("Leaderboards are unavailable right now.")).toHaveCount(0);
 
   const head = page.locator(".leaderboard-head");

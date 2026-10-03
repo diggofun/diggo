@@ -8,24 +8,23 @@ export const ACCENT_FILL = {
 
 export type AccentName = keyof typeof ACCENT_FILL;
 
-/** Inline style carrying the custom properties the mask reads. */
+/** Inline style carrying the custom property the glyph paints with. */
 export type IconStyle = CSSProperties & {
-  "--icon"?: string;
   "--icon-color"?: string;
 };
 
 /**
  * Props shared by every icon.
  *
- * The glyphs are raster PNGs masked into a span, so:
+ * The glyphs are drawn SVGs inside a span, so:
  *
  * - `size` sizes the icon box (a number is px); without it the 1em box from icons.css applies.
  * - `className` is appended to the `icon` class, and any other span attribute (onClick, aria-*,
  *   data-*) is forwarded untouched.
  * - `title` gives the glyph an accessible name and a tooltip. Without it the icon is decorative
  *   and renders aria-hidden, so it never lands in the accessibility tree twice next to a label.
- * - `filled` asks for the filled variant asset of the icons that have one (watchlist, bell).
- * - `accent` paints the mask in lime or orange instead of currentColor.
+ * - `filled` asks for the filled variant of the icons that have one (the watchlist star).
+ * - `accent` paints the glyph in lime or orange instead of currentColor.
  */
 export type IconProps = Omit<HTMLAttributes<HTMLSpanElement>, "children" | "style"> & {
   accent?: AccentName;

@@ -1,12 +1,11 @@
 /**
- * Render test for the icon set, and the audit that keeps it complete.
+ * Render test for the icon set, and the audit that keeps it complete and in one style.
  *
  * Vitest runs in node, so the icons are rendered to static markup: every registry entry must
- * produce a span whose --icon points at its own PNG, and that file has to exist under
- * public/assets/icons. The asset directory is read here rather than trusted from the code, so a
- * name added without art fails the suite instead of shipping as an empty box. The title, size,
- * accent, filled and className props must land on the right attributes, and the registry is
- * compared against the Icon*.tsx files on disk so a new icon cannot be added without an export.
+ * produce a span holding an SVG drawn from glyphs.tsx, with the shared round stroke. The title,
+ * size, accent, filled and className props must land on the right attributes, and the registry is
+ * compared against the Icon*.tsx files on disk so a new icon cannot be added without an export or
+ * without a drawing.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -16,7 +15,7 @@ import { describe, expect, it } from "vitest";
 import {
   ACCENT_FILL,
   FILLED_VARIANTS,
-  ICON_ASSET_NAMES,
+  ICON_GLYPHS,
   ICON_NAMES,
   ICON_REGISTRY,
   IconBell,
@@ -24,24 +23,13 @@ import {
   IconHome,
   IconWatchlist,
   IconWatchlistFilled,
-  iconAssetStem,
   iconFallbackText,
+  iconGlyphName,
   type IconName,
   type IconProps,
 } from "./index";
 
 const ENTRIES = Object.entries(ICON_REGISTRY) as Array<[IconName, ComponentType<IconProps>]>;
-
-/** The PNG stems really present in public/assets/icons, read from disk instead of from the code. */
-const ASSET_DIR = fileURLToPath(new URL("../../public/assets/icons/", import.meta.url));
-/** Brand logos rendered as plain <img> files; they sit beside the glyphs but are not mask icons. */
-const BRAND_IMAGE_STEMS = new Set(["x", "x@2x"]);
-
-const SHIPPED_STEMS = readdirSync(ASSET_DIR)
-  .filter((file) => file.endsWith(".png"))
-  .map((file) => file.replace(/\.png$/, ""))
-  .filter((stem) => !BRAND_IMAGE_STEMS.has(stem))
-  .sort();
 
 describe("icon set", () => {
   it("exports an icon for every Icon*.tsx file", () => {
@@ -62,18 +50,21 @@ describe("icon set", () => {
   });
 
   for (const [name, Icon] of ENTRIES) {
-    it(`${name} renders a masked span for its own PNG`, () => {
+    it(`${name} renders its own drawn glyph`, () => {
       const markup = renderToStaticMarkup(<Icon />);
       expect(markup.startsWith("<span")).toBe(true);
       expect(markup.endsWith("</span>")).toBe(true);
       expect(markup).toContain('class="icon');
-      expect(markup).toContain(`--icon:url(/assets/icons/${name}.png)`);
+      expect(markup).toContain('<svg viewBox="0 0 24 24"');
+      // One weight and no sharp corners anywhere in the set.
+      expect(markup).toContain('stroke-width="2.4"');
+      expect(markup).toContain('stroke-linecap="round"');
+      expect(markup).toContain('stroke-linejoin="round"');
       expect(markup).not.toContain('data-fallback="true"');
       expect(markup).not.toContain("•");
+      expect(markup).not.toContain("url(");
       expect(markup).toContain('aria-hidden="true"');
       expect(markup).toContain(`data-icon="${name}"`);
-      expect(markup).not.toContain("<svg");
-      expect(markup).not.toContain("<path");
     });
   }
 
@@ -86,7 +77,8 @@ describe("icon set", () => {
     expect(titled).toContain('role="img"');
     expect(titled).toContain('aria-label="Home"');
     expect(titled).toContain('title="Home"');
-    expect(titled).not.toContain('aria-hidden');
+    // The span carries the name; the drawing inside stays out of the accessibility tree.
+    expect(titled.slice(0, titled.indexOf("<svg"))).not.toContain("aria-hidden");
   });
 
   it("sizes the box through the size prop", () => {
@@ -98,7 +90,7 @@ describe("icon set", () => {
     expect(sized).toContain("width:1.5rem");
   });
 
-  it("tints the mask through the accent prop", () => {
+  it("tints the glyph through the accent prop", () => {
     const lime = renderToStaticMarkup(<IconHome accent="lime" />);
     expect(lime).toContain(`--icon-color:${ACCENT_FILL.lime}`);
     const orange = renderToStaticMarkup(<IconHome accent="orange" />);
@@ -107,24 +99,21 @@ describe("icon set", () => {
     expect(plain).not.toContain("--icon-color");
   });
 
-  it("switches to the filled asset on the icon that ships one", () => {
+  it("switches to the filled glyph on the icon that has one", () => {
     const filled = renderToStaticMarkup(<IconWatchlist filled />);
-    expect(filled).toContain("--icon:url(/assets/icons/watchlistFilled.png)");
     expect(filled).toContain('data-filled="true"');
-    expect(filled).not.toContain('data-fallback="true"');
-
-    const variant = renderToStaticMarkup(<IconWatchlistFilled />);
-    expect(variant).toContain("--icon:url(/assets/icons/watchlistFilled.png)");
+    expect(filled).toContain('fill="currentColor"');
+    expect(filled).toBe(renderToStaticMarkup(<IconWatchlistFilled filled />).replace('data-icon="watchlistFilled"', 'data-icon="watchlist"'));
 
     const outline = renderToStaticMarkup(<IconWatchlist />);
-    expect(outline).toContain("--icon:url(/assets/icons/watchlist.png)");
     expect(outline).not.toContain("data-filled");
+    expect(outline).not.toContain('fill="currentColor"');
 
-    // Filled must never blank out an icon whose outline is its only asset.
+    // Filled must never blank out an icon whose outline is its only glyph.
     const bell = renderToStaticMarkup(<IconBell filled />);
-    expect(bell).toContain("--icon:url(/assets/icons/bell.png)");
-    const other = renderToStaticMarkup(<IconHome filled />);
-    expect(other).toContain("--icon:url(/assets/icons/home.png)");
+    expect(bell).toContain("<path");
+    expect(iconGlyphName("bell", true)).toBe("bell");
+    expect(iconGlyphName("home", true)).toBe("home");
   });
 
   it("keeps extra classes and forwards span attributes", () => {
@@ -133,33 +122,31 @@ describe("icon set", () => {
     expect(markup).toContain('data-testid="home-icon"');
   });
 
-  it("keeps missing-asset fallbacks visible without a mask paint", () => {
+  it("keeps the fallback mark visible and never paints a box behind a glyph", () => {
     const css = readFileSync(fileURLToPath(new URL("./icons.css", import.meta.url)), "utf8");
-    const fallback = css.slice(css.indexOf(".icon-fallback"));
+    const box = css.slice(css.indexOf(".icon {"), css.indexOf("}", css.indexOf(".icon {")));
+    expect(box).not.toContain("background");
+    expect(box).not.toContain("mask");
 
+    const fallback = css.slice(css.indexOf(".icon-fallback"));
     expect(fallback).toContain("color: var(--icon-color, currentColor)");
     expect(fallback).toContain("background-color: transparent");
-    expect(fallback).toContain("mask-image: none");
   });
 });
 
-describe("icon asset audit", () => {
-  it("gives every IconName its own PNG in public/assets/icons", () => {
+describe("icon glyph audit", () => {
+  it("draws every IconName", () => {
     for (const name of ICON_NAMES) {
-      // The stem has to be the name itself: no stand-in, no alias, no text mark.
-      expect(iconAssetStem(name), name).toBe(name);
-      expect(SHIPPED_STEMS, `${name}.png`).toContain(name);
+      expect(ICON_GLYPHS[name], name).toBeDefined();
+      expect(iconGlyphName(name), name).toBe(name);
     }
+    expect(Object.keys(ICON_GLYPHS).sort()).toEqual([...ICON_NAMES].sort());
   });
 
-  it("keeps ICON_ASSET_NAMES in step with the PNGs on disk", () => {
-    expect([...ICON_ASSET_NAMES].sort()).toEqual(SHIPPED_STEMS);
-  });
-
-  it("points every filled variant at a shipped PNG", () => {
+  it("points every filled variant at a drawn glyph", () => {
     for (const [name, variant] of Object.entries(FILLED_VARIANTS)) {
-      expect(iconAssetStem(name as IconName, true), name).toBe(variant);
-      expect(SHIPPED_STEMS, `${variant}.png`).toContain(variant);
+      expect(iconGlyphName(name as IconName, true), name).toBe(variant);
+      expect(ICON_GLYPHS[variant as IconName], String(variant)).toBeDefined();
     }
   });
 
@@ -171,7 +158,6 @@ describe("icon asset audit", () => {
     expect(plain).toContain('data-fallback="true"');
     expect(plain).toContain(">NO<");
     expect(plain).not.toContain("•");
-    expect(plain).not.toContain("--icon:url");
     expect(plain).not.toContain("<svg");
     expect(plain).toContain('aria-hidden="true"');
     expect(plain).not.toContain('role="img"');
@@ -180,7 +166,6 @@ describe("icon asset audit", () => {
     expect(titled).toContain('role="img"');
     expect(titled).toContain('aria-label="Unknown"');
     expect(titled).toContain('title="Unknown"');
-    expect(titled).not.toContain('aria-hidden');
+    expect(titled).not.toContain("aria-hidden");
   });
 });
-

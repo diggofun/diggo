@@ -1,10 +1,9 @@
 /**
  * Diggo.fun icon set.
  *
- * Every icon is a raster glyph masked into a span: the PNG under public/assets/icons paints in
- * currentColor (or an accent tint) through icons.css, so one asset serves every ink colour and a
- * missing asset leaves an empty box instead of shifting the layout. Import icons from here,
- * never from an icon pack.
+ * Every icon is a drawn SVG glyph (glyphs.tsx) inside a span: one stroke weight, round caps and
+ * joins, soft filled shapes, painted in currentColor or an accent tint, so the icons match the
+ * bots. Import icons from here, never from an icon pack.
  */
 import "./icons.css";
 import type { ComponentType } from "react";
@@ -218,15 +217,7 @@ export const ICON_REGISTRY: Record<IconName, ComponentType<IconProps>> = {
   watchlistFilled: IconWatchlistFilled,
 };
 
-export {
-  FILLED_VARIANTS,
-  ICON_ASSET_NAMES,
-  ICON_NAMES,
-  hasIconAsset,
-  iconAsset,
-  iconAssetStem,
-  iconFallbackText,
-  type IconName,
-} from "./names";
+export { FILLED_VARIANTS, ICON_NAMES, iconFallbackText, iconGlyphName, type IconName } from "./names";
+export { ICON_GLYPHS } from "./glyphs";
 export { ACCENT_FILL, accentFill, type AccentName, type IconProps, type IconStyle } from "./types";
 export { IconGlyph, type IconGlyphProps } from "./Glyph";

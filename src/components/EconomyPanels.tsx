@@ -111,7 +111,7 @@ export function EconomyPanels({
 
         {balances.size > 0 && (
           <div className="token-balances">
-            <span className="claim-block-head-label">TOKEN REWARDS</span>
+            <span className="claim-block-head-label">Token rewards</span>
             <ul>
               {[...balances.entries()].map(([mint, total]) => (
                 <li key={mint}>
@@ -129,7 +129,7 @@ export function EconomyPanels({
         {claimable.length > 0 && (
           <div className="claim-block">
             <div className="claim-block-head">
-              <span>READY TO CLAIM</span>
+              <span>Ready to claim</span>
               <strong>{money(claimableUsd)} at spot</strong>
             </div>
             <ul>
@@ -155,7 +155,7 @@ export function EconomyPanels({
         {collectable.length > 0 && (
           <div className="claim-block">
             <div className="claim-block-head">
-              <span>COLLECT ON-CHAIN</span>
+              <span>Collect on-chain</span>
               <strong>
                 {tokenAmount(collectable.reduce((sum, claim) => sum + claim.amount, 0))} tokens
               </strong>

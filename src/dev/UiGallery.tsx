@@ -9,12 +9,13 @@ import type { MineInfo, MiningReport, PlayerProfile, TokenSummary } from "../../
 import type { DiscoveryRecord } from "../../shared/types";
 import { DIGGO_CONFIG } from "../../shared/economics";
 import { discoveryVisualEvent } from "../../shared/discoveryVisual";
-import { Bot, BOT_COLORS, BOT_SHAPE_NAMES, type BotEyewear, type BotHat } from "../components/Bot";
+import { ICON_NAMES, ICON_REGISTRY } from "../icons";
+import { Bot, BOT_COLORS, BOT_EYEWEAR, BOT_HATS, BOT_SHAPE_NAMES } from "../components/Bot";
 import { CrewScreen } from "../components/CrewScreen";
 import { DashboardPanel } from "../components/DashboardPanel";
 import { DiscoveriesPanel } from "../components/DiscoveriesPanel";
 import { ExploreBoard, SelectedMine } from "../components/HomeSections";
-import { DiscoveryArt, GameArt, MineScene } from "../components/MineScene";
+import { DiscoveryArt, MineScene } from "../components/MineScene";
 import { MineInfoPanel } from "../components/MineInfoPanel";
 import { MiningReportModal } from "../components/MiningReportModal";
 import { PLAY_SUMMARY, PlayerOnboarding } from "../components/PlayerOnboarding";
@@ -209,32 +210,12 @@ const LOADOUTS: readonly { name: string; equipped: Record<string, string> }[] = 
   { name: "Deep core", equipped: { mine_theme: "theme_deepcore", cart: "cart_hauler" } },
 ];
 
-/** The square sprites and finds public/assets/game is expected to hold, with their intrinsic size. */
-const ART_FILES: readonly { name: string; width: number; height: number }[] = [
-  { name: "miner", width: 768, height: 768 },
-  { name: "foreman", width: 768, height: 768 },
-  { name: "drill", width: 768, height: 768 },
-  { name: "cart", width: 768, height: 768 },
-  { name: "storage", width: 768, height: 768 },
-  { name: "discovery-stone", width: 512, height: 512 },
-  { name: "discovery-meme-vein", width: 512, height: 512 },
-  { name: "discovery-crystal-vein", width: 512, height: 512 },
-  { name: "discovery-ancient-geode", width: 512, height: 512 },
-  { name: "discovery-golden-block", width: 512, height: 512 },
-  { name: "discovery-degen-core", width: 512, height: 512 },
-];
-
-/** Art with a shape of its own: a square thumbnail would hide what it actually looks like. */
-const WIDE_ART_FILES: readonly { name: string; width: number; height: number; className: string }[] = [
-  { name: "mine-bg", width: 1920, height: 1080, className: "ui-gallery-wide-art" },
-  { name: "og-image", width: 1200, height: 630, className: "ui-gallery-wide-art is-social" },
-];
-
-/** The raster brand marks available for the gallery. */
+/** The brand files, from public/assets/brand, at the sizes they ship. */
 const BRAND_FILES: readonly { src: string; alt: string; className?: string }[] = [
-  { src: "/assets/brand/apple-touch-icon.png?v=2", alt: "Diggo mark" },
-  { src: "/assets/brand/icon-192.png?v=2", alt: "Diggo mark at 192 pixels" },
-  { src: "/assets/brand/icon-512.png?v=2", alt: "Diggo mark at 512 pixels", className: "is-mark" },
+  { src: "/assets/brand/diggo-wordmark-640.png", alt: "Diggo wordmark", className: "is-wordmark" },
+  { src: "/assets/brand/diggo-logo-256.png", alt: "Diggo mark", className: "is-mark" },
+  { src: "/assets/brand/apple-touch-icon.png?v=3", alt: "Diggo app icon" },
+  { src: "/assets/brand/icon-192.png?v=3", alt: "Diggo mark at 192 pixels" },
 ];
 
 const RARITIES = ["common", "uncommon", "rare", "epic", "legendary", "mythic"] as const;
@@ -289,18 +270,30 @@ export function UiGallery() {
         </p>
         <button className="btn btn-ghost btn-sm" onClick={() => { setCollected(false); setReportOpen(true); }}>Open mining report</button>
       </section>
+      {show("icons") && (
+        <section className="page-shell ui-icon-sheet" aria-label="Icons">
+          {ICON_NAMES.map((name) => {
+            const Icon = ICON_REGISTRY[name];
+            return (
+              <span key={name} title={name}>
+                <Icon size={26} />
+              </span>
+            );
+          })}
+        </section>
+      )}
       {show("bots") && (
         <section className="page-shell ui-bot-gallery" aria-label="Bots">
           {BOT_SHAPE_NAMES.map((shape, index) => (
             <div key={shape} className="ui-bot-row">
-              {(["none", "hardhat", "cap", "beanie", "crown", "party", "bow"] as BotHat[]).map((hat, column) => (
+              {BOT_HATS.map((hat, column) => (
                 <Bot
                   key={hat}
                   shape={shape}
                   color={BOT_COLORS[(index + column * 3) % BOT_COLORS.length]}
                   hat={hat}
-                  eyewear={(["none", "glasses", "shades"] as BotEyewear[])[(index + column) % 3]}
-                  size={64}
+                  eyewear={BOT_EYEWEAR[(index + column) % BOT_EYEWEAR.length]}
+                  size={72}
                   still
                 />
               ))}
@@ -345,7 +338,7 @@ export function UiGallery() {
           <h2>Crew tiers</h2>
           <div>
             {DIGGO_CONFIG.crew.tiers.map((tier) => (
-              <MineScene key={tier.tier} tier={tier.tier} active label={tier.name} />
+              <MineScene key={tier.tier} tier={tier.tier} active />
             ))}
           </div>
         </section>
@@ -379,7 +372,7 @@ export function UiGallery() {
           <div>
             {LOADOUTS.map((loadout) => (
               <figure className="ui-gallery-figure" key={loadout.name}>
-                <MineScene tier={4} active cosmetics={loadout.equipped} label={loadout.name} />
+                <MineScene tier={4} active cosmetics={loadout.equipped} />
                 <figcaption>{loadout.name}</figcaption>
               </figure>
             ))}
@@ -390,63 +383,20 @@ export function UiGallery() {
         <section className="page-shell ui-gallery-tiers">
           <h2>Brand</h2>
           <p className="ui-gallery-note">
-            The available raster brand marks, from public/assets/brand, shown at the sizes they
-            ship.
+            The wordmark, the mark and the app icons from public/assets/brand, at the sizes they ship.
           </p>
           <div className="ui-gallery-brand">
             {BRAND_FILES.map((file) => (
               <img key={file.src} className={file.className} src={file.src} alt={file.alt} />
             ))}
           </div>
-          <h2>Scene and social art</h2>
-          <p className="ui-gallery-note">
-            Reviewed at their own ratio: the mine cross-section the crew stands on, and the social
-            card that ships with the copy composited into its empty left half.
-          </p>
-          <div>
-            {WIDE_ART_FILES.map((file) => (
-              <figure className="ui-gallery-figure ui-gallery-art ui-gallery-wide" key={file.name}>
-                <GameArt
-                  name={file.name}
-                  alt={file.name + " art"}
-                  width={file.width}
-                  height={file.height}
-                  className={file.className}
-                  eager
-                  fallback={<span className="ui-gallery-art-missing">no file</span>}
-                />
-                <figcaption>{file.name}</figcaption>
-              </figure>
-            ))}
-          </div>
-          <h2>Sprites and discovery art</h2>
-          <p className="ui-gallery-note">
-            Files that exist render; files that do not are replaced by the drawn fallback, with no
-            broken image and no layout shift. Every tile here loads eagerly, because the gallery is
-            captured whole: a sprite whose load or decode is still deferred is an empty box in a
-            full-page screenshot even though the file itself is served fine.
-          </p>
-          <div>
-            {ART_FILES.map((file) => (
-              <figure className="ui-gallery-figure ui-gallery-art" key={file.name}>
-                <GameArt
-                  name={file.name}
-                  alt={file.name + " art"}
-                  width={file.width}
-                  height={file.height}
-                  className="ui-gallery-art-img"
-                  eager
-                  fallback={<span className="ui-gallery-art-missing">no file</span>}
-                />
-                <figcaption>{file.name}</figcaption>
-              </figure>
-            ))}
-          </div>
+          <h2>Social card</h2>
+          <img className="ui-gallery-social" src="/og-image-v3.png" alt="The social card: the Diggo wordmark on the page colour" />
           <h2>Discovery art by rarity</h2>
           <div>
             {RARITIES.map((rarity) => (
               <figure className="ui-gallery-figure ui-gallery-art" key={rarity}>
-                <DiscoveryArt rarity={rarity} className="ui-gallery-art-img" eager />
+                <DiscoveryArt rarity={rarity} className="ui-gallery-art-img" />
                 <figcaption>{rarity}</figcaption>
               </figure>
             ))}

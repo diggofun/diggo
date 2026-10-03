@@ -21,19 +21,11 @@ import {
   upgradeOreCost,
   type CrewLevels,
 } from "../../shared/economics";
-import { CREW_COMPONENTS, CREW_COMPONENT_GLYPHS, CREW_COMPONENT_LABELS, CREW_ROLES } from "../crewLabels";
+import { CREW_BOTS, CREW_COMPONENTS, CREW_COMPONENT_LABELS, CREW_ROLES } from "../crewLabels";
 import { IconArrowUpRight, IconClose, IconHammer, IconOre } from "../icons";
-import { GameArt, MineScene } from "./MineScene";
+import { Bot } from "./Bot";
+import { MineScene } from "./MineScene";
 import { useDialog } from "./useDialog";
-
-/** Generated art per crew branch; the drawn glyph is the fallback when a file is missing. */
-const CREW_COMPONENT_ART: Readonly<Record<(typeof CREW_COMPONENTS)[number], string>> = {
-  miners: "miner",
-  drills: "drill",
-  carts: "cart",
-  foreman: "foreman",
-  storage: "storage",
-};
 
 export interface CrewScreenProps {
   player: PlayerProfile;
@@ -129,7 +121,7 @@ export function CrewScreen({ player, pending, error, notice, onUpgrade, variant 
             </small>
           </div>
         </div>
-        <MineScene key={tier.tier} tier={tier.tier} active={player.activationState === "ACTIVE"} label={tier.name} />
+        <MineScene key={tier.tier} tier={tier.tier} active={player.activationState === "ACTIVE"} />
       </div>
 
       <div className="crew-board">
@@ -142,14 +134,7 @@ export function CrewScreen({ player, pending, error, notice, onUpgrade, variant 
             <article className={`crew-card${preview_.cost === null ? " is-max" : ""}`} key={component}>
               <header>
                 <span className="crew-card-glyph">
-                  <GameArt
-                    name={CREW_COMPONENT_ART[component]}
-                    alt=""
-                    width={768}
-                    height={768}
-                    className="crew-card-art"
-                    fallback={<>{CREW_COMPONENT_GLYPHS[component]}</>}
-                  />
+                  <Bot {...CREW_BOTS[component]} size={44} mood="idle" />
                 </span>
                 <div>
                   <strong>{CREW_COMPONENT_LABELS[component]}</strong>

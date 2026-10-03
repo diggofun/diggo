@@ -68,7 +68,7 @@ test.skip("collecting a mining report is idempotent and stays inside the game ec
 
   const report = page.locator(".report-modal");
   await expect(report).toBeVisible();
-  await expect(report.getByText("ORE MINED")).toBeVisible();
+  await expect(report.getByText("ORE mined")).toBeVisible();
   await expect(report.getByText(/game progression/)).toBeVisible();
   await expect(report.getByRole("button", { name: /Collected/ })).toBeDisabled();
   await report.getByRole("button", { name: "Close" }).click();

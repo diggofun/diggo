@@ -102,8 +102,8 @@ describe("Meteora discovery reward status", () => {
 
     const markup = renderMeteora(state, [graduated, pending]);
 
-    expect(markup).toContain("AVAILABLE GRADUATED REWARDS");
-    expect(markup).toContain("PENDING UNTIL GRADUATION");
+    expect(markup).toContain("Ready to claim");
+    expect(markup).toContain("Pending until graduation");
     expect(markup).toContain("Available to claim from a graduated coin");
     expect(markup).toContain("Accrued from a pre-graduation coin · not claimable yet");
     expect(markup).toContain("Mining does not guarantee that a coin will graduate");

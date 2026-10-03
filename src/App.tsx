@@ -43,11 +43,10 @@ import { CREW_COMPONENT_LABELS, CREW_COMPONENTS } from "./crewLabels";
 import { requestWalletMenu, useDiggoWallet } from "./wallet";
 import { clearEquippedCosmetics, loadEquippedCosmetics } from "./cosmetics";
 import { AppHeader, type PageId } from "./components/AppHeader";
-import { AboutDiggo, ExploreBoard, FinalCta, HomeFaq, HomeHero, HowItWorks, SelectedMine, SiteFooter, Ticker } from "./components/HomeSections";
+import { AboutDiggo, ExploreBoard, FinalCta, HomeFaq, HomeHero, HowItWorks, SelectedMine, SiteFooter } from "./components/HomeSections";
 import { EmptyState, ErrorState, LoadingScreen, RouteFallback } from "./components/StatusViews";
 import { useVerificationGate } from "./components/VerificationGate";
 import { ConsentBanner } from "./components/ConsentBanner";
-import { PushToggle } from "./components/PushToggle";
 import { WatchlistPanel } from "./components/WatchlistPanel";
 import { isLegalPath } from "./components/legal/routes";
 import { captureLandingReferral, clearRememberedReferral, readRememberedReferral, referralCodeFromLocation } from "./referralLink";
@@ -59,7 +58,7 @@ import { crewPower } from "../shared/economics";
 import { crewTier } from "../shared/crew";
 import { MeteoraCrewScreen, MeteoraDiscoveriesScreen, MeteoraMineDashboard, MeteoraPortfolioScreen } from "./components/MeteoraGameScreens";
 import { RouteErrorBoundary } from "./components/RouteErrorBoundary";
-import { BotDefs } from "./components/Bot";
+import { BotMine } from "./components/BotMine";
 
 /*
  * Every screen below the landing page is its own chunk: the swap terminal (lightweight-charts and
@@ -913,7 +912,6 @@ export default function App() {
 
   return (
     <div className={"app page-" + page}>
-      <BotDefs />
       <a className="skip-link" href="#content">Skip to content</a>
       <AppHeader
         page={page}
@@ -960,14 +958,8 @@ export default function App() {
                 onClaimRewards={config.chainMode === "meteora" ? undefined : () => void handleClaimRewards()}
                 coinSymbols={tokens.map((token) => token.symbol)}
               />
-              <Ticker tokens={tokens} />
               <AboutDiggo />
               <ExploreBoard tokens={tokens} limit={4} onLaunch={openLaunch} />
-              <WatchlistPanel
-                tokens={tokens}
-                onSelectCoin={openTokenPage}
-                onConnect={() => requestWalletMenu("watchlist")}
-              />
               {signedIn && economy}
               <HowItWorks />
               <HomeFaq />
@@ -1079,8 +1071,12 @@ export default function App() {
 
           {page === "explore" && (
             <>
-              <Ticker tokens={tokens} />
               <ExploreBoard tokens={tokens} onLaunch={openLaunch} />
+              <WatchlistPanel
+                tokens={tokens}
+                onSelectCoin={openTokenPage}
+                onConnect={() => requestWalletMenu("watchlist")}
+              />
             </>
           )}
 
@@ -1124,16 +1120,12 @@ export default function App() {
 
           {page === "create" && (
             <section className="create-coin-page page-shell">
-              <div>
-                <h1>Start a<br /><span>new mine.</span></h1>
-                <p>Create a fixed-supply Solana coin, allocate its mining reserve, and optionally make the first real buy into its bonding curve.</p>
+              <div className="create-intro">
+                <h1>Start a new <span className="grad-word">mine.</span></h1>
+                <p>Launch a fixed-supply Solana coin and players start mining it from day one. You can make the first buy at launch.</p>
+                <button className="btn btn-primary btn-lg" onClick={openLaunch}>Open launch builder <IconArrowUpRight size={18} /></button>
               </div>
-              <div className="create-coin-card">
-                <span>MAINNET LAUNCH</span>
-                <h2>{config.chainMode === "meteora" ? "Launch the next mine." : "Everything settles on-chain."}</h2>
-                <p>{config.chainMode === "meteora" ? "Create a coin, then send your crew to work in its market." : "Your creator wallet signs the launch and, if selected, the initial liquidity buy in one transaction."}</p>
-                <button className="btn btn-primary" onClick={openLaunch}>Open launch builder <IconArrowUpRight size={17} /></button>
-              </div>
+              <BotMine crew={3} active />
             </section>
           )}
 
@@ -1186,7 +1178,6 @@ export default function App() {
         </Suspense>
         </RouteErrorBoundary>
 
-        <PushToggle />
       </main>
 
       <SiteFooter />

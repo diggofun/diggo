@@ -16,7 +16,7 @@ test.beforeEach(async ({ page }) => {
 
 test("the launch builder quotes the creator's cost and says who pays it", async ({ page }) => {
   await page.goto("/create");
-  await expect(page.getByRole("heading", { level: 1, name: /START A/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /start a new mine/i })).toBeVisible();
   await page.getByRole("button", { name: /Open launch builder/ }).click();
 
   const dialog = page.getByRole("dialog");

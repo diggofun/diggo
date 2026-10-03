@@ -3,6 +3,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { ClientProvider } from "@solana/react";
 import "./styles.css";
+import "./design.css";
 import App from "./App";
 import { solanaClient } from "./solana";
 import { PendingTransactionProvider } from "./onchain";

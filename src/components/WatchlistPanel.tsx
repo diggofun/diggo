@@ -75,17 +75,8 @@ export function WatchlistPanel({ tokens = [], onSelectCoin, onConnect }: Watchli
   return (
     <section className="watchlist-panel page-shell" id="watchlist" aria-labelledby="watchlist-title">
       <div className="section-heading">
-        <div>
-          <div className="eyebrow">
-            <IconWatchlist size={14} /> Watchlist
-          </div>
-          <h2 id="watchlist-title">
-            Coins you
-            <br />
-            are watching.
-          </h2>
-        </div>
-        <p className="mono-label">
+        <h2 id="watchlist-title">Watchlist</h2>
+        <p className="section-meta">
           {watchlist.mints.length}/{watchlist.limit} watched
           {watchlist.signedIn ? " · saved to your wallet" : " · saved in this browser"}
         </p>

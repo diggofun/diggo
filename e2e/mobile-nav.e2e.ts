@@ -18,7 +18,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 /** The five shortcuts the tab bar carries, in the order it lays them out. */
-const TAB_SHORTCUTS = ["Home", "Mine", "Crew", "Explore coins", "Trade"] as const;
+const TAB_SHORTCUTS = ["Home", "Mine", "Crew", "Discoveries", "Explore coins"] as const;
 
 /** Opens the drawer and waits for the slide to settle, so callers measure a panel at rest. */
 async function openDrawer(page: Page): Promise<Locator> {
@@ -46,7 +46,7 @@ test("the tab bar carries the five game shortcuts and they navigate", async ({ p
 
   await tabBar.getByRole("link", { name: "Mine", exact: true }).click();
   await expect(page).toHaveURL(/\/mine$/);
-  await expect(page.getByRole("heading", { level: 1, name: /YOUR CREW/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /your crew/i })).toBeVisible();
   // With the drawer shut, the bar is the only thing that can say where the player landed.
   await expect(tabBar.getByRole("link", { name: "Mine", exact: true })).toHaveAttribute("aria-current", "page");
 });
@@ -56,20 +56,21 @@ test("the drawer holds the destinations the tab bar leaves out, and they navigat
 
   const drawer = await openDrawer(page);
   await expect(drawer).toHaveAttribute("aria-label", "Main navigation");
-  for (const label of ["Discoveries", "Mines", "Leaderboards", "Cosmetics", "Create coin", "Watchlist"]) {
+  for (const label of ["Leaderboards", "$DIGGO", "Referrals", "Cosmetics", "Watchlist"]) {
     await expect(drawer.getByRole("link", { name: label, exact: true })).toBeVisible();
   }
+  await expect(drawer.getByRole("button", { name: "Create coin", exact: true })).toBeVisible();
 
-  await drawer.getByRole("link", { name: "Discoveries", exact: true }).click();
-  await expect(page).toHaveURL(/\/discoveries$/);
-  await expect(page.getByRole("heading", { level: 1, name: /your mining ledger/i })).toBeVisible();
+  await drawer.getByRole("link", { name: "Leaderboards", exact: true }).click();
+  await expect(page).toHaveURL(/\/leaderboards$/);
+  await expect(page.getByRole("heading", { level: 2, name: /top of/i })).toBeVisible();
   // Following a drawer link is a real page load, so the panel is shut again on arrival.
   await expect(page.locator(".app-sidebar.is-open")).toHaveCount(0);
 
-  // Discoveries is not one of the five shortcuts, so the drawer is the only navigation that can
+  // Leaderboards is not one of the five shortcuts, so the drawer is the only navigation that can
   // mark it as the page the player is on.
   const reopened = await openDrawer(page);
-  await expect(reopened.getByRole("link", { name: "Discoveries", exact: true })).toHaveAttribute(
+  await expect(reopened.getByRole("link", { name: "Leaderboards", exact: true })).toHaveAttribute(
     "aria-current",
     "page",
   );

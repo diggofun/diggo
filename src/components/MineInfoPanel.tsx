@@ -127,14 +127,14 @@ export function MineInfoPanel({
         </article>
         <article className="card stat">
           <span>
-            <strong>TOTAL MINING POWER</strong>
+            <strong>Total mining power</strong>
           </span>
           <strong>{compact(mine.totalMiningPower)}</strong>
           {powerDetail && <small>{powerDetail}</small>}
         </article>
         <article className="card stat">
           <span>
-            <IconLayers size={13} aria-hidden="true" /> {hasCurveBudget ? "LAUNCH CAP" : "REMAINING RESERVE"}
+            <IconLayers size={13} aria-hidden="true" /> {hasCurveBudget ? "Launch cap" : "Remaining reserve"}
           </span>
           <strong>
             {compact(mine.remainingReserve)} <small>{mine.symbol}</small>
@@ -147,7 +147,7 @@ export function MineInfoPanel({
         </article>
         <article className="card stat is-featured">
           <span>
-            <strong>ESTIMATED SHARE</strong>
+            <strong>Estimated share</strong>
           </span>
           <strong>{shareLabel}</strong>
           <small>{shareDetail}</small>
@@ -159,7 +159,7 @@ export function MineInfoPanel({
         <div className="reduction-schedule">
           <div className="mine-info-subhead">
             <span>
-                <IconTimer size={13} aria-hidden="true" /> {onCurve ? "BLOCK REWARD" : "REWARD SCHEDULE"}
+                <IconTimer size={13} aria-hidden="true" /> {onCurve ? "Block reward" : "Reward schedule"}
             </span>
             <small>
               {onCurve
@@ -209,10 +209,10 @@ export function MineInfoPanel({
             <span>
               {hasCurveBudget ? (
                 <>
-                  CURVE MINING
+                  Curve mining
                 </>
               ) : (
-                "MINED SO FAR"
+                "Mined so far"
               )}
             </span>
             <small>{percent(budgetProgress)}</small>

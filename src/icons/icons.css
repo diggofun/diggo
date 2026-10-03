@@ -1,30 +1,30 @@
 /*
- * Raster icon glyphs.
+ * Drawn icon glyphs.
  *
- * Every icon component renders <span class="icon"> with --icon pointing at a PNG under
- * /assets/icons. The image is used as a mask, so the glyph paints in currentColor (or in
- * --icon-color for an accent tint) and inherits whatever ink colour the surrounding component
- * sets, instead of shipping a colour variant per asset.
+ * Every icon component renders <span class="icon"> holding an SVG from glyphs.tsx. The span is the
+ * box (1em square unless a size is passed) and the SVG fills it, painting in currentColor - or in
+ * --icon-color for an accent tint - so a glyph inherits whatever colour the surrounding component
+ * sets.
  *
- * A missing asset uses the readable text mark rendered by Glyph.tsx (the name's own initials), so
- * the component stays legible and keeps its box rather than collapsing.
+ * A name outside the registry renders its readable initials instead (Glyph.tsx), so the component
+ * stays legible and keeps its box rather than collapsing.
  */
 .icon {
-  display: inline-block;
+  display: inline-flex;
   flex: none;
+  align-items: center;
+  justify-content: center;
   width: 1em;
   height: 1em;
-  vertical-align: -0.1em;
+  vertical-align: -0.125em;
   color: var(--icon-color, currentColor);
-  background-color: var(--icon-color, currentColor);
-  -webkit-mask-image: var(--icon);
-  -webkit-mask-position: center;
-  -webkit-mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  mask-image: var(--icon);
-  mask-position: center;
-  mask-size: contain;
-  mask-repeat: no-repeat;
+}
+
+.icon > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
 .icon-fallback {
@@ -33,9 +33,7 @@
   justify-content: center;
   color: var(--icon-color, currentColor);
   background-color: transparent;
-  font-family: system-ui, sans-serif;
+  font-family: inherit;
   font-size: 0.8em;
   line-height: 1;
-  -webkit-mask-image: none;
-  mask-image: none;
 }

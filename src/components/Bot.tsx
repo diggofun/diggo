@@ -1,43 +1,44 @@
 /**
  * The Diggo crew: small coloured bots with two eyes, borrowed from LowBot's bot characters
  * (Avenium-project/LowBot, client/components/v2/ui.jsx, MIT). LowBot's eight shapes and colours,
- * plus eight more of each, and the same idle float, look-around, blink and tap squish. Diggo adds
- * a pickaxe, a dig cycle, and a wardrobe of hats and glasses.
+ * plus eight more of each, drawn flat, with the same idle float, look-around, blink and tap squish.
+ * Diggo adds a pickaxe, a work routine (swing, hop, turn around) and a small wardrobe.
  *
- * Every shape is drawn with a thick stroke in its own colour and round joins, so even the pointy
- * ones (star, diamond, hexagon) end up with soft, rounded corners.
+ * Every outline is drawn with a thick stroke in its own colour and round joins, so even the pointy
+ * shapes (star, diamond, hexagon) end up with soft corners. Hats and glasses follow the same rule.
  *
  * Purely decorative. A bot never carries game state of its own: callers pick a look from a stable
  * seed (botFor) or a slot index (botAt), so the same mine or slot always shows the same bot.
  */
 import { useState, type CSSProperties, type ReactNode } from "react";
+import "./bot.css";
 
 interface ShapeDef {
   /** Outline in a 100x100 box. */
   d: string;
   /** Left eye centre; the right eye sits 12 units to its right. Eyes sit upper right: bots face right. */
   eyes: readonly [number, number];
-  /** Top of the head, where a hat sits. */
+  /** Top of the head (the bottom centre of a hat). */
   head: readonly [number, number];
 }
 
 export const BOT_SHAPES = {
-  circle: { d: "M50 6a44 44 0 1 1 0 88a44 44 0 1 1 0-88z", eyes: [58, 32], head: [52, 7] },
-  blob: { d: "M52 10c26 0 42 14 42 38c0 26-20 42-46 42C22 90 6 74 6 50C6 26 24 10 52 10z", eyes: [58, 32], head: [54, 11] },
-  square: { d: "M30 8h40c14 0 22 8 22 22v40c0 14-8 22-22 22H30C16 92 8 84 8 70V30C8 16 16 8 30 8z", eyes: [58, 30], head: [52, 9] },
-  pill: { d: "M30 22h40a28 28 0 0 1 0 56H30a28 28 0 0 1 0-56z", eyes: [60, 38], head: [58, 23] },
-  triangle: { d: "M41 14c4.5-7.5 13.5-7.5 18 0l34 58c4.5 7.8-1 16-10 16H17c-9 0-14.5-8.2-10-16z", eyes: [52, 44], head: [50, 12] },
-  hexagon: { d: "M50 6l38 22v44L50 94L12 72V28z", eyes: [56, 34], head: [50, 9] },
-  cloud: { d: "M30 82c-14 0-24-10-24-22c0-11 8-20 19-21c2-15 13-25 27-25c13 0 24 9 27 21c10 1 17 10 17 21c0 14-10 26-26 26z", eyes: [58, 40], head: [52, 15] },
-  drop: { d: "M50 6c14 20 36 38 36 58c0 18-16 30-36 30S14 82 14 64C14 44 36 26 50 6z", eyes: [56, 50], head: [52, 14] },
-  star: { d: "M50 10L62.3 37L91.8 40.4L70 60.5L75.9 89.6L50 75L24.1 89.6L30 60.5L8.2 40.4L37.7 37z", eyes: [43, 50], head: [50, 14] },
-  heart: { d: "M50 88C20 70 6 52 6 34C6 18 18 8 31 8C40 8 46 13 50 20C54 13 60 8 69 8C82 8 94 18 94 34C94 52 80 70 50 88z", eyes: [52, 38], head: [69, 9] },
-  diamond: { d: "M50 6L92 50L50 94L8 50z", eyes: [45, 44], head: [50, 10] },
-  ghost: { d: "M50 8c22 0 38 16 38 38V90L78.5 82L69 90L59.5 82L50 90L40.5 82L31 90L21.5 82L12 90V46c0-22 16-38 38-38z", eyes: [56, 36], head: [52, 9] },
-  egg: { d: "M50 6c22 0 38 30 38 54c0 20-16 34-38 34S12 80 12 60C12 36 28 6 50 6z", eyes: [54, 42], head: [50, 7] },
-  bean: { d: "M30 14c14-6 22 8 34 6c16-3 30 8 30 28c0 26-20 44-46 44C24 92 8 76 8 54C8 34 16 20 30 14z", eyes: [58, 38], head: [70, 19] },
-  octagon: { d: "M32 8h36l24 24v36L68 92H32L8 68V32z", eyes: [56, 34], head: [50, 9] },
-  bell: { d: "M50 8c24 0 38 20 38 44c0 10 4 18 8 22c2 3 0 6-3 6H7c-3 0-5-3-3-6c4-4 8-12 8-22C12 28 26 8 50 8z", eyes: [56, 40], head: [50, 9] },
+  circle: { d: "M50 6a44 44 0 1 1 0 88a44 44 0 1 1 0-88z", eyes: [58, 32], head: [54, 6] },
+  blob: { d: "M52 10c26 0 42 14 42 38c0 26-20 42-46 42C22 90 6 74 6 50C6 26 24 10 52 10z", eyes: [58, 32], head: [56, 10] },
+  square: { d: "M30 8h40c14 0 22 8 22 22v40c0 14-8 22-22 22H30C16 92 8 84 8 70V30C8 16 16 8 30 8z", eyes: [58, 30], head: [54, 8] },
+  pill: { d: "M30 22h40a28 28 0 0 1 0 56H30a28 28 0 0 1 0-56z", eyes: [60, 38], head: [60, 22] },
+  triangle: { d: "M41 14c4.5-7.5 13.5-7.5 18 0l34 58c4.5 7.8-1 16-10 16H17c-9 0-14.5-8.2-10-16z", eyes: [52, 44], head: [50, 10] },
+  hexagon: { d: "M50 6l38 22v44L50 94L12 72V28z", eyes: [56, 34], head: [50, 7] },
+  cloud: { d: "M30 82c-14 0-24-10-24-22c0-11 8-20 19-21c2-15 13-25 27-25c13 0 24 9 27 21c10 1 17 10 17 21c0 14-10 26-26 26z", eyes: [58, 40], head: [53, 14] },
+  drop: { d: "M50 6c14 20 36 38 36 58c0 18-16 30-36 30S14 82 14 64C14 44 36 26 50 6z", eyes: [56, 50], head: [52, 12] },
+  star: { d: "M50 10L62.3 37L91.8 40.4L70 60.5L75.9 89.6L50 75L24.1 89.6L30 60.5L8.2 40.4L37.7 37z", eyes: [43, 50], head: [50, 11] },
+  heart: { d: "M50 88C20 70 6 52 6 34C6 18 18 8 31 8C40 8 46 13 50 20C54 13 60 8 69 8C82 8 94 18 94 34C94 52 80 70 50 88z", eyes: [52, 38], head: [70, 8] },
+  diamond: { d: "M50 6L92 50L50 94L8 50z", eyes: [45, 44], head: [50, 8] },
+  ghost: { d: "M50 8c22 0 38 16 38 38V90L78.5 82L69 90L59.5 82L50 90L40.5 82L31 90L21.5 82L12 90V46c0-22 16-38 38-38z", eyes: [56, 36], head: [54, 8] },
+  egg: { d: "M50 6c22 0 38 30 38 54c0 20-16 34-38 34S12 80 12 60C12 36 28 6 50 6z", eyes: [54, 42], head: [52, 6] },
+  bean: { d: "M30 14c14-6 22 8 34 6c16-3 30 8 30 28c0 26-20 44-46 44C24 92 8 76 8 54C8 34 16 20 30 14z", eyes: [58, 38], head: [72, 18] },
+  octagon: { d: "M32 8h36l24 24v36L68 92H32L8 68V32z", eyes: [56, 34], head: [52, 8] },
+  bell: { d: "M50 8c24 0 38 20 38 44c0 10 4 18 8 22c2 3 0 6-3 6H7c-3 0-5-3-3-6c4-4 8-12 8-22C12 28 26 8 50 8z", eyes: [56, 40], head: [52, 8] },
 } as const satisfies Record<string, ShapeDef>;
 
 export type BotShape = keyof typeof BOT_SHAPES;
@@ -50,11 +51,14 @@ export const BOT_COLORS = [
   "#84cc16", "#6366f1", "#14b8a6", "#ef2b3c", "#38bdf8", "#d946ef", "#8d6e4f", "#ffffff",
 ] as const;
 
-export type BotHat = "none" | "hardhat" | "cap" | "beanie" | "crown" | "party" | "bow";
-export type BotEyewear = "none" | "glasses" | "shades";
+export const BOT_HATS = ["none", "hardhat", "cap", "beanie", "crown", "party", "bow", "tophat"] as const;
+export type BotHat = (typeof BOT_HATS)[number];
+export const BOT_EYEWEAR = ["none", "glasses", "shades", "goggles"] as const;
+export type BotEyewear = (typeof BOT_EYEWEAR)[number];
 
-const HATS: readonly BotHat[] = ["none", "cap", "hardhat", "beanie", "none", "crown", "party", "bow"];
-const EYEWEAR: readonly BotEyewear[] = ["none", "glasses", "none", "shades", "none"];
+/** Wardrobe rotation for line-ups: plenty of bare heads, so the outfits stay a treat. */
+const HAT_ROTATION: readonly BotHat[] = ["none", "cap", "hardhat", "beanie", "none", "crown", "party", "bow", "tophat"];
+const EYEWEAR_ROTATION: readonly BotEyewear[] = ["none", "glasses", "none", "shades", "none", "goggles"];
 
 export interface BotLook {
   shape: BotShape;
@@ -75,8 +79,8 @@ export function botFor(seed: string): BotLook {
   return {
     shape: BOT_SHAPE_NAMES[h % BOT_SHAPE_NAMES.length],
     color: BOT_COLORS[(h >>> 4) % BOT_COLORS.length],
-    hat: HATS[(h >>> 8) % HATS.length],
-    eyewear: EYEWEAR[(h >>> 12) % EYEWEAR.length],
+    hat: HAT_ROTATION[(h >>> 8) % HAT_ROTATION.length],
+    eyewear: EYEWEAR_ROTATION[(h >>> 12) % EYEWEAR_ROTATION.length],
   };
 }
 
@@ -85,105 +89,138 @@ export function botAt(index: number): BotLook {
   return {
     shape: BOT_SHAPE_NAMES[(index * 5 + 1) % BOT_SHAPE_NAMES.length],
     color: BOT_COLORS[(index * 7) % BOT_COLORS.length],
-    hat: HATS[(index * 3 + 1) % HATS.length],
-    eyewear: EYEWEAR[(index * 2 + 1) % EYEWEAR.length],
+    hat: HAT_ROTATION[(index * 4 + 1) % HAT_ROTATION.length],
+    eyewear: EYEWEAR_ROTATION[(index * 5 + 1) % EYEWEAR_ROTATION.length],
   };
 }
 
-/** A second colour from the palette for hats and bows, never the bot's own. */
+/** A second colour for hats and bows: from the palette, never the bot's own and never white on white. */
 function accentFor(color: string): string {
   const index = BOT_COLORS.indexOf(color as (typeof BOT_COLORS)[number]);
-  return BOT_COLORS[((index < 0 ? hash(color) : index) + 5) % BOT_COLORS.length];
+  const pick = BOT_COLORS[((index < 0 ? hash(color) : index) + 5) % BOT_COLORS.length];
+  return pick === "#ffffff" ? "#3b82f6" : pick;
 }
 
-function Hat({ hat, head, color }: { hat: BotHat; head: readonly [number, number]; color: string }) {
-  const [x, y] = head;
-  const accent = accentFor(color);
+/** A flat shade laid over a part: the only "shading" a bot gets, so it stays flat. */
+const SHADE = { fill: "#000000", opacity: 0.2 } as const;
+const GOLD = "#facc15";
+const GOLD_DARK = "#d4a20a";
+const INK = "#18181b";
+
+/**
+ * A hat, drawn around its own bottom centre (0, 0) at its final size in the bot's 100x100 box.
+ * The wearer translates it onto the head anchor.
+ */
+function HatArt({ hat, accent }: { hat: BotHat; accent: string }): ReactNode {
   switch (hat) {
     case "hardhat":
       return (
-        <g className="bot-hat">
-          <path d={`M${x - 18} ${y + 5}a18 17 0 0 1 36 0z`} fill="#facc15" />
-          <path d={`M${x - 2} ${y - 11}v15`} stroke="#eab308" strokeWidth="3" strokeLinecap="round" />
-          <rect x={x - 23} y={y + 2} width="46" height="6" rx="3" fill="#eab308" />
-          <circle className="bot-lamp" cx={x + 11} cy={y - 3} r="4.2" fill="#fff7cc" />
-        </g>
+        <>
+          <path d="M-17 1C-17-12-9-21 0-21S17-12 17 1Z" fill={GOLD} />
+          <path d="M-1.5-20.5V-2" stroke={GOLD_DARK} strokeWidth="4" strokeLinecap="round" />
+          <rect x="-23" y="-2.5" width="46" height="7" rx="3.5" fill={GOLD_DARK} />
+          <circle className="bot-lamp" cx="10" cy="-10" r="5.6" fill={GOLD_DARK} />
+          <circle cx="10" cy="-10" r="3.6" fill="#fef9c3" />
+        </>
       );
     case "cap":
       return (
-        <g className="bot-hat">
-          <path d={`M${x - 16} ${y + 6}a16 15 0 0 1 32 0z`} fill={accent} />
-          <path d={`M${x + 10} ${y + 3}q16 -1 22 5q-9 3 -22 1z`} fill={accent} stroke={accent} strokeWidth="2" strokeLinejoin="round" />
-          <circle cx={x} cy={y - 9} r="2.4" fill="#ffffff" opacity=".8" />
-        </g>
+        <>
+          <path d="M-15 1C-15-11-8-18 0-18S15-11 15 1Z" fill={accent} />
+          <path d="M10-1C18-2.5 25-.5 29.5 3C25 5.5 17 5.5 10 4Z" fill={accent} stroke={accent} strokeWidth="2" strokeLinejoin="round" />
+          <path d="M10-1C18-2.5 25-.5 29.5 3C25 5.5 17 5.5 10 4Z" {...SHADE} />
+          <circle cx="0" cy="-18" r="2.8" fill={accent} />
+        </>
       );
     case "beanie":
       return (
-        <g className="bot-hat">
-          <path d={`M${x - 17} ${y + 6}a17 18 0 0 1 34 0z`} fill={accent} />
-          <rect x={x - 19} y={y + 1} width="38" height="8" rx="4" fill={accent} />
-          <rect x={x - 19} y={y + 1} width="38" height="8" rx="4" fill="#000000" opacity=".18" />
-          <circle cx={x} cy={y - 13} r="5" fill="#ffffff" />
-        </g>
+        <>
+          <path d="M-16-2C-16-15-9-22 0-22S16-15 16-2Z" fill={accent} />
+          <rect x="-18" y="-7" width="36" height="10" rx="5" fill={accent} />
+          <rect x="-18" y="-7" width="36" height="10" rx="5" {...SHADE} />
+          <circle cx="0" cy="-24.5" r="5.8" fill="#ffffff" />
+        </>
       );
     case "crown":
       return (
-        <g className="bot-hat">
-          <path
-            d={`M${x - 14} ${y + 6}V${y - 8}L${x - 7} ${y - 1}L${x} ${y - 12}L${x + 7} ${y - 1}L${x + 14} ${y - 8}V${y + 6}z`}
-            fill="#facc15"
-            stroke="#facc15"
-            strokeWidth="4"
-            strokeLinejoin="round"
-          />
-          <circle cx={x} cy={y + 1} r="2.6" fill="#f43f5e" />
-        </g>
+        <>
+          <path d="M-14 1V-13L-7-5.5L0-17L7-5.5L14-13V1Z" fill={GOLD} stroke={GOLD} strokeWidth="4.5" strokeLinejoin="round" />
+          <rect x="-16" y="-3.5" width="32" height="6" rx="3" fill={GOLD_DARK} />
+          <circle cx="0" cy="-8" r="2.8" fill="#f43f5e" />
+        </>
       );
     case "party":
       return (
-        <g className="bot-hat" transform={`rotate(14 ${x} ${y + 6})`}>
-          <path d={`M${x - 11} ${y + 6}L${x} ${y - 20}L${x + 11} ${y + 6}z`} fill={accent} stroke={accent} strokeWidth="3" strokeLinejoin="round" />
-          <path d={`M${x - 7} ${y - 3}L${x + 5} ${y + 2}M${x - 4} ${y - 11}L${x + 3} ${y - 8}`} stroke="#ffffff" strokeWidth="2.4" strokeLinecap="round" opacity=".85" />
-          <circle cx={x} cy={y - 21} r="3.6" fill="#ffffff" />
+        <g transform="rotate(14)">
+          <path d="M-11 1L0-25L11 1Z" fill={accent} stroke={accent} strokeWidth="4" strokeLinejoin="round" />
+          <circle cx="-3" cy="-7" r="2.4" fill="#ffffff" opacity=".9" />
+          <circle cx="3" cy="-14" r="2" fill="#ffffff" opacity=".9" />
+          <circle cx="0" cy="-28" r="4.4" fill="#ffffff" />
         </g>
       );
     case "bow":
       return (
-        <g className="bot-hat">
-          <path d={`M${x + 4} ${y + 6}l-12 -8v14z M${x + 4} ${y + 6}l12 -8v14z`} fill={accent} stroke={accent} strokeWidth="3" strokeLinejoin="round" />
-          <circle cx={x + 4} cy={y + 6} r="3.6" fill={accent} stroke="#000000" strokeOpacity=".2" />
+        <g transform="translate(12 1)">
+          <path d="M0-3C-4-11-14-12-14-3S-4 4 0-3Z" fill={accent} stroke={accent} strokeWidth="2" strokeLinejoin="round" />
+          <path d="M0-3C4-11 14-12 14-3S4 4 0-3Z" fill={accent} stroke={accent} strokeWidth="2" strokeLinejoin="round" />
+          <circle cx="0" cy="-3" r="4" fill={accent} />
+          <circle cx="0" cy="-3" r="4" {...SHADE} />
         </g>
+      );
+    case "tophat":
+      return (
+        <>
+          <rect x="-12" y="-25" width="24" height="25" rx="4.5" fill={INK} />
+          <rect x="-12" y="-9" width="24" height="5.5" fill={accent} />
+          <rect x="-19" y="-3" width="38" height="6.5" rx="3.25" fill={INK} />
+        </>
       );
     default:
       return null;
   }
 }
 
-function Eyewear({ eyewear, eyes }: { eyewear: BotEyewear; eyes: readonly [number, number] }) {
+/** Glasses, shades and goggles, centred on the eyes so they ride along when the bot looks around. */
+function EyewearArt({ eyewear, eyes }: { eyewear: BotEyewear; eyes: readonly [number, number] }): ReactNode {
   const [x, y] = eyes;
-  if (eyewear === "glasses") {
-    return (
-      <g className="bot-eyewear" fill="rgba(255,255,255,.22)" stroke="#111111" strokeWidth="2.4">
-        <circle cx={x} cy={y} r="7" />
-        <circle cx={x + 13} cy={y} r="7" />
-        <path d={`M${x + 6} ${y - 1}h1`} strokeLinecap="round" />
-        <path d={`M${x - 7} ${y - 1}l-8 -3`} strokeLinecap="round" fill="none" />
-      </g>
-    );
+  switch (eyewear) {
+    case "glasses":
+      return (
+        <g fill="none" stroke={INK} strokeWidth="2.8" strokeLinecap="round">
+          <circle cx={x} cy={y} r="6.6" />
+          <circle cx={x + 12.6} cy={y} r="6.6" />
+          <path d={`M${x - 6.6} ${y - 1}l-6 -2.5`} />
+        </g>
+      );
+    case "shades":
+      return (
+        <>
+          <rect x={x - 8.5} y={y - 6} width="29.5" height="12" rx="6" fill={INK} />
+          <path d={`M${x - 8.5} ${y - 2}l-6 -2.5`} stroke={INK} strokeWidth="2.8" strokeLinecap="round" />
+          <path d={`M${x - 3.5} ${y - 2.5}h4`} stroke="#ffffff" strokeOpacity=".6" strokeWidth="2" strokeLinecap="round" />
+        </>
+      );
+    case "goggles":
+      return (
+        <>
+          <path d={`M${x - 20} ${y + 1}H${x + 30}`} stroke={INK} strokeWidth="4.5" strokeLinecap="round" />
+          <circle cx={x} cy={y} r="8" fill={INK} />
+          <circle cx={x + 13} cy={y} r="8" fill={INK} />
+          <circle cx={x} cy={y} r="5.4" fill="#7dd3fc" />
+          <circle cx={x + 13} cy={y} r="5.4" fill="#7dd3fc" />
+        </>
+      );
+    default:
+      return null;
   }
-  if (eyewear === "shades") {
-    return (
-      <g className="bot-eyewear">
-        <rect x={x - 8} y={y - 6} width="29" height="11" rx="5.5" fill="#111111" />
-        <path d={`M${x - 8} ${y - 2}l-7 -3`} stroke="#111111" strokeWidth="2.4" strokeLinecap="round" />
-        <path d={`M${x - 3} ${y - 3}h5`} stroke="#ffffff" strokeOpacity=".55" strokeWidth="1.8" strokeLinecap="round" />
-      </g>
-    );
-  }
-  return null;
 }
 
-export type BotMood = "idle" | "busy" | "dig" | "attention";
+/**
+ * "idle" floats, looks around, and now and then turns to look behind it; "busy" hops; "dig" swings
+ * the pickaxe on a loop; "work" is the mine routine (a few swings at the rock, a pause, a hop, a
+ * look the other way); "attention" wiggles.
+ */
+export type BotMood = "idle" | "busy" | "dig" | "work" | "attention";
 
 export interface BotProps {
   shape: BotShape;
@@ -193,41 +230,47 @@ export interface BotProps {
   /** Pixels, or any CSS length ("100%") when a parent box sizes the bot. */
   size?: number | string;
   mood?: BotMood;
-  /** Draws the pickaxe. Implied by mood "dig". */
+  /** Draws the pickaxe. Implied by moods "dig" and "work". */
   tool?: boolean;
+  /** Pickaxe head colour (a cosmetic). */
+  toolColor?: string;
   /** No animation at all (lists, tiny avatars). */
   still?: boolean;
-  /** Offsets this bot's cycle so a line-up never moves in lockstep. Seconds. */
+  /** Offsets this bot's cycle so a line-up never moves in lockstep. Seconds. Inherited when omitted. */
   phase?: number;
-  /** Dig cycle length in seconds; shorter reads as a harder-working crew. */
+  /** Cycle length in seconds (a dig swing, or the whole work routine). Inherited when omitted. */
   tempo?: number;
   className?: string;
 }
 
-export function Bot({ shape, color, hat = "none", eyewear = "none", size = 48, mood = "idle", tool, still, phase = 0, tempo, className = "" }: BotProps) {
+export function Bot({
+  shape,
+  color,
+  hat = "none",
+  eyewear = "none",
+  size = 48,
+  mood = "idle",
+  tool,
+  toolColor = "#e4e4e7",
+  still,
+  phase,
+  tempo,
+  className = "",
+}: BotProps) {
   const [squish, setSquish] = useState(false);
   const s: ShapeDef = BOT_SHAPES[shape] ?? BOT_SHAPES.blob;
   const [ex, ey] = s.eyes;
-  const eye = color.toLowerCase() === "#ffffff" ? "#3f3f46" : "#1c1917";
-  const withTool = tool ?? mood === "dig";
+  const [hx, hy] = s.head;
+  const eye = color.toLowerCase() === "#ffffff" ? "#3f3f46" : INK;
+  const withTool = tool ?? (mood === "dig" || mood === "work");
   const style = {
     width: size,
     height: size,
-    "--bot-phase": -phase + "s",
-    ...(tempo ? { "--bot-tempo": tempo + "s" } : {}),
+    ...(phase === undefined ? null : { "--bot-phase": -phase + "s" }),
+    ...(tempo === undefined ? null : { "--bot-tempo": tempo + "s" }),
   } as CSSProperties;
   const classes = ["bot", "is-" + mood, still ? "is-still" : "", squish ? "is-squish" : "", className].filter(Boolean).join(" ");
-  let eyesNode: ReactNode = (
-    <>
-      <g transform={"rotate(-10 " + ex + " " + ey + ")"}>
-        <rect className="bot-eye" x={ex - 2.8} y={ey - 6.5} width="5.6" height="13" rx="2.8" fill={eye} />
-      </g>
-      <g transform={"rotate(10 " + (ex + 12) + " " + ey + ")"}>
-        <rect className="bot-eye" x={ex + 9.2} y={ey - 6.5} width="5.6" height="13" rx="2.8" fill={eye} />
-      </g>
-    </>
-  );
-  if (eyewear === "shades") eyesNode = null; // shades cover the eyes completely
+  const coversEyes = eyewear === "shades";
   return (
     <span
       className={classes}
@@ -239,53 +282,46 @@ export function Bot({ shape, color, hat = "none", eyewear = "none", size = 48, m
         window.setTimeout(() => setSquish(false), 460);
       }}
     >
-      {(mood === "busy" || mood === "dig") && !still && <span className="bot-shadow" />}
+      {mood === "busy" && !still && <span className="bot-shadow" />}
       <svg className="bot-svg" viewBox="0 0 100 100" focusable="false">
-        <g className="bot-body">
-          {withTool && (
-            <g className="bot-tool">
-              <line x1="80" y1="64" x2="96" y2="22" stroke="#8d6e4f" strokeWidth="6" strokeLinecap="round" />
-              <path d="M78 22 Q96 8 114 26" fill="none" stroke="#d4d4d8" strokeWidth="7" strokeLinecap="round" />
+        <g className="bot-turn">
+          <g className="bot-body">
+            {/* The stroke in the body's own colour with round joins is what rounds every corner. */}
+            <path d={s.d} fill={color} stroke={color} strokeWidth="9" strokeLinejoin="round" />
+            <g className="bot-eyes">
+              {!coversEyes && (
+                <>
+                  <g transform={`rotate(-10 ${ex} ${ey})`}>
+                    <rect className="bot-eye" x={ex - 2.8} y={ey - 6.5} width="5.6" height="13" rx="2.8" fill={eye} />
+                  </g>
+                  <g transform={`rotate(10 ${ex + 12} ${ey})`}>
+                    <rect className="bot-eye" x={ex + 9.2} y={ey - 6.5} width="5.6" height="13" rx="2.8" fill={eye} />
+                  </g>
+                </>
+              )}
+              <EyewearArt eyewear={eyewear} eyes={s.eyes} />
             </g>
-          )}
-          {/* The stroke in the body's own colour with round joins is what rounds every corner. */}
-          <path d={s.d} fill={color} stroke={color} strokeWidth="9" strokeLinejoin="round" />
-          <path d={s.d} fill="url(#bot-sheen)" stroke="url(#bot-sheen)" strokeWidth="9" strokeLinejoin="round" opacity=".5" />
-          <g className="bot-eyes">
-            {eyesNode}
-            <Eyewear eyewear={eyewear} eyes={s.eyes} />
+            {hat !== "none" && (
+              <g className="bot-hat" transform={`translate(${hx} ${hy - 1}) scale(1.3)`}>
+                <HatArt hat={hat} accent={accentFor(color)} />
+              </g>
+            )}
+            {/* The pick is held in front of the body, the way the logo bot holds it: handle across the
+                body, head over the shoulder, swinging round the hand at (70, 68). */}
+            {withTool && (
+              <g className="bot-tool">
+                <path d="M70 70L88 22" stroke="#9a5a26" strokeWidth="8" strokeLinecap="round" />
+                <path d="M64 25Q88 4 113 31Q88 15 64 25Z" fill={toolColor} stroke={toolColor} strokeWidth="5" strokeLinejoin="round" />
+              </g>
+            )}
           </g>
-          {hat !== "none" && (
-            <g transform={`translate(${s.head[0]} ${s.head[1] + 4}) scale(1.35) translate(${-s.head[0]} ${-s.head[1] - 4})`}>
-              <Hat hat={hat} head={s.head} color={color} />
-            </g>
-          )}
-          {withTool && <circle className="bot-hand" cx="80" cy="64" r="6" fill={color} stroke="#000000" strokeOpacity=".12" />}
         </g>
       </svg>
-      {mood === "dig" && !still && (
+      {(mood === "dig" || mood === "work") && !still && (
         <span className="bot-sparks">
           <i /><i /><i />
         </span>
       )}
     </span>
-  );
-}
-
-/**
- * Shared SVG defs (the soft top-left sheen every bot wears). Rendered once near the root so each
- * bot can reference it by id instead of repeating a gradient per instance.
- */
-export function BotDefs() {
-  return (
-    <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden="true" focusable="false">
-      <defs>
-        <radialGradient id="bot-sheen" cx="30%" cy="22%" r="70%">
-          <stop offset="0" stopColor="#ffffff" stopOpacity=".55" />
-          <stop offset=".45" stopColor="#ffffff" stopOpacity="0" />
-          <stop offset="1" stopColor="#000000" stopOpacity=".22" />
-        </radialGradient>
-      </defs>
-    </svg>
   );
 }

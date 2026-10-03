@@ -25,8 +25,8 @@ import { compact, shortAddress } from "../format";
 import { SwapPanel } from "./SwapPanel";
 import { EmptyState } from "./StatusViews";
 
-/** The brand mark, shipped as a raster asset. Decorative here: the name is already in the heading. */
-const DIGGO_MARK = "/assets/brand/mark-trim-512.png?v=2";
+/** The brand mark (the orange bot with its pick). Decorative here: the name is already in the heading. */
+const DIGGO_MARK = "/assets/brand/diggo-logo-256.png";
 
 export interface DiggoTradePageProps {
   /** The validated official mint, or null while $DIGGO has not launched. */
@@ -169,11 +169,10 @@ function DiggoHeader({
         className={imageUrl ? "diggo-hero-mark" : "diggo-hero-mark is-brand"}
         src={imageUrl || DIGGO_MARK}
         alt=""
-        width={512}
-        height={512}
+        width={256}
+        height={213}
       />
       <div className="diggo-hero-text">
-        <span className="eyebrow">OFFICIAL COIN</span>
         <h1>
           {name || OFFICIAL_COIN_NAME} <span>${symbol || OFFICIAL_COIN_SYMBOL}</span>
         </h1>

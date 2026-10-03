@@ -2,10 +2,9 @@
  * Dev-only gallery for the icon set.
  *
  * Not wired into the router: render <IconGallery /> from the dev entry (the same way UiGallery is
- * served at /__ui) to review the PNG glyph set — every asset name, the accent tints, the filled
- * variants and the size scale — against the warm paper background. Nothing here talks to the
- * Worker. Every registered name must have its own PNG; src/icons/icons.test.tsx enforces that
- * invariant, so a blank registered tile is a missing-asset failure rather than an expected state.
+ * served at /__ui) to review the drawn glyph set — every name, the accent tints, the filled
+ * variants and the size scale. Nothing here talks to the Worker. Every registered name must have
+ * its own drawing; src/icons/icons.test.tsx enforces that invariant.
  */
 import type { ComponentType, CSSProperties } from "react";
 import {
@@ -15,7 +14,6 @@ import {
   IconBell,
   IconMine,
   IconWatchlist,
-  iconAsset,
   type IconName,
   type IconProps,
 } from "../icons";
@@ -136,9 +134,9 @@ export function IconGallery() {
         <p style={S.eyebrow}>dev gallery · not routed</p>
         <h1 style={S.h1}>Icon set</h1>
         <p style={S.lead}>
-          {ENTRIES.length} raster glyphs painted in currentColor through a CSS mask —
-          {ICON_NAMES.length} PNGs in public/assets/icons, one per name. The icon asset test fails if
-          any registered name is missing its own PNG.
+          {ENTRIES.length} drawn glyphs painted in currentColor — {ICON_NAMES.length} names, one
+          drawing each in glyphs.tsx. The icon glyph audit fails if any registered name is missing
+          its drawing.
         </p>
       </header>
 
@@ -147,7 +145,6 @@ export function IconGallery() {
           <article key={name} style={S.cell}>
             <Icon size={28} />
             <span style={S.label}>{name}</span>
-            <span style={S.asset}>{iconAsset(name)}.png</span>
           </article>
         ))}
       </section>
@@ -176,7 +173,7 @@ export function IconGallery() {
             <IconWatchlist size={32} accent="lime" />
             <IconWatchlist size={32} accent="orange" />
           </div>
-          <span style={S.asset}>watchlist.png · watchlistFilled.png</span>
+          <span style={S.asset}>watchlist · watchlistFilled</span>
         </div>
         <div style={S.stateGroup}>
           <p style={S.label}>bell · outline, filled, orange</p>
@@ -185,7 +182,7 @@ export function IconGallery() {
             <IconBell size={32} filled />
             <IconBell size={32} accent="orange" />
           </div>
-          <span style={S.asset}>bell.png · filled repeats the outline, there is no variant</span>
+          <span style={S.asset}>bell · filled repeats the outline, there is no variant</span>
         </div>
         <div style={S.stateGroup}>
           <p style={S.label}>size scale · 16, 24, 32, 48</p>
@@ -194,7 +191,7 @@ export function IconGallery() {
               <IconMine key={size} size={size} />
             ))}
           </div>
-          <span style={S.asset}>mine.png · size overrides the 1em box</span>
+          <span style={S.asset}>mine · size overrides the 1em box</span>
         </div>
       </section>
 

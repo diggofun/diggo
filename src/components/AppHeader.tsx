@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ComponentType, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type ComponentType } from "react";
 import { useConnect, useDisconnect, useWallets } from "@solana/kit-plugin-wallet/react";
 import bs58 from "bs58";
 import { fetchSolUsd, getChallenge, verifyWallet, type PortfolioSummary } from "../api";
@@ -18,14 +18,11 @@ import {
   IconLogout,
   IconMenu,
   IconMine,
-  IconMines,
   IconOre,
-  IconProfile,
-  IconRocket,
+  IconPlus,
   IconSearch,
   IconSettings,
   IconStreak,
-  IconSwap,
   IconWallet,
   IconWatchlist,
   IconUserGroup,
@@ -35,6 +32,7 @@ import { solanaClient } from "../solana";
 import { displayName, useUsername } from "../username";
 import { OPEN_WALLET_EVENT, useDiggoWallet } from "../wallet";
 import { disconnectWalletConnect, openWalletConnect } from "../walletConnect";
+import { Bot, botFor } from "./Bot";
 import { NotificationsBell } from "./NotificationsBell";
 import { UsernameEditor } from "./UsernameEditor";
 
@@ -60,47 +58,28 @@ interface NavItem {
   href: string;
   label: string;
   icon?: ComponentType<IconProps>;
-  /**
- * A raster mark rendered instead of an icon-pack glyph, sized to match the line icons beside it.
-   * Used for the official coin link so it carries the real brand asset (no SVG, no icon pack).
-   */
+  /** The brand mark instead of an icon (the official coin's link). */
   image?: string;
 }
 
-const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
-  {
-    label: "Play",
-    items: [
-      { page: "mine", href: "/mine", label: "Mine", icon: IconMine },
-      { page: "crew", href: "/crew", label: "Crew", icon: IconCrew },
-      { page: "discoveries", href: "/discoveries", label: "Discoveries", icon: IconDiscoveries },
-    ],
-  },
-  {
-    label: "Explore",
-    items: [
-      // The official coin sits at the top of Explore: it is a market, not a mining destination.
-      // Its icon is the brand mark, rendered as an <img> by NavItem.image below rather than an
-      // icon-pack glyph, so the sidebar reuses the shipped logo rather than a lookalike.
-      { page: "diggo", href: "/diggo", label: "Trade Diggo", image: "/assets/brand/mark-trim-512.png?v=2" },
-      { page: "explore", href: "/explore", label: "Explore coins", icon: IconSearch },
-      { page: "mines", href: "/mines", label: "Mines", icon: IconMines },
-      { page: "trade", href: "/trade", label: "Trade", icon: IconSwap },
-      { page: "leaderboards", href: "/leaderboards", label: "Leaderboards", icon: IconLeaderboards },
-    ],
-  },
-  {
-    label: "Diggo",
-    items: [
-      { page: "referrals", href: "/referrals", label: "Referrals", icon: IconUserGroup },
-      { page: "cosmetics", href: "/cosmetics", label: "Cosmetics", icon: IconCosmetics },
-      { page: "create", href: "/create", label: "Create coin", icon: IconRocket },
-    ],
-  },
+/** The game: where a player spends a session. */
+const PLAY_ITEMS: NavItem[] = [
+  { page: "home", href: "/", label: "Home", icon: IconHome },
+  { page: "mine", href: "/mine", label: "Mine", icon: IconMine },
+  { page: "crew", href: "/crew", label: "Crew", icon: IconCrew },
+  { page: "discoveries", href: "/discoveries", label: "Discoveries", icon: IconDiscoveries },
+  { page: "explore", href: "/explore", label: "Explore coins", icon: IconSearch },
+  { page: "leaderboards", href: "/leaderboards", label: "Leaderboards", icon: IconLeaderboards },
+  { page: "diggo", href: "/diggo", label: "$DIGGO", image: "/assets/brand/diggo-logo-256.png" },
 ];
 
-const ALL_ITEMS = NAV_GROUPS.flatMap((group) => group.items);
-const MOBILE_ITEMS: PageId[] = ["home", "mine", "crew", "explore", "trade"];
+/** Everything else, a step down in the drawer. */
+const MORE_ITEMS: NavItem[] = [
+  { page: "referrals", href: "/referrals", label: "Referrals", icon: IconUserGroup },
+  { page: "cosmetics", href: "/cosmetics", label: "Cosmetics", icon: IconCosmetics },
+];
+
+const MOBILE_ITEMS: PageId[] = ["home", "mine", "crew", "discoveries", "explore"];
 
 /**
  * The tab bar gets one line for five labels inside 360px, so any label longer than a word or two
@@ -109,15 +88,18 @@ const MOBILE_ITEMS: PageId[] = ["home", "mine", "crew", "explore", "trade"];
  */
 const TAB_BAR_SHORT_LABELS: Partial<Record<PageId, string>> = {
   explore: "Explore",
+  discoveries: "Finds",
 };
 
+/**
+ * The brand: the "diggo" wordmark spelled in bots, and the orange bot alone where the row is tight.
+ * Both are cut-outs on transparent backgrounds (scripts/brand/make-bot-brand.mjs).
+ */
 export function BrandMark() {
   return (
     <a className="brand" href="/" aria-label="Diggo.fun home">
-      {/* Transparent mark, not the square icon: the header sits on translucent paper, so an
-          opaque white tile would read as a pale box around the pickaxe. */}
-      <img className="brand-art brand-art-icon" src="/assets/brand/mark-trim-512.png?v=2" alt="" width={512} height={512} />
-      <strong>Diggo</strong>
+      <img className="brand-wordmark" src="/assets/brand/diggo-wordmark-640.png" alt="" width={640} height={190} />
+      <img className="brand-mark" src="/assets/brand/diggo-logo-256.png" alt="" width={256} height={213} />
     </a>
   );
 }
@@ -180,37 +162,27 @@ export function AppHeader({ page, session, signedIn, summary, game, solBalance, 
         </div>
 
         <div className="header-actions">
-          <div className="account-summary" aria-label="Wallet summary">
-            <span title={game ? `${game.streak} day streak` : summary ? `${summary.mining.streak} day streak` : signedIn ? "Loading streak" : "Sign in to view streak"}>
-              <IconStreak size={23} />
-              <b>{game ? game.streak : summary ? summary.mining.streak : signedIn ? 0 : "—"}</b>
-              <small>Streak</small>
-            </span>
-            <span title={game ? `${oreAmount(game.oreBalance)} ORE` : summary ? `${oreAmount(summary.mining.oreWhole)} ORE` : signedIn ? "Loading ORE" : "Sign in to view ORE"}>
-              <IconOre size={23} />
-              <b>{game ? oreAmount(game.oreBalance) : summary ? oreAmount(summary.mining.oreWhole) : signedIn ? oreAmount(0) : "—"}</b>
-              <small>ORE</small>
-            </span>
-            <span title={solBalance === null ? (signedIn ? "Loading SOL balance" : "Sign in to view SOL balance") : `${solAmount(solBalance)} SOL${solBalanceUsd ? ` (≈ ${solBalanceUsd})` : ""}`}>
-              <IconBalance size={23} />
-              <b>{solBalance === null ? (signedIn ? solAmount(0) : "—") : solAmount(solBalance)}</b>
-              {/* The sub-label row: "SOL" plus the USD reading, which is null - and so absent -
-                  until both a real balance and a real price exist (see solUsd above). */}
-              <span className="account-sub">
-                <small>SOL</small>
-                {solBalanceUsd ? <em className="account-usd">≈&nbsp;{solBalanceUsd}</em> : null}
+          {signedIn && (
+            <div className="account-summary" aria-label="Wallet summary">
+              <span title={(game ? game.streak : summary?.mining.streak ?? 0) + " day streak"}>
+                <IconStreak size={16} />
+                <b>{game ? game.streak : summary ? summary.mining.streak : 0}</b>
               </span>
-            </span>
-          </div>
-          <button type="button" className="launch-button" onClick={onLaunch}>
-            <IconRocket size={23} /> <span>Create coin</span>
+              <span title={(game ? oreAmount(game.oreBalance) : summary ? oreAmount(summary.mining.oreWhole) : oreAmount(0)) + " ORE"}>
+                <IconOre size={16} />
+                <b>{game ? oreAmount(game.oreBalance) : summary ? oreAmount(summary.mining.oreWhole) : oreAmount(0)}</b>
+              </span>
+              <span title={solBalance === null ? "Loading SOL balance" : solAmount(solBalance) + " SOL" + (solBalanceUsd ? " (≈ " + solBalanceUsd + ")" : "")}>
+                <IconBalance size={16} />
+                <b>{solBalance === null ? solAmount(0) : solAmount(solBalance)}</b>
+                <small>SOL</small>
+              </span>
+            </div>
+          )}
+          <button type="button" className="btn btn-dark header-launch" onClick={onLaunch}>
+            <IconPlus size={18} /> <span>Launch</span>
           </button>
-          <span
-            className="header-alerts-control"
-            style={{ "--header-alerts-icon": "url(/assets/icons/alerts.png)" } as CSSProperties}
-          >
-            <NotificationsBell signedIn={signedIn} />
-          </span>
+          {signedIn && <NotificationsBell signedIn />}
           <WalletControl session={session} onAuthenticated={onAuthenticated} />
         </div>
       </header>
@@ -223,38 +195,24 @@ export function AppHeader({ page, session, signedIn, summary, game, solBalance, 
         </div>
 
         <nav className="sidebar-nav" aria-label="Primary">
-          <NavLink item={{ page: "home", href: "/", label: "Home", icon: IconHome }} active={page === "home"} className="sidebar-link sidebar-home" onNavigate={() => setSidebarOpen(false)} />
-          {NAV_GROUPS.map((group) => (
-            <section className="sidebar-section" key={group.label} aria-labelledby={"sidebar-" + group.label.toLowerCase()}>
-              <h2 id={"sidebar-" + group.label.toLowerCase()}>{group.label}</h2>
-              {group.items.map((item) => item.page === "create" ? (
-                <button key={item.page} type="button" className="sidebar-link" onClick={() => { setSidebarOpen(false); onLaunch(); }}>
-                  {item.icon ? <item.icon size={26} /> : null}{item.label}
-                </button>
-              ) : (
-                <NavLink key={item.page} item={item} active={page === item.page} className="sidebar-link" onNavigate={() => setSidebarOpen(false)} />
-              ))}
-            </section>
+          {PLAY_ITEMS.map((item) => (
+            <NavLink key={item.page} item={item} active={page === item.page} className="sidebar-link" onNavigate={() => setSidebarOpen(false)} />
           ))}
         </nav>
 
+        <nav className="sidebar-nav sidebar-more" aria-label="More">
+          {MORE_ITEMS.map((item) => (
+            <NavLink key={item.page} item={item} active={page === item.page} className="sidebar-link" onNavigate={() => setSidebarOpen(false)} />
+          ))}
+          <a className="sidebar-link" href="/explore#watchlist" onClick={() => setSidebarOpen(false)}>
+            <IconWatchlist size={22} /> Watchlist
+          </a>
+          <button type="button" className="sidebar-link" onClick={() => { setSidebarOpen(false); onLaunch(); }}>
+            <IconPlus size={22} /> Create coin
+          </button>
+        </nav>
+
         <div className="sidebar-shortcuts">
-          <a className="sidebar-link" href="/#watchlist" onClick={() => setSidebarOpen(false)}>
-            <IconWatchlist size={26} /> Watchlist
-          </a>
-          <a
-            className="sidebar-link sidebar-x"
-            href="https://x.com/Diggo_Fun"
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={() => {
-              track("x_link_clicked", { location: "sidebar" });
-              setSidebarOpen(false);
-            }}
-          >
-            <img className="x-logo" src="/assets/icons/x.png" srcSet="/assets/icons/x.png 1x, /assets/icons/x@2x.png 2x" width={22} height={22} alt="" />
-            Follow on X
-          </a>
           {signedIn && (
             <NavLink item={{ page: "admin", href: "/admin", label: "Admin", icon: IconAdmin }} active={page === "admin"} className="sidebar-link" onNavigate={() => setSidebarOpen(false)} />
           )}
@@ -264,11 +222,8 @@ export function AppHeader({ page, session, signedIn, summary, game, solBalance, 
             aria-current={page === "profile" ? "page" : undefined}
             onClick={() => setSidebarOpen(false)}
           >
-            <IconProfile size={26} />
-            <span>
-              <small>Your profile</small>
-              <b>{signedIn && session ? shortAddress(session) : "Connect wallet"}</b>
-            </span>
+            {signedIn && session ? <Bot {...botFor(session)} size={32} still /> : <IconWallet size={22} />}
+            <span>{signedIn && session ? shortAddress(session) : "Connect wallet"}</span>
           </a>
         </div>
       </aside>
@@ -276,9 +231,7 @@ export function AppHeader({ page, session, signedIn, summary, game, solBalance, 
 
       <nav className="tab-bar" aria-label="Game shortcuts">
         {MOBILE_ITEMS.map((id) => {
-          const item = id === "home"
-            ? { page: "home" as const, href: "/", label: "Home", icon: IconHome }
-            : ALL_ITEMS.find((candidate) => candidate.page === id)!;
+          const item = PLAY_ITEMS.find((candidate) => candidate.page === id)!;
           const Icon = item.icon;
           const shortLabel = TAB_BAR_SHORT_LABELS[id];
           return (
@@ -312,7 +265,6 @@ function NavLink({
   onNavigate?(): void;
 }) {
   const Icon = item.icon;
-  const inSidebar = className.includes("sidebar");
   return (
     <a
       className={(className + (active ? " active" : "")).trim()}
@@ -321,9 +273,9 @@ function NavLink({
       onClick={onNavigate}
     >
       {item.image ? (
-        <img className="nav-mark" src={item.image} alt="" width={512} height={512} />
+        <img className="nav-mark" src={item.image} alt="" width={256} height={213} />
       ) : (
-        Icon ? <Icon size={inSidebar ? 26 : 18} /> : null
+        Icon ? <Icon size={22} /> : null
       )} {item.label}
    </a>
   );
@@ -421,11 +373,11 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
           onClick={() => void signIn()}
           title={isAuthenticated ? "Signed in — sign again to refresh your session" : "Sign in with wallet"}
         >
-          {/* Signed in, the control is an identity badge: the sidebar's own raster profile glyph
-              replaces the connection dot. A connected-but-unsigned wallet keeps the dot, because
-              there the dot is the "not signed in yet" signal the player acts on. */}
+          {/* Signed in, the control is an identity badge: the player's own bot replaces the
+              connection dot. A connected-but-unsigned wallet keeps the dot, because there the dot
+              is the "not signed in yet" signal the player acts on. */}
           {isAuthenticated ? (
-            <IconProfile className="wallet-button-icon" size={23} />
+            <Bot {...botFor(connected.address)} size={26} still className="wallet-button-icon" />
           ) : (
             <i className="wallet-dot" aria-hidden="true" />
           )}
@@ -475,7 +427,7 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
           setOpen((value) => !value);
         }}
       >
-        <IconWallet className="wallet-button-icon" size={23} /> <span className="wallet-button-label">Connect wallet</span>
+        <IconWallet className="wallet-button-icon" size={20} /> <span className="wallet-button-label">Connect wallet</span>
       </button>
       {open && (
         <div className="wallet-menu" role="group" aria-label="Choose a wallet">
@@ -504,7 +456,7 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
               });
             }}
           >
-            <IconWallet size={23} /> Connect WalletConnect
+            <IconWallet size={20} /> Connect WalletConnect
           </button>
           <small>WalletConnect covers phones and wallets not detected above.</small>
           <small className="wallet-menu-legal">

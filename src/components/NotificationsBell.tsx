@@ -26,7 +26,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { NotificationRecord } from "../../shared/types";
 import { ApiError, getNotifications, markNotificationsRead } from "../api";
-import { IconCheck, IconRefresh } from "../icons";
+import { IconBell, IconCheck, IconRefresh } from "../icons";
 import { PushToggle } from "./PushToggle";
 
 export interface NotificationsBellProps {
@@ -228,7 +228,7 @@ export function NotificationsBell({ signedIn }: NotificationsBellProps) {
         aria-label="Alerts, sign in to receive crew notifications"
         title="Sign in to receive crew notifications"
       >
-        <span className="notifications-bell-label">Alerts</span>
+        <IconBell size={20} />
       </span>
     );
   }
@@ -248,7 +248,7 @@ export function NotificationsBell({ signedIn }: NotificationsBellProps) {
         aria-expanded={open}
         aria-label={unread > 0 ? unread + " unread notifications" : "Notifications"}
       >
-        <span className="notifications-bell-label">Alerts</span>
+        <IconBell size={20} />
         {unread > 0 && <i className="notifications-count">{unread > 9 ? "9+" : unread}</i>}
       </button>
 
@@ -256,7 +256,7 @@ export function NotificationsBell({ signedIn }: NotificationsBellProps) {
         <div className="notifications-menu">
           <header className="notifications-head">
             <span className="notifications-title">
-              <i className="notifications-title-glyph" aria-hidden="true" />
+              <IconBell size={18} />
               <strong>Crew notifications</strong>
             </span>
             <div className="notifications-head-actions">

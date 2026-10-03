@@ -154,7 +154,7 @@ export function CosmeticsScreen({ signedIn, previewTier = 3 }: CosmeticsScreenPr
                 : equippedCount + (equippedCount === 1 ? " slot equipped" : " slots equipped")}
             </small>
           </div>
-          <MineScene tier={previewTier} active cosmetics={view.equipped} label="Your loadout" />
+          <MineScene tier={previewTier} active cosmetics={view.equipped} />
           <p>
             This is the mine your crew digs in. Colours and themes only — the preview has no effect
             on Mining Power, block rewards or discovery odds.

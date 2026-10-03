@@ -34,11 +34,11 @@ export function RouteFallback({ rows = 3 }: { rows?: number }) {
 }
 
 export function EmptyState({
-  icon,
   title,
   children,
   action,
 }: {
+  /** Accepted for older call sites; a bot is drawn instead. */
   icon?: ReactNode;
   title: string;
   children?: ReactNode;
@@ -46,7 +46,8 @@ export function EmptyState({
 }) {
   return (
     <div className="empty-state">
-      {icon ? <span className="empty-state-icon" aria-hidden="true">{icon}</span> : <Bot {...botAt(title.length)} size={56} mood="idle" phase={title.length % 4} />}
+      {/* Every empty state is introduced by a bot, never by a stray icon. */}
+      <Bot {...botAt(title.length)} size={56} mood="idle" phase={title.length % 4} />
       <h3>{title}</h3>
       {children && <p>{children}</p>}
       {action}

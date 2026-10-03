@@ -141,7 +141,7 @@ export function DashboardPanel({
           )}
           {celebrating && (
             <div className="shift-stamp" aria-hidden="true">
-              <span>SHIFT STARTED</span>
+              <span>Shift started</span>
             </div>
           )}
         </div>
@@ -154,7 +154,7 @@ export function DashboardPanel({
           <div className="dash-active">
             <div className="dash-mine">
               <div className="dash-mine-head">
-                <span className="mono-label">NOW MINING</span>
+                <span className="mono-label">Now mining</span>
                 <span className="active-pill">
                   <i /> CREW ACTIVE
                 </span>
@@ -172,7 +172,7 @@ export function DashboardPanel({
                   <small>{mineSymbol ? "$" + mineSymbol : "Mine symbol syncing…"}</small>
                 </div>
               </div>
-              <MineScene tier={tier?.tier ?? 1} active compact cosmetics={equipped} label={tier?.name} />
+              <MineScene tier={tier?.tier ?? 1} active compact cosmetics={equipped} />
               <div className="dash-counters">
                 <div>
                   <span>
@@ -271,7 +271,7 @@ export function DashboardPanel({
             </div>
           </div>
           <div className="paused-visual">
-            <MineScene tier={tier?.tier ?? 1} cosmetics={equipped} label={tier?.name} />
+            <MineScene tier={tier?.tier ?? 1} cosmetics={equipped} />
             <div className="paused-visual-note">
               <strong>{tier?.name ?? "Backyard Diggers"}</strong>
               <span>{player.power.toLocaleString()} Mining Power on standby</span>
@@ -300,7 +300,7 @@ function GuestDashboard() {
         </button>
       </div>
       <div className="dash-guest-visual">
-        <MineScene tier={1} label={tiers[0]?.name} />
+        <MineScene tier={1} />
         <ol className="tier-ladder" aria-label="Crew tiers">
           {tiers.map((tier) => (
             <li key={tier.tier}>

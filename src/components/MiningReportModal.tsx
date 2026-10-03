@@ -13,7 +13,8 @@ import { duration, oreAmount, tokenAmount } from "../format";
 import { useReducedMotion } from "../motion";
 import { displayName, useViewerUsername } from "../username";
 import { CountUp } from "./CountUp";
-import { DiscoveryArt, GameArt } from "./MineScene";
+import { Bot } from "./Bot";
+import { DiscoveryArt } from "./MineScene";
 import { useDialog } from "./useDialog";
 
 export interface MiningReportModalProps {
@@ -91,8 +92,8 @@ export function MiningReportModal({
 
         <div className="report-grid">
           <div className="report-ore">
-            <span>ORE MINED</span>
-            <GameArt name="cart" alt="" width={768} height={768} className="report-ore-art" />
+            <span>ORE mined</span>
+            <Bot shape="pill" color="#10b981" hat="cap" size={56} mood="busy" className="report-ore-art" />
             <strong>
               +<CountUp value={report.oreGained} format={oreAmount} />
             </strong>
@@ -117,7 +118,7 @@ export function MiningReportModal({
 
         <div className="report-rewards">
           <div className="report-section-head">
-            <span>BLOCK REWARDS</span>
+            <span>Block rewards</span>
             <small>settled for this window</small>
           </div>
           {rewards.length > 0 ? (
