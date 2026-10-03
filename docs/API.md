@@ -176,6 +176,7 @@ behind them.
 | GET | `/api/cosmetics` | The cosmetic catalogue and what the caller owns |
 | GET | `/api/notifications` | Notifications derived from indexed state |
 | GET | `/api/profile/:wallet` | Public username and profile bot (`{ shape, color, accessory }` or null) |
+| GET | `/api/share/:code.png` | The referral share card (1200×630 PNG): the code owner's bot, name and what their crew dug; cached 10 min, unknown code redirects to the site banner |
 | GET | `/api/push/key` | The VAPID application server key |
 | GET | `/api/status` | Indexer and crank diagnostics |
 | GET | `/media/:key` | An uploaded image |
@@ -388,3 +389,7 @@ reserves. There is no instruction that reads it.
 `gateAction` is the one gate that still refuses something: it applies multi-key rate limits and
 account restrictions to *off-chain* actions (a username change, an appeal, a metadata edit). A
 refusal there costs a request, never a reward.
+
+## Referral link previews
+
+`GET /r/:code` runs in the Worker (`run_worker_first`) and serves the normal app shell with its Open Graph and Twitter tags pointed at `/api/share/:code.png`, so a referral link unfurls as the player's card on X, Discord and WhatsApp. Visitors get the same app, which reads the code from the path. The card is rendered with `@resvg/resvg-wasm` and bundled Roboto (`worker/share/`).

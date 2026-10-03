@@ -7,6 +7,7 @@ import { IconCheck } from "../icons";
 import { MineScene } from "./MineScene";
 import { Bot, botAt } from "./Bot";
 import { useProfileBot } from "../preferences";
+import { MyShareCard } from "./ShareCard";
 import { PushToggle } from "./PushToggle";
 import { TokenOrb } from "./TokenOrb";
 
@@ -309,6 +310,7 @@ export function MeteoraPortfolioScreen({ game, portfolio, tokens }: { game: Game
           <a className="btn btn-ghost btn-sm" href="/settings">Edit your bot</a>
         </div>
       </header>
+      {wallet && <MyShareCard location="profile" />}
       <div className="stat-row">
         <article className="stat"><span>ORE</span><strong>{oreAmount(game?.oreBalance ?? 0)}</strong><small>For crew upgrades</small></article>
         <article className="stat"><span>Streak</span><strong>{game?.streak ?? 0} days</strong><small>Best {game?.longestStreak ?? 0}</small></article>

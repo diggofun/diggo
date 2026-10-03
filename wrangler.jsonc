@@ -2,6 +2,8 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "diggo-fun",
   "main": "worker/index.ts",
+  // Worker-side JSX (the bot drawings in share cards) compiles with the automatic runtime.
+  "tsconfig": "./tsconfig.worker.json",
   "compatibility_date": "2026-09-13",
   "compatibility_flags": ["nodejs_compat"],
   // Lets Worker code distinguish Wrangler's local runtime from a deployed version. Local Wrangler
@@ -13,7 +15,7 @@
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/media/*", "/webhooks/*", "/ARCHITECTURE.md", "/ph", "/ph/*"]
+    "run_worker_first": ["/api/*", "/media/*", "/webhooks/*", "/ARCHITECTURE.md", "/ph", "/ph/*", "/r/*"]
   },
   "routes": [
     {
@@ -174,7 +176,7 @@
         "directory": "./dist",
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/api/*", "/media/*", "/webhooks/*", "/ARCHITECTURE.md", "/ph", "/ph/*"]
+        "run_worker_first": ["/api/*", "/media/*", "/webhooks/*", "/ARCHITECTURE.md", "/ph", "/ph/*", "/r/*"]
       },
       "vars": {
         "ENVIRONMENT": "staging",

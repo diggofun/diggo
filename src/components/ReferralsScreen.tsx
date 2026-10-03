@@ -4,6 +4,8 @@ import { checkReferralCode, getReferrals, saveReferralCode, type ReferralPanel, 
 import { shortAddress } from "../format";
 import { IconCopy, IconUserGroup } from "../icons";
 import { referralLink } from "../referralLink";
+import { DIGGO_CONFIG } from "../../shared/config";
+import { ShareCard } from "./ShareCard";
 
 function solFromLamports(value: string): number {
   try { return Number(BigInt(value)) / 1_000_000_000; } catch { return 0; }
@@ -91,7 +93,7 @@ export function ReferralsScreen({ signedIn }: { signedIn: boolean }) {
   return (
     <section className="page-shell referrals-page" aria-labelledby="referrals-title">
       <div className="section-heading">
-        <div><div className="eyebrow"><IconUserGroup size={14} /> Referrals</div><h1 id="referrals-title">Grow the<br />Diggo crew.</h1><p className="section-intro">Share your link. A referral qualifies after {sol(threshold)} of buys and sells, excluding trades between you and the referred wallet.</p></div>
+        <div><div className="eyebrow"><IconUserGroup size={14} /> Referrals</div><h1 id="referrals-title">Grow the<br />Diggo crew.</h1><p className="section-intro">Share your link and earn {DIGGO_CONFIG.referral.rewardOre} ORE for every player who qualifies. A referral qualifies after {sol(threshold)} of buys and sells, excluding trades between you and the referred wallet.</p></div>
       </div>
       {error && <p className="form-message referral-error">{error}</p>}
       {message && <p className="form-message referral-message">{message}</p>}
@@ -102,8 +104,9 @@ export function ReferralsScreen({ signedIn }: { signedIn: boolean }) {
           <a className="referral-link-preview" href={shareLink} target="_blank" rel="noreferrer">{shareLink}</a>
           <div className="referral-code-actions"><button type="button" className="btn btn-ghost btn-sm" onClick={() => void checkCode()} disabled={checking || !code}>{checking ? "Checking…" : "Check availability"}</button><button type="button" className="btn btn-sm" onClick={() => void saveCode()} disabled={saving || !code || cooldown > 0}>{saving ? "Saving…" : cooldown > 0 ? `Available in ${Math.ceil(cooldown / 86_400)}d` : "Save code"}</button><small>3–20 characters · lowercase letters, numbers, - and _ · changes every 7 days</small></div>
         </div>
+        {panel.code && <ShareCard code={panel.code} location="referrals" />}
         <div className="referral-totals"><Stat label="Invited" value={panel.totals.invited} /><Stat label="Pending" value={panel.totals.pending} /><Stat label="Qualified" value={panel.totals.qualified} /><Stat label="ORE earned" value={`${panel.totals.oreEarned}`} /></div>
-        <div className="card referral-table-card"><div className="referral-table-head"><div><h2 className="mono-label">Referred players</h2><p>Rewards are reserved after qualification and paid to your wallet.</p></div><span className="mono-label">{panel.weeklyCap} rewards / week cap</span></div>
+        <div className="card referral-table-card"><div className="referral-table-head"><div><h2 className="mono-label">Referred players</h2><p>Each qualified referral earns you {DIGGO_CONFIG.referral.rewardOre} ORE for crew upgrades.</p></div><span className="mono-label">{panel.weeklyCap} rewards / week cap</span></div>
           {panel.referrals.length > 0 ? <div className="referral-table"><div className="referral-row referral-table-labels"><span>Player</span><span>Joined</span><span>Volume progress</span><span>Status</span><span>ORE credited</span></div>{panel.referrals.map((row) => <ReferralRow key={row.id} row={row} threshold={threshold} />)}</div> : <div className="empty-state referral-empty"><p>No referred players yet. Share your link to start your crew.</p></div>}
           {panel.pages > 1 && <div className="referral-pagination"><button type="button" className="btn btn-ghost btn-sm" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={panel.page === 1}>Previous</button><span>{panel.page} / {panel.pages}</span><button type="button" className="btn btn-ghost btn-sm" onClick={() => setPage((value) => Math.min(panel.pages, value + 1))} disabled={panel.page === panel.pages}>Next</button></div>}
         </div>

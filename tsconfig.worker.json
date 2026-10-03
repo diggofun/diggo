@@ -8,6 +8,7 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
+    "jsx": "react-jsx",
     "types": ["./worker-configuration.d.ts"]
   },
   "include": ["worker", "shared", "worker-configuration.d.ts"]

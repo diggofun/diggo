@@ -39,6 +39,7 @@ import { getSolUsd } from "./oracle";
 import { playerProfile } from "./player";
 import { portfolioForWallet } from "./portfolio";
 import { publicProfile, setProfileBot, setUsername } from "./profile";
+import { shareCardPng, shareLandingPage } from "./share";
 import {
   deletePushSubscription,
   pushPublicKey,
@@ -86,6 +87,11 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
   const url = new URL(request.url);
   const { pathname } = url;
   try {
+    // Referral links unfurl as the player's share card (worker/share). Mode-independent.
+    const shareCardMatch = pathname.match(/^\/api\/share\/([^/]+)\.png$/);
+    if (request.method === "GET" && shareCardMatch) return await shareCardPng(request, env, ctx, decodeURIComponent(shareCardMatch[1]!));
+    const shareLinkMatch = pathname.match(/^\/r\/([^/]+)\/?$/);
+    if (request.method === "GET" && shareLinkMatch) return await shareLandingPage(request, env, ctx, decodeURIComponent(shareLinkMatch[1]!));
     // First-party PostHog proxy (/ph/* -> EU cloud). Mode-independent and never touches the index.
     if (isPosthogProxyPath(pathname)) return await proxyPosthog(request, ctx);
     // Temporary Meteora mode owns the off-chain game routes and the alternate indexed data. Keep

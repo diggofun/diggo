@@ -28,6 +28,7 @@
     "@noble/curves": "latest",
     "@reown/appkit": "^1.8.23",
     "@reown/appkit-adapter-solana": "^1.8.23",
+    "@resvg/resvg-wasm": "^2.6.2",
     "@solana/kit": "^8.3.0",
     "@solana/kit-plugin-wallet": "^0.20.0",
     "@solana/react": "^8.3.0",

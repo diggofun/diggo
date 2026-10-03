@@ -600,3 +600,12 @@ details > summary { cursor: pointer; }
 .bot-editor-fields { margin: 0; padding: 0; min-width: 0; display: grid; gap: 14px; border: 0; }
 .bot-editor-fields:disabled { opacity: .5; }
 .bot-editor-fields:disabled button { cursor: not-allowed; }
+
+/* Share card (referral link preview) */
+.share-card { padding: 22px; display: grid; gap: 14px; border-radius: 28px; background: var(--card); }
+.share-card-head { display: grid; gap: 6px; }
+.share-card-head h2 { margin: 0; font: 700 22px/1.2 var(--font-sans); }
+.share-card-head p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.5; }
+.share-card-image { width: 100%; max-width: 640px; height: auto; aspect-ratio: 1200 / 630; border-radius: 20px; background: var(--control); }
+.share-card-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.share-card-note { margin: 0; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
