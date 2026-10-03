@@ -61,7 +61,7 @@ export function LegalRoute({ pathname }: { pathname: string }): ReactElement {
 
   useEffect(() => {
     const previous = window.document.title;
-    window.document.title = doc === null ? "Diggo.fun" : doc.title + " - Diggo.fun";
+    window.document.title = doc === null ? "Diggo.fun" : doc.title + " | Diggo.fun";
     return () => {
       window.document.title = previous;
     };

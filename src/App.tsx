@@ -55,6 +55,7 @@ import { settledClaimAllNotice } from "./claimAll";
 import { startMeteoraMining } from "./meteoraGameFlow";
 import { crewPower } from "../shared/economics";
 import { crewTier } from "../shared/crew";
+import { getPageSeo, normalizePagePath } from "../shared/seo";
 import { MeteoraCrewScreen, MeteoraDiscoveriesScreen, MeteoraMineDashboard, MeteoraPortfolioScreen } from "./components/MeteoraGameScreens";
 import { RouteErrorBoundary } from "./components/RouteErrorBoundary";
 import { BotMine } from "./components/BotMine";
@@ -112,22 +113,6 @@ const ROUTES: Record<string, PageId> = {
   "/settings": "settings",
   "/admin": "admin",
   ...(import.meta.env.DEV ? { "/__ui": "ui" as const } : {}),
-};
-
-const PAGE_TITLES: Partial<Record<PageId, string>> = {
-  mine: "Mine",
-  crew: "Crew",
-  discoveries: "Discoveries",
-  explore: "Explore mines",
-  diggo: "Trade Diggo.fun ($DIGGO)",
-  trade: "Trade",
-  leaderboards: "Leaderboards",
-  mines: "Mine details",
-  create: "Create a coin",
-  profile: "Your profile",
-  referrals: "Referrals",
-  settings: "Settings",
-  admin: "Admin",
 };
 
 /**
@@ -224,7 +209,7 @@ export default function App() {
     [connected, verification.requestTurnstileToken],
   );
 
-  const page: PageId = useMemo(() => ROUTES[window.location.pathname] ?? "home", []);
+  const page: PageId = useMemo(() => ROUTES[normalizePagePath(window.location.pathname)] ?? "home", []);
   const analyticsConfigured = Boolean(config.posthogApiKey && config.posthogHost);
   /**
    * The legal documents render in place of the home page at their own paths. They get no PageId on
@@ -233,8 +218,7 @@ export default function App() {
   const legal = useMemo(() => isLegalPath(window.location.pathname), []);
 
   useEffect(() => {
-    const title = PAGE_TITLES[page];
-    document.title = title ? title + " · Diggo.fun" : "Diggo.fun — Launch & earn memecoins for free";
+    document.title = getPageSeo(window.location.pathname).title;
   }, [page]);
 
   // Read before captureLandingReferral() below strips ?ref= (or /r/<code>) from the address bar.

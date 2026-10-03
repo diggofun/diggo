@@ -11,3 +11,7 @@ Allow: /
 User-agent: *
 Allow: /
 Disallow: /api/
+Disallow: /webhooks/
+Disallow: /ph/
+
+Sitemap: https://diggo.fun/sitemap.xml
