@@ -85,7 +85,7 @@ configuration in the target environment.
 
 | Setting | When it is needed |
 | --- | --- |
-| `ADMIN_WALLETS` | Comma-separated admin wallet addresses; required to use the admin surface, not to serve ordinary players |
+| `ADMIN_WALLETS` | Comma-separated admin wallet addresses, added to the built-in admins in `worker/admin.ts` (`BUILT_IN_ADMIN_WALLETS`) |
 | `INDEXER_ADMIN_SECRET` | Required only for manual indexer refresh endpoints; the scheduled indexer does not depend on it |
 | `HELIUS_WEBHOOK_AUTH` | Required only when the Helius webhook delivery path is enabled and authenticated |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Supabase integration configuration; the service-role key is a secret and is required only when that integration is used |

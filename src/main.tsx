@@ -8,9 +8,9 @@ import App from "./App";
 import { solanaClient } from "./solana";
 import { PendingTransactionProvider } from "./onchain";
 import { useDiggoWallet } from "./wallet";
-import { applyTheme, loadTheme } from "./preferences";
+import { startTheme } from "./preferences";
 
-applyTheme(loadTheme());
+startTheme();
 
 function PendingScope() {
   const wallet = useDiggoWallet();

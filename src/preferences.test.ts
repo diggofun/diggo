@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BOT_EYEWEAR, BOT_HATS, BOT_SHAPES } from "./components/Bot";
 import { BOT_SHAPE_NAMES } from "../shared/profileBot";
-import { BOT_ACCESSORIES, accessoryOf, defaultBot, lookOf, oneAccessory, profileBotOf, withAccessory } from "./preferences";
+import { BOT_ACCESSORIES, resolveTheme, accessoryOf, defaultBot, lookOf, oneAccessory, profileBotOf, withAccessory } from "./preferences";
 
 describe("profile bot preferences", () => {
   it("draws every shape the Worker accepts, and no other", () => {
@@ -34,5 +34,12 @@ describe("profile bot preferences", () => {
       const look = defaultBot(`wallet-${i}`);
       expect(look.hat === "none" || look.eyewear === "none").toBe(true);
     }
+  });
+
+  it("follows the device unless a theme is picked", () => {
+    expect(resolveTheme("system", true)).toBe("light");
+    expect(resolveTheme("system", false)).toBe("dark");
+    expect(resolveTheme("dark", true)).toBe("dark");
+    expect(resolveTheme("light", false)).toBe("light");
   });
 });

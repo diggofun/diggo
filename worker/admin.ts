@@ -40,11 +40,19 @@ import {
 const ABUSE_LIMIT_MAX = 100;
 const ABUSE_LIMIT_DEFAULT = 25;
 
+/**
+ * Admin wallets that hold the role in every deployment, on top of the ADMIN_WALLETS secret. A
+ * wallet address is public, so listing it here leaks nothing; the session signature and the
+ * per-action step-up are what an admin call still has to prove.
+ */
+export const BUILT_IN_ADMIN_WALLETS: readonly string[] = ["6HHEkX5MxsoQwyCJZHvLnewmnsaw19vGT9Y8jhqH7GuJ"];
+
 export function adminWallets(env: RuntimeEnv): string[] {
-  return (env.ADMIN_WALLETS ?? "")
+  const configured = (env.ADMIN_WALLETS ?? "")
     .split(",")
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
+  return [...new Set([...BUILT_IN_ADMIN_WALLETS, ...configured])];
 }
 
 export function isAdminWallet(env: RuntimeEnv, wallet: string): boolean {

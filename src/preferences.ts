@@ -11,6 +11,8 @@ import { rememberProfileBot, useProfileBotOf } from "./username";
 export { BOT_ACCESSORIES, type BotAccessory };
 
 export type ThemeMode = "dark" | "light";
+/** What the player picked: a fixed theme, or "system" to follow the device. */
+export type ThemeChoice = ThemeMode | "system";
 
 const THEME_KEY = "diggo:theme";
 const CHANGE_EVENT = "diggo:preferences";
@@ -35,17 +37,32 @@ function write(key: string, value: string | null): void {
   window.dispatchEvent(new Event(CHANGE_EVENT));
 }
 
+function lightQuery(): MediaQueryList | null {
+  return typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: light)") : null;
+}
+
 function subscribe(onChange: () => void): () => void {
+  const query = lightQuery();
   window.addEventListener(CHANGE_EVENT, onChange);
   window.addEventListener("storage", onChange);
+  query?.addEventListener("change", onChange);
   return () => {
     window.removeEventListener(CHANGE_EVENT, onChange);
     window.removeEventListener("storage", onChange);
+    query?.removeEventListener("change", onChange);
   };
 }
 
-export function loadTheme(): ThemeMode {
-  return read(THEME_KEY) === "light" ? "light" : "dark";
+/** The stored choice; anything unset or unknown follows the device. */
+export function loadThemeChoice(): ThemeChoice {
+  const stored = read(THEME_KEY);
+  return stored === "light" || stored === "dark" ? stored : "system";
+}
+
+/** The theme a choice draws right now: "system" asks the device. */
+export function resolveTheme(choice: ThemeChoice, deviceLight = lightQuery()?.matches ?? false): ThemeMode {
+  if (choice === "system") return deviceLight ? "light" : "dark";
+  return choice;
 }
 
 /** Puts the theme on <html> (the CSS keys off data-theme) and on the browser chrome colour. */
@@ -56,13 +73,22 @@ export function applyTheme(mode: ThemeMode): void {
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", THEME_COLORS[mode]);
 }
 
-export function saveTheme(mode: ThemeMode): void {
-  applyTheme(mode);
-  write(THEME_KEY, mode);
+/**
+ * Applies the stored choice now and keeps following it: a change in settings, in another tab, or
+ * (for "system") in the device's own setting re-applies the theme. Called once at startup.
+ */
+export function startTheme(): void {
+  const sync = () => applyTheme(resolveTheme(loadThemeChoice()));
+  sync();
+  subscribe(sync);
 }
 
-export function useTheme(): ThemeMode {
-  return useSyncExternalStore(subscribe, loadTheme, () => "dark");
+export function saveThemeChoice(choice: ThemeChoice): void {
+  write(THEME_KEY, choice === "system" ? null : choice);
+}
+
+export function useThemeChoice(): ThemeChoice {
+  return useSyncExternalStore(subscribe, loadThemeChoice, () => "system");
 }
 
 export function accessoryOf(look: Pick<BotLook, "hat" | "eyewear">): BotAccessory {

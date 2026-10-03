@@ -543,6 +543,7 @@ details > summary { cursor: pointer; }
 .settings-card h2 { margin: 0; font: 700 22px/1.2 var(--font-sans); }
 .settings-card h3 { margin: 10px 0 0; font: 650 16px/1.2 var(--font-sans); }
 .settings-hint { margin: -8px 0 0; color: var(--muted); font-size: 14px; }
+.settings-hint-top { margin: -6px 0 0; }
 .segmented { display: inline-flex; gap: 4px; padding: 4px; justify-self: start; border-radius: 999px; background: var(--control); }
 .segmented button { min-height: 40px; padding: 0 22px; border: 0; border-radius: 999px; background: transparent; color: var(--fg-2); font: 600 15px/1 var(--font-sans); cursor: pointer; }
 .segmented button.active { background: var(--btn-bg); color: var(--btn-fg); }

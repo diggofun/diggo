@@ -5,15 +5,16 @@ import {
   BOT_ACCESSORIES,
   accessoryOf,
   saveProfileBot,
-  saveTheme,
+  saveThemeChoice,
   useProfileBot,
-  useTheme,
+  useThemeChoice,
   withAccessory,
   type BotAccessory,
-  type ThemeMode,
+  type ThemeChoice,
 } from "../preferences";
 
-const THEMES: { mode: ThemeMode; label: string }[] = [
+const THEMES: { mode: ThemeChoice; label: string }[] = [
+  { mode: "system", label: "System" },
   { mode: "dark", label: "Dark" },
   { mode: "light", label: "Light" },
 ];
@@ -42,7 +43,7 @@ function capitalize(value: string): string {
  * wallet, like the username, so it shows next to their name on the leaderboards).
  */
 export function SettingsScreen({ wallet }: { wallet: string | null }) {
-  const theme = useTheme();
+  const theme = useThemeChoice();
   const { look, custom } = useProfileBot(wallet);
   const accessory = accessoryOf(look);
   const [message, setMessage] = useState("");
@@ -64,6 +65,7 @@ export function SettingsScreen({ wallet }: { wallet: string | null }) {
 
       <article className="settings-card">
         <h2>Theme</h2>
+        <p className="settings-hint settings-hint-top">System follows your device's light or dark setting.</p>
         <div className="segmented" role="radiogroup" aria-label="Theme">
           {THEMES.map((option) => (
             <button
@@ -72,7 +74,7 @@ export function SettingsScreen({ wallet }: { wallet: string | null }) {
               role="radio"
               aria-checked={theme === option.mode}
               className={theme === option.mode ? "active" : undefined}
-              onClick={() => saveTheme(option.mode)}
+              onClick={() => saveThemeChoice(option.mode)}
             >
               {option.label}
             </button>
