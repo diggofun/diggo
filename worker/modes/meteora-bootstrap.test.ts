@@ -49,10 +49,12 @@ describe("Meteora bootstrap mining reserve", () => {
         mint: MINT,
         reserveTotal: 200000000,
         reserveRemaining: wholeTokens(remaining ?? MINING_RESERVE),
+        miningEmission: { kind: "TIME", durationDays: 3650 },
       });
       const { mine } = await (await meteoraMineInfo(env, MINT, null)).json() as { mine: Record<string, unknown> };
       expect(tokens[0]!.reserveTotal).toBe(mine.reserveTotal);
       expect(tokens[0]!.reserveRemaining).toBe(mine.remainingReserve);
+      expect(mine.miningEmission).toEqual(tokens[0]!.miningEmission);
     },
   );
 });

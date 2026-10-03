@@ -63,6 +63,7 @@ export function MineInfoPanel({
   }
 
   const curve = mine.curveMining;
+  const timeBased = mine.miningEmission;
   /** True while the curve's launch cap is the budget paying this mine's blocks. */
   const onCurve = mine.emissionSource === "CURVE";
   /** A mine launched with no curve share has no curve budget to show, even pre-graduation. */
@@ -89,7 +90,9 @@ export function MineInfoPanel({
   const scheduleMax = Math.max(1, ...schedule);
   const shareLabel = mine.estimatedShare === null ? "—" : percent(mine.estimatedShare);
   const shareDetail =
-    mine.estimatedRewardPerBlock === null || mine.estimatedShare === null
+    timeBased && mine.estimatedShare !== null
+      ? "your share of released tokens"
+      : mine.estimatedRewardPerBlock === null || mine.estimatedShare === null
       ? "sign in to see your share"
       : "about " + tokenAmount(mine.estimatedRewardPerBlock) + " " + mine.symbol + " per block";
   const powerDetail = mine.playerPower === null ? "" : compact(mine.playerPower) + " yours";
@@ -118,12 +121,12 @@ export function MineInfoPanel({
       <div className="mine-info-grid">
         <article className="card stat">
           <span>
-            <IconMine size={13} aria-hidden="true" /> BLOCK REWARD
+            <IconMine size={13} aria-hidden="true" /> {timeBased ? "MINING MODEL" : "BLOCK REWARD"}
           </span>
           <strong>
-            {compact(mine.blockReward)} <small>{mine.symbol}</small>
+            {timeBased ? "Time-based" : <>{compact(mine.blockReward)} <small>{mine.symbol}</small></>}
           </strong>
-          <small>Paid to active crews for each block, split by Mining Power.</small>
+          <small>{timeBased ? "Rewards accrue over active time, shared by Mining Power. Payouts become available after graduation." : "Paid to active crews for each block, split by Mining Power."}</small>
         </article>
         <article className="card stat">
           <span>
@@ -157,51 +160,66 @@ export function MineInfoPanel({
 
       <div className="mine-info-lower">
         <div className="reduction-schedule">
-          <div className="mine-info-subhead">
-            <span>
-                <IconTimer size={13} aria-hidden="true" /> {onCurve ? "Block reward" : "Reward schedule"}
-            </span>
-            <small>
-              {onCurve
-                ? capSpent
-                  ? "cap spent"
-                  : curveDaysLeft === null
-                    ? "flat rate"
-                    : "≈ " + runwayLabel(curveDaysLeft) + " left"
-                : "next reduction in " + countdown(mine.epochEndsAt, now) + ", epoch " + mine.epoch}
-            </small>
-          </div>
-          {onCurve ? (
-            /* The curve phase pays one fixed rate until its launch cap runs out, so it gets one flat
-               bar: there are no epoch steps to draw before graduation. */
-            <div
-              className="reduction-bars is-flat"
-              role="img"
-              aria-label={
-                "One flat block reward of " + compact(mine.blockReward) + " " + mine.symbol +
-                " per block for the whole curve phase; the epoch schedule starts after graduation"
-              }
-            >
-              <div className="reduction-bar" title={compact(mine.blockReward) + " per block"}>
-                <i style={{ height: "100%" }} />
-                <span>flat</span>
+          {timeBased ? (
+            <>
+              <div className="mine-info-subhead">
+                <span><IconTimer size={13} aria-hidden="true" /> Mining schedule</span>
+                <small>time-based</small>
               </div>
-            </div>
+              <p>
+                The {compact(mine.reserveTotal)} {mine.symbol} allocation is released gradually over {timeBased.durationDays.toLocaleString("en")} days.
+                Your rewards depend on active mining time and your share of Mining Power.
+              </p>
+            </>
           ) : (
-            <div className="reduction-bars">
-              {schedule.map((reward, index) => (
-                <div className="reduction-bar" key={index} title={compact(reward) + " per block"}>
-                  <i style={{ height: Math.max(4, Math.round((reward / scheduleMax) * 100)) + "%" }} />
-                  <span>{index === 0 ? "now" : "+" + index}</span>
+            <>
+              <div className="mine-info-subhead">
+                <span>
+                    <IconTimer size={13} aria-hidden="true" /> {onCurve ? "Block reward" : "Reward schedule"}
+                </span>
+                <small>
+                  {onCurve
+                    ? capSpent
+                      ? "cap spent"
+                      : curveDaysLeft === null
+                        ? "flat rate"
+                        : "≈ " + runwayLabel(curveDaysLeft) + " left"
+                    : "next reduction in " + countdown(mine.epochEndsAt, now) + ", epoch " + mine.epoch}
+                </small>
+              </div>
+              {onCurve ? (
+                /* The curve phase pays one fixed rate until its launch cap runs out, so it gets one flat
+                   bar: there are no epoch steps to draw before graduation. */
+                <div
+                  className="reduction-bars is-flat"
+                  role="img"
+                  aria-label={
+                    "One flat block reward of " + compact(mine.blockReward) + " " + mine.symbol +
+                    " per block for the whole curve phase; the epoch schedule starts after graduation"
+                  }
+                >
+                  <div className="reduction-bar" title={compact(mine.blockReward) + " per block"}>
+                    <i style={{ height: "100%" }} />
+                    <span>flat</span>
+                  </div>
                 </div>
-              ))}
-            </div>
+              ) : (
+                <div className="reduction-bars">
+                  {schedule.map((reward, index) => (
+                    <div className="reduction-bar" key={index} title={compact(reward) + " per block"}>
+                      <i style={{ height: Math.max(4, Math.round((reward / scheduleMax) * 100)) + "%" }} />
+                      <span>{index === 0 ? "now" : "+" + index}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p>
+                {onCurve
+                  ? "The curve phase pays one fixed rate until its launch cap runs out. The epoch schedule starts after graduation."
+                  : "Each epoch reduces the block reward. Mining ends when the reserve is spent."}
+              </p>
+            </>
           )}
-          <p>
-            {onCurve
-              ? "The curve phase pays one fixed rate until its launch cap runs out. The epoch schedule starts after graduation."
-              : "Each epoch reduces the block reward. Mining ends when the reserve is spent."}
-          </p>
         </div>
 
         <div className="fully-mined-progress">

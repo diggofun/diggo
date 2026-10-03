@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { normalizeTokenSummary } from "../tokenSummary";
-import { ExploreBoard, SelectedMine } from "./HomeSections";
+import { normalizeMineInfo, normalizeTokenSummary } from "../tokenSummary";
+import { ExploreBoard, HomeHero, SelectedMine } from "./HomeSections";
+import { MineInfoPanel } from "./MineInfoPanel";
 
 const coin = { mint: "mine", name: "Diggo", symbol: "DIGGO", graduated: false };
 
@@ -41,5 +42,53 @@ describe("mining reserve display", () => {
     const html = renderToStaticMarkup(<SelectedMine token={token} mineInfo={null} now={0} />);
     expect(html).toContain("Launch cap left");
     expect(html).toContain("<strong>25.0%</strong>");
+  });
+});
+
+describe("time-based mining display", () => {
+  const emission = { kind: "TIME", durationDays: 3650 };
+
+  function hero(timeBased: boolean): string {
+    const token = normalizeTokenSummary({
+      ...coin, miningEmission: timeBased ? emission : undefined, rewardPerBlock: 250,
+    })!;
+    return renderToStaticMarkup(<HomeHero
+      featured={token} player={null} connected now={0} activating={false} error=""
+      onActivate={() => undefined} onManageCrew={() => undefined} onLaunch={() => undefined}
+    />);
+  }
+
+  it("shows time-based accrual rather than a block reward in the home hero", () => {
+    const html = hero(true);
+    expect(html).toContain("Rewards accrue over time");
+    expect(html).not.toContain("per block");
+    expect(html).not.toContain("Next block");
+  });
+
+  it("preserves the reward per block for the native mining model", () => {
+    expect(hero(false)).toContain("per block");
+  });
+
+  it("shows the allocation period instead of fictitious block and epoch figures in mine info", () => {
+    const mine = normalizeMineInfo({
+      ...coin, miningEmission: emission, remainingReserve: 200000000, reserveTotal: 200000000,
+      emissionSource: "RESERVE", estimatedShare: 0.5,
+    })!;
+    const html = renderToStaticMarkup(<MineInfoPanel mine={mine} mineName="Diggo" now={0} loading={false} error="" />);
+    expect(html).toContain("Time-based");
+    expect(html).toContain("3,650 days");
+    expect(html).toContain("your share of released tokens");
+    expect(html).not.toContain("per block");
+    expect(html).not.toContain("next reduction");
+    expect(html).not.toContain("Each epoch reduces");
+  });
+
+  it("describes the time-based mining model on the selected mine", () => {
+    const token = normalizeTokenSummary({ ...coin, miningEmission: emission })!;
+    const html = renderToStaticMarkup(<SelectedMine token={token} mineInfo={null} now={0} />);
+    expect(html).toContain("Mining model");
+    expect(html).toContain("Time-based");
+    expect(html).not.toContain("Flat");
+    expect(html).not.toContain("per block");
   });
 });

@@ -1,4 +1,4 @@
-import type { CurveMiningSummary, MineInfo, TokenStatus, TokenSummary } from "../shared/types";
+import type { CurveMiningSummary, MineInfo, TimeMiningEmission, TokenStatus, TokenSummary } from "../shared/types";
 
 const TOKEN_STATUSES: readonly TokenStatus[] = ["LAUNCHING", "MINING_ACTIVE", "FULLY_MINED", "CURVE_CAP_REACHED"];
 
@@ -12,6 +12,13 @@ function finite(value: unknown, fallback = 0): number {
 function reserveAmount(value: unknown): number | null {
   const number = finite(value, Number.NaN);
   return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function miningEmission(value: unknown): TimeMiningEmission | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as { kind?: unknown; durationDays?: unknown };
+  const durationDays = finite(raw.durationDays);
+  return raw.kind === "TIME" && durationDays > 0 ? { kind: "TIME", durationDays } : undefined;
 }
 
 function text(value: unknown, fallback: string): string {
@@ -75,6 +82,7 @@ export function normalizeTokenSummary(input: unknown): TokenSummary | null {
     reserveRemaining: reserveAmount(raw.reserveRemaining),
     reserveTotal: reserveAmount(raw.reserveTotal),
     rewardPerBlock: finite(raw.rewardPerBlock),
+    miningEmission: miningEmission(raw.miningEmission),
     networkPower: finite(raw.networkPower),
     nextBlockAt: finite(raw.nextBlockAt),
     nextEpochAt: finite(raw.nextEpochAt),
@@ -111,6 +119,7 @@ export function normalizeMineInfo(input: unknown): MineInfo | null {
     symbol: text(raw.symbol, raw.mint.slice(0, 6).toUpperCase()),
     status: status(raw.status),
     blockReward: finite(raw.blockReward),
+    miningEmission: miningEmission(raw.miningEmission),
     totalMiningPower: finite(raw.totalMiningPower),
     remainingReserve: finite(raw.remainingReserve),
     reserveTotal: finite(raw.reserveTotal),

@@ -52,6 +52,12 @@ export type {
  */
 export type TokenStatus = "LAUNCHING" | "MINING_ACTIVE" | "FULLY_MINED" | "CURVE_CAP_REACHED";
 
+/** Time-based allocation has no block reward or epoch reductions. */
+export interface TimeMiningEmission {
+  kind: "TIME";
+  durationDays: number;
+}
+
 export interface TokenSummary {
   mint: string;
   slug: string;
@@ -83,6 +89,7 @@ export interface TokenSummary {
   reserveRemaining: number | null;
   reserveTotal: number | null;
   rewardPerBlock: number;
+  miningEmission?: TimeMiningEmission;
   networkPower: number;
   nextBlockAt: number;
   nextEpochAt: number;
@@ -344,6 +351,7 @@ export interface MineInfo {
   status: TokenStatus;
   blockReward: number;
   totalMiningPower: number;
+  miningEmission?: TimeMiningEmission;
   remainingReserve: number;
   reserveTotal: number;
   /** Share of the next block the requesting player would earn, or null when no wallet is known. */

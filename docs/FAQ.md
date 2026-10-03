@@ -19,6 +19,11 @@ memecoins that accrue in Discoveries, and claim eligible rewards through their o
 An active crew can keep working while the browser is closed. Pausing or letting an activation
 window end stops new accrual; rewards already recorded are not removed by the pause action.
 
+In the current Meteora mode, mining accrues with elapsed active time and the crew's share of
+Mining Power. Each coin's 200M mining allocation is released gradually over 3,650 days. There is
+no fixed reward per Solana block or epoch reduction schedule in this mode. Accrued tokens remain
+pending until the coin graduates and the payout requirements are met.
+
 ## What does Claim all do?
 
 Claim all prepares one wallet-approved batch payout for up to 12 distinct accrued coins. The

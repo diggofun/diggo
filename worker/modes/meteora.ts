@@ -18,6 +18,7 @@ import {
 } from "../game/service";
 import { gameChainMode, MINING_RESERVE, type GameCoin, type GameCoinSource, type GameEnv, type GamePlayerState, type GamePortfolioSource, type GameServices, type GameWalletSource, type MiningPayout } from "../game/contracts";
 import { wholeTokens } from "../game/store";
+import { MINING_ALLOCATION_DAYS } from "../game/rules";
 import { getSolUsd } from "../oracle";
 import { apiError, checkRateLimit, checkWalletRateLimit, isBase58Address, json } from "../http";
 import { getChainRpc, LAMPORTS_PER_SOL } from "../chainV2";
@@ -30,6 +31,7 @@ import { officialMintFromEnv } from "../../shared/officialMint";
 
 type RuntimeEnvLike = GameEnv;
 const lastGoodStates = new Map<string, PlayerGameState>();
+const TIME_MINING_EMISSION = { kind: "TIME", durationDays: MINING_ALLOCATION_DAYS } as const;
 
 function stateCacheKey(env: RuntimeEnvLike, wallet: string): string {
   return [String(env.SOLANA_CLUSTER || "mainnet-beta"), String(env.METEORA_DBC_CONFIG || ""), wallet].join(":");
@@ -364,6 +366,7 @@ export async function meteoraBootstrap(env: RuntimeEnvLike, ctx: ExecutionContex
       // Match mineLedgerView, including a new pool whose ledger has not been initialized yet.
       reserveTotal: wholeTokens(BigInt(String(row.initial_reserve ?? MINING_RESERVE))),
       reserveRemaining: wholeTokens(BigInt(String(row.remaining ?? MINING_RESERVE))),
+      miningEmission: TIME_MINING_EMISSION,
     })),
     syncedAt: nowSeconds(),
     ...meteoraConfig(env),
@@ -409,6 +412,7 @@ export async function meteoraMineInfo(env: RuntimeEnvLike, slug: string, wallet:
     playerPower,
     estimatedShare: playerPower !== null && ledger.power > 0 ? Math.min(1, playerPower / ledger.power) : null,
     emissionSource: "RESERVE",
+    miningEmission: TIME_MINING_EMISSION,
     // Before graduation the mining vault is empty by design: the pool's 20% leftover (200M) only
     // reaches it at migration. Rewards accrue as pending against that allocation meanwhile.
     accounting: { source: "OFFCHAIN", authoritative: false, label: "Pending reserve: accrues now, paid from the 200M leftover after graduation" },
@@ -495,6 +499,7 @@ export async function meteoraTokenBySlug(env: RuntimeEnvLike, slug: string): Pro
     sellCapacity: { sol: graduated ? 0 : Number(row.quote_reserve ?? 0) / LAMPORTS_PER_SOL, tokens: null },
     marketCapUsd: priceSol * usd * supply,
     reserveRemaining: ledger.reserveRemaining, reserveTotal: ledger.reserveTotal, rewardPerBlock: 0, networkPower: ledger.power,
+    miningEmission: TIME_MINING_EMISSION,
     nextBlockAt: 0, nextEpochAt: 0,
     createdAt, decimals, venue: "meteora",
     quoteReserve: String(row.quote_reserve ?? "0"), migrationQuoteThreshold: String(row.migration_quote_threshold ?? "0"),

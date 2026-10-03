@@ -79,9 +79,13 @@ export function HomeHero({
               <div>
                 <strong>{featured.name}</strong>
                 <small>
-                  {featured.networkPower > 0 ? "Next block " + countdown(featured.nextBlockAt, now) : "Waiting for miners"}
-                  {" · "}
-                  {compact(featured.rewardPerBlock)} ${featured.symbol} per block
+                  {featured.miningEmission?.kind === "TIME" ? "Rewards accrue over time" : (
+                    <>
+                      {featured.networkPower > 0 ? "Next block " + countdown(featured.nextBlockAt, now) : "Waiting for miners"}
+                      {" · "}
+                      {compact(featured.rewardPerBlock)} ${featured.symbol} per block
+                    </>
+                  )}
                 </small>
               </div>
             </div>
@@ -250,7 +254,12 @@ export function SelectedMine({
   /** Only mine info estimates the runway, and only for the mine it was fetched for. */
   const curveDaysRemaining = mineInfo && mineInfo.mint === token.mint ? mineInfo.curveMiningDaysRemaining : null;
   /** A curve-phase mine has no next reduction: its rate is flat until the cap or graduation ends it. */
-  const emission = describeEmissionWindow({
+  const emission = token.miningEmission?.kind === "TIME" ? {
+    label: "Mining model",
+    value: "Time-based",
+    detail: "Rewards accrue over time; payouts after graduation",
+    onCurve: false,
+  } : describeEmissionWindow({
     curve,
     daysRemaining: curveDaysRemaining,
     epochEndsAt: token.nextEpochAt,

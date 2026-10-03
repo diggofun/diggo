@@ -67,6 +67,13 @@ describe("normalizeTokenSummary", () => {
 
 
 describe("normalizeMineInfo", () => {
+  it("preserves the time-based emission model from the API on tokens and mine info", () => {
+    const miningEmission = { kind: "TIME", durationDays: 3650 };
+    expect(normalizeTokenSummary({ ...SLIM_DIGGO, miningEmission })!.miningEmission).toEqual(miningEmission);
+    expect(normalizeMineInfo({ ...SLIM_DIGGO, miningEmission })!.miningEmission).toEqual(miningEmission);
+    expect(normalizeTokenSummary({ ...SLIM_DIGGO, miningEmission: { kind: "TIME", durationDays: -1 } })!.miningEmission).toBeUndefined();
+  });
+
   it("completes the slim Meteora mine info that crashed MineInfoPanel", () => {
     const mine = normalizeMineInfo({
       mint: SLIM_DIGGO.mint,
