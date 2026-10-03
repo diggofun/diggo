@@ -66,6 +66,7 @@ import { BotMine } from "./components/BotMine";
  * download on the route that renders them.
  */
 const AdminScreen = lazy(() => import("./components/AdminScreen").then((module) => ({ default: module.AdminScreen })));
+const SettingsScreen = lazy(() => import("./components/SettingsScreen").then((module) => ({ default: module.SettingsScreen })));
 const CosmeticsScreen = lazy(() => import("./components/CosmeticsScreen").then((module) => ({ default: module.CosmeticsScreen })));
 const CrewScreen = lazy(() => import("./components/CrewScreen").then((module) => ({ default: module.CrewScreen })));
 const DashboardPanel = lazy(() => import("./components/DashboardPanel").then((module) => ({ default: module.DashboardPanel })));
@@ -111,6 +112,7 @@ const ROUTES: Record<string, PageId> = {
   "/profile": "profile",
   "/portfolio": "profile",
   "/referrals": "referrals",
+  "/settings": "settings",
   "/admin": "admin",
   ...(import.meta.env.DEV ? { "/__ui": "ui" as const } : {}),
 };
@@ -128,6 +130,7 @@ const PAGE_TITLES: Partial<Record<PageId, string>> = {
   create: "Create a coin",
   profile: "Your profile",
   referrals: "Referrals",
+  settings: "Settings",
   admin: "Admin",
 };
 
@@ -1164,6 +1167,7 @@ export default function App() {
             </section>
           )}
           {page === "referrals" && <ReferralsScreen signedIn={signedIn} />}
+          {page === "settings" && <SettingsScreen seed={session ?? connected?.address ?? "guest"} />}
           {page === "admin" && (
             <AdminScreen
               signedIn={signedIn}

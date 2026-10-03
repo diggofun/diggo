@@ -531,3 +531,60 @@ details > summary { cursor: pointer; }
 }
 .claim-gate { padding: 16px 22px; display: grid; gap: 10px; border-radius: 24px; background: var(--card); }
 .claim-gate p { margin: 0; color: var(--muted); font-size: 14px; }
+
+/* ------------------------------------------------------------------------------------------------
+   Settings
+   ------------------------------------------------------------------------------------------------ */
+.settings-screen { display: grid; gap: 20px; max-width: 880px; padding-top: 24px; }
+.settings-card { padding: 24px; display: grid; gap: 14px; border-radius: 28px; background: var(--card); }
+.settings-card h2 { margin: 0; font: 700 22px/1.2 var(--font-sans); }
+.settings-card h3 { margin: 10px 0 0; font: 650 16px/1.2 var(--font-sans); }
+.settings-hint { margin: -8px 0 0; color: var(--muted); font-size: 14px; }
+.segmented { display: inline-flex; gap: 4px; padding: 4px; justify-self: start; border-radius: 999px; background: var(--control); }
+.segmented button { min-height: 40px; padding: 0 22px; border: 0; border-radius: 999px; background: transparent; color: var(--fg-2); font: 600 15px/1 var(--font-sans); cursor: pointer; }
+.segmented button.active { background: var(--btn-bg); color: var(--btn-fg); }
+.bot-editor-preview { display: flex; align-items: center; gap: 24px; }
+.bot-editor-preview > div { display: grid; gap: 8px; justify-items: start; }
+.bot-editor-preview p { margin: 0; color: var(--muted); }
+.bot-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; }
+.bot-picker button { min-height: 76px; padding: 10px 6px; display: grid; place-items: center; gap: 6px; border: 0; border-radius: 22px; background: var(--control); color: var(--fg-2); font: 600 12px/1.1 var(--font-sans); cursor: pointer; }
+.bot-picker button:hover { background: var(--control-hover); }
+.bot-picker button.active { outline: 3px solid var(--fg); outline-offset: -3px; background: var(--card-active); color: var(--fg); }
+.color-picker { display: flex; flex-wrap: wrap; gap: 10px; }
+.color-picker button { width: 40px; height: 40px; padding: 0; border: 0; border-radius: 999px; cursor: pointer; }
+.color-picker button.active { outline: 3px solid var(--fg); outline-offset: 3px; }
+.profile-head > div { display: grid; gap: 6px; justify-items: start; }
+@media (max-width: 560px) {
+  .settings-card { padding: 18px; }
+  .bot-editor-preview { flex-direction: column; align-items: flex-start; }
+  .bot-picker { grid-template-columns: repeat(4, 1fr); }
+}
+
+/* ------------------------------------------------------------------------------------------------
+   Light theme: the same layout with the surfaces flipped. Pill actions go black with white text.
+   ------------------------------------------------------------------------------------------------ */
+:root { --btn-bg: #ffffff; --btn-fg: #0b0b0c; --btn-hover: #e4e4e7; }
+:root[data-theme="light"] {
+  color: #141414; background: #f4f4f5; color-scheme: light;
+  --bg: #f4f4f5; --surface-deep: #ececee; --surface-2: #ececee; --card: #ffffff; --card-active: #f4f4f5;
+  --control: #e9e9ec; --control-hover: #dcdce0; --fg: #141414; --fg-2: #3f3f46; --muted: #52525b; --muted-2: #63636b;
+  --line: rgba(0, 0, 0, 0.08); --line-strong: rgba(0, 0, 0, 0.16); --line-on-dark: rgba(0, 0, 0, 0.08); --muted-on-dark: #52525b;
+  --accent: #c2410c; --orange-ink: #c2410c; --warning: #b45309; --success: #047857; --danger: #be123c;
+  --ink: #141414; --ink-2: #ececee; --ink-3: #3f3f46; --paper: #f4f4f5; --paper-2: #ffffff; --paper-3: #e9e9ec; --acid: #141414;
+  --rarity-common: #63636b; --rarity-uncommon: #047857; --rarity-rare: #1d4ed8; --rarity-epic: #7e22ce; --rarity-legendary: #a16207;
+  --shadow-soft: 0 20px 40px -16px rgba(0, 0, 0, 0.18); --shadow-hard-sm: 0 8px 20px -10px rgba(0, 0, 0, 0.18);
+  --btn-bg: #141414; --btn-fg: #ffffff; --btn-hover: #2a2a2a;
+}
+.btn-primary, .primary-button, .mine-button, .wallet-button,
+.filter-tabs .active, .filter-tabs button[aria-pressed="true"],
+.candle-intervals button.active, .candle-currency button.active { background: var(--btn-bg); color: var(--btn-fg); }
+.btn-primary:hover:not(:disabled), .primary-button:hover:not(:disabled), .mine-button:hover:not(:disabled), .wallet-button:hover:not(:disabled) { background: var(--btn-hover); }
+:root[data-theme="light"] :focus-visible { outline-color: rgba(0, 0, 0, .55) !important; }
+:root[data-theme="light"] input:focus, :root[data-theme="light"] select:focus, :root[data-theme="light"] textarea:focus { outline-color: rgba(0, 0, 0, .2); }
+:root[data-theme="light"] ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, .16); }
+:root[data-theme="light"] .sidebar-link:hover { background: rgba(0, 0, 0, .05); }
+:root[data-theme="light"] .sidebar-backdrop, :root[data-theme="light"] .modal-backdrop { background: rgba(0, 0, 0, .25); }
+:root[data-theme="light"] .site-header { background: rgba(244, 244, 245, .9); }
+:root[data-theme="light"] .tab-bar { background: rgba(255, 255, 255, .94); }
+:root[data-theme="light"] .swap-chart-empty, :root[data-theme="light"] .candle-empty { background: rgba(255, 255, 255, .9); }
+.bot-editor-preview { padding-top: 12px; }

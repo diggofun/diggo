@@ -6,6 +6,7 @@ import type { GameCrewComponent, GameState, MeteoraPortfolio } from "../api";
 import { IconCheck } from "../icons";
 import { MineScene } from "./MineScene";
 import { Bot, botAt, botFor } from "./Bot";
+import { useProfileBot } from "../preferences";
 import { PushToggle } from "./PushToggle";
 import { TokenOrb } from "./TokenOrb";
 
@@ -297,13 +298,15 @@ export function MeteoraPortfolioScreen({ game, portfolio, tokens }: { game: Game
   const reserve = threshold > 0 && quoteReserve > 0 ? Math.max(0, Math.min(1, quoteReserve / threshold)) : 0;
   const graduated = mine?.coin.graduated ?? portfolio?.graduated ?? false;
   const wallet = game?.wallet ?? "";
+  const { look: profileBot } = useProfileBot(wallet || "guest");
   return (
     <section className="screen page-shell" id="portfolio">
       <header className="screen-head profile-head">
-        <Bot {...botFor(wallet || "guest")} size={72} mood="idle" />
+        <Bot {...profileBot} size={72} mood="idle" />
         <div>
           <h1>Your profile</h1>
           <p>{wallet ? shortAddress(wallet) : "Your mines and payouts"}</p>
+          <a className="btn btn-ghost btn-sm" href="/settings">Edit your bot</a>
         </div>
       </header>
       <div className="stat-row">

@@ -71,7 +71,7 @@ const TARGETS: readonly MineTargetKind[] = ["rock", "crystal", "rock", "gold", "
 
 /** The flat backdrops a mine theme cosmetic can pick: scene and ground. */
 export const MINE_THEMES = {
-  standard: { scene: "#1f1f1f", ground: "#2a2a2a" },
+  standard: { scene: "var(--card)", ground: "var(--control)" },
   sunset: { scene: "#2a1d1b", ground: "#3a2622" },
   arcane: { scene: "#1d1a36", ground: "#2b2552" },
   deepcore: { scene: "#0f1d20", ground: "#16292d" },

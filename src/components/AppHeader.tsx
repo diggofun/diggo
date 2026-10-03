@@ -32,7 +32,8 @@ import { solanaClient } from "../solana";
 import { displayName, useUsername } from "../username";
 import { OPEN_WALLET_EVENT, useDiggoWallet } from "../wallet";
 import { disconnectWalletConnect, openWalletConnect } from "../walletConnect";
-import { Bot, botFor } from "./Bot";
+import { Bot } from "./Bot";
+import { useProfileBot } from "../preferences";
 import { NotificationsBell } from "./NotificationsBell";
 import { UsernameEditor } from "./UsernameEditor";
 
@@ -50,6 +51,7 @@ export type PageId =
   | "create"
   | "profile"
   | "referrals"
+  | "settings"
   | "admin"
   | "ui";
 
@@ -77,6 +79,7 @@ const PLAY_ITEMS: NavItem[] = [
 const MORE_ITEMS: NavItem[] = [
   { page: "referrals", href: "/referrals", label: "Referrals", icon: IconUserGroup },
   { page: "cosmetics", href: "/cosmetics", label: "Cosmetics", icon: IconCosmetics },
+  { page: "settings", href: "/settings", label: "Settings", icon: IconSettings },
 ];
 
 const MOBILE_ITEMS: PageId[] = ["home", "mine", "crew", "discoveries", "explore"];
@@ -222,7 +225,7 @@ export function AppHeader({ page, session, signedIn, summary, game, solBalance, 
             aria-current={page === "profile" ? "page" : undefined}
             onClick={() => setSidebarOpen(false)}
           >
-            {signedIn && session ? <Bot {...botFor(session)} size={32} still /> : <IconWallet size={22} />}
+            {signedIn && session ? <ProfileBot seed={session} size={32} /> : <IconWallet size={22} />}
             <span>{signedIn && session ? shortAddress(session) : "Connect wallet"}</span>
           </a>
         </div>
@@ -279,6 +282,12 @@ function NavLink({
       )} {item.label}
    </a>
   );
+}
+
+/** The player's own bot: the look picked in settings, or the default for their wallet. */
+function ProfileBot({ seed, size, className }: { seed: string; size: number; className?: string }) {
+  const { look } = useProfileBot(seed);
+  return <Bot {...look} size={size} still className={className} />;
 }
 
 function WalletControl({ session, onAuthenticated }: { session: string | null; onAuthenticated(wallet: string): void }) {
@@ -377,7 +386,7 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
               connection dot. A connected-but-unsigned wallet keeps the dot, because there the dot
               is the "not signed in yet" signal the player acts on. */}
           {isAuthenticated ? (
-            <Bot {...botFor(connected.address)} size={26} still className="wallet-button-icon" />
+            <ProfileBot seed={connected.address} size={26} className="wallet-button-icon" />
           ) : (
             <i className="wallet-dot" aria-hidden="true" />
           )}
