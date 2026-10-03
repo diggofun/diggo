@@ -30,6 +30,13 @@ Pre-graduation mining rewards can accrue but remain pending. They become claimab
 relevant Meteora pool has graduated and mining inventory is available to the configured vault. A
 visible accrual is not a promise that a reward is already claimable.
 
+## Who can mine, and who can claim?
+
+Anyone can mine: connect a wallet, activate a shift and your crew digs, including the daily
+discovery roll. Collecting the coins is what has requirements: a wallet at least seven days old with
+at least $10 in it, five active days and five shifts. Until then, what you dig stays pending on your
+account, and the Discoveries page shows which requirement is still missing.
+
 ## What are ORE and Mining Power?
 
 ORE and Mining Power are internal game progression. ORE is earned by keeping a crew active and

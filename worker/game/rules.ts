@@ -22,8 +22,15 @@ export const REFERRAL_ORE_PER_CREDIT_MAX = 250;
 export const REFERRAL_WEEKLY_COUNT = 25;
 export const REFERRAL_WEEKLY_MAX = REFERRAL_ORE_PER_CREDIT_MAX * REFERRAL_WEEKLY_COUNT;
 export const DISCOVERY_REWARD = 1_000_000n;
-export const DISCOVERY_MIN_WALLET_AGE_SECONDS = 7 * 86_400;
-export const DISCOVERY_MIN_PORTFOLIO_USD = 10;
+/**
+ * What a wallet needs before it can COLLECT mined coins. Mining and discovery rolls are open to
+ * every wallet; these only gate the payout, so a fresh or empty wallet can dig and accrue but
+ * cannot take tokens out until it has a track record (wallet age, play days) and some value held.
+ */
+export const CLAIM_MIN_WALLET_AGE_SECONDS = 7 * 86_400;
+export const CLAIM_MIN_PORTFOLIO_USD = 10;
+export const CLAIM_MIN_ACTIVE_DAYS = 5;
+export const CLAIM_MIN_ACTIVATIONS = 5;
 
 function positiveInt(value: number): number {
   return Number.isSafeInteger(value) && value >= 0 ? value : 0;
@@ -109,11 +116,42 @@ export function weekIndex(now: number): number {
 }
 
 export function isWalletAgeEligible(player: Pick<GamePlayerState, "createdAt">, now: number): boolean {
-  return now - player.createdAt >= DISCOVERY_MIN_WALLET_AGE_SECONDS;
+  return now - player.createdAt >= CLAIM_MIN_WALLET_AGE_SECONDS;
 }
 
 export function isPortfolioEligible(portfolioUsd: number): boolean {
-  return Number.isFinite(portfolioUsd) && portfolioUsd >= DISCOVERY_MIN_PORTFOLIO_USD;
+  return Number.isFinite(portfolioUsd) && portfolioUsd >= CLAIM_MIN_PORTFOLIO_USD;
+}
+
+/** Each requirement on its own, so the client can say exactly which one is still missing. */
+export interface ClaimRequirements {
+  met: boolean;
+  walletAge: boolean;
+  activeDays: boolean;
+  activations: boolean;
+  portfolio: boolean;
+  /** The reading the portfolio check used; null when it could not be read. */
+  portfolioUsd: number | null;
+}
+
+/**
+ * Decides whether a wallet may collect. Every input that could not be read (no wallet age, no
+ * portfolio value) counts as NOT met: an unreadable source must never open the payout.
+ */
+export function evaluateClaimRequirements(input: {
+  walletCreatedAt: number | null;
+  now: number;
+  activeDays: number;
+  validActivations: number;
+  portfolioUsd: number | null;
+}): ClaimRequirements {
+  const created = input.walletCreatedAt;
+  const walletAge = typeof created === "number" && Number.isFinite(created) && created !== 0 &&
+    input.now - created >= CLAIM_MIN_WALLET_AGE_SECONDS;
+  const activeDays = input.activeDays >= CLAIM_MIN_ACTIVE_DAYS;
+  const activations = input.validActivations >= CLAIM_MIN_ACTIVATIONS;
+  const portfolio = input.portfolioUsd !== null && isPortfolioEligible(input.portfolioUsd);
+  return { met: walletAge && activeDays && activations && portfolio, walletAge, activeDays, activations, portfolio, portfolioUsd: input.portfolioUsd };
 }
 
 export function activationRecord(player: GamePlayerState): ActivationRecord {

@@ -24,7 +24,8 @@ real tokens.
    window is active, even with the browser closed.
 3. **Collect discoveries.** Mined memecoins accrue in Discoveries. Rewards from a coin still on its
    bonding curve stay pending until its Meteora pool graduates.
-4. **Claim all.** One wallet-approved transaction pays out up to 12 distinct coins.
+4. **Claim all.** One wallet-approved transaction pays out up to 12 distinct coins. Mining is open to every wallet; collecting needs a
+   wallet at least 7 days old holding $10, plus 5 active days and 5 shifts.
 5. **Come back.** Keep your streak, upgrade the crew with ORE, refer players and creators.
 
 ### What is real and what is game

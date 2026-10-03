@@ -17,10 +17,10 @@ import {
   accrueMining,
   activationBonusOre,
   applyGameActivation,
-  DISCOVERY_MIN_WALLET_AGE_SECONDS,
   discoveryEpoch,
   discoveryId,
-  isPortfolioEligible,
+  evaluateClaimRequirements,
+  type ClaimRequirements,
   miningSettlementWindow,
   pickDiscoveryMint,
   playerCrewPower,
@@ -521,11 +521,45 @@ export async function collectClaimable(
  * own key, so the player authorises the exact instruction set the server computed; they never sign
  * a transfer they did not ask for, and the confirmation below re-derives what actually landed.
  */
+/**
+ * Reads the two chain-derived inputs (wallet age, portfolio value) and decides whether the wallet
+ * may collect. A source that is missing or reads nothing counts as not met, never as met.
+ */
+export async function loadClaimRequirements(
+  context: GameHandlerContext,
+  player: Pick<GamePlayerStateLike, "wallet" | "activeDays" | "validActivations">,
+): Promise<ClaimRequirements> {
+  const now = unixNow(context);
+  const walletCreatedAt = context.services.wallet ? await context.services.wallet.walletCreatedAt(player.wallet) : null;
+  const portfolioUsd = context.services.portfolio ? await context.services.portfolio.portfolioUsd(player.wallet) : null;
+  return evaluateClaimRequirements({
+    walletCreatedAt,
+    now,
+    activeDays: player.activeDays,
+    validActivations: player.validActivations,
+    portfolioUsd,
+  });
+}
+
 export async function handleClaimAll(context: GameHandlerContext, request: Request): Promise<Response> {
   if (gameChainMode(context.env) !== "meteora") return apiError("Claim all is handled by the native path");
   const wallet = await authenticatedWallet(context, request, "claim-all");
   if (!wallet) return apiError("Wallet authentication required", 401);
   const now = unixNow(context);
+  // Mining is open to everyone; collecting is not. This is the one gate between an accrued reward
+  // and a signed payout, checked before anything is read or reserved, and it fails closed.
+  let requirements: ClaimRequirements;
+  try {
+    requirements = await loadClaimRequirements(context, await ensurePlayer(context, wallet));
+  } catch {
+    return apiError("Claim requirements could not be checked right now", 503, "CLAIM_REQUIREMENTS_UNAVAILABLE");
+  }
+  if (!requirements.met) {
+    return json(
+      { error: "Claiming opens once your wallet meets the requirements", code: "CLAIM_REQUIREMENTS_NOT_MET", requirements },
+      { status: 403 },
+    );
+  }
   const { items, pending, pendingMints } = await collectClaimable(context, wallet, now);
   const pendingView = pending.map((entry) => ({
     mint: entry.mint,
@@ -685,16 +719,17 @@ export function discoveryClaimId(wallet: string, epoch: number): string {
 }
 
 /**
- * One discovery roll for one wallet and one daily epoch. The roll is keyed by (secret, epoch,
- * wallet) and the claim id by (wallet, epoch), so the player's button and the scheduled sweep can
- * both call this and at most one pending reward per wallet per day is ever recorded.
+ * One discovery roll for one wallet and one daily epoch. Digging is open to every wallet with a
+ * live shift - no wallet age, play-day or portfolio gate here - because those only gate the PAYOUT
+ * (see loadClaimRequirements and handleClaimAll): a roll just accrues a pending reward. The roll
+ * is keyed by (secret, epoch, wallet) and the claim id by (wallet, epoch), so the player's button
+ * and the scheduled sweep can both call this and at most one pending reward per wallet per day is
+ * ever recorded.
  */
 export async function attemptDiscovery(context: GameHandlerContext, player: GamePlayerStateLike): Promise<DiscoveryAttempt> {
   const store = contextStore(context);
   const wallet = player.wallet;
   const now = unixNow(context);
-  if (now - player.createdAt < DISCOVERY_MIN_WALLET_AGE_SECONDS) return { ok: false, status: 403, message: "Wallet is too new for discovery" };
-  if (player.activeDays < 5 || player.validActivations < 5) return { ok: false, status: 403, message: "Discovery play requirement not met" };
   // A Discovery pays real tokens, so it may only roll inside a live activation window, using the
   // same boundary that credits mining blocks: activation instant inclusive, activeUntil exclusive.
   // Without this an expired crew could still roll, and since the roll is commit-reveal and
@@ -707,12 +742,6 @@ export async function attemptDiscovery(context: GameHandlerContext, player: Game
   const epoch = discoveryEpoch(now);
   const existing = await store.getClaim(discoveryClaimId(wallet, epoch));
   if (existing) return { ok: true, discovered: true, claim: existing, coin: await context.services.coins.getMine(existing.mint), fresh: false };
-  if (!context.services.wallet) return { ok: false, status: 403, message: "Wallet age could not be verified" };
-  const walletCreatedAt = await context.services.wallet.walletCreatedAt(wallet);
-  if (!walletCreatedAt || now - walletCreatedAt < DISCOVERY_MIN_WALLET_AGE_SECONDS) return { ok: false, status: 403, message: "Wallet age could not be verified" };
-  if (!context.services.portfolio || !isPortfolioEligible(await context.services.portfolio.portfolioUsd(wallet))) {
-    return { ok: false, status: 403, message: "Discovery portfolio requirement not met" };
-  }
   const coins = (await context.services.coins.listActiveMines()).filter((coin) => coin.miningStartsAt <= now && !coin.graduated);
   const id = discoveryId({ secret, epoch, wallet });
   const coin = pickDiscoveryMint(id, coins);
@@ -779,7 +808,10 @@ export async function settleActiveShifts(context: GameHandlerContext, limit = 20
 export interface PlayerGameState extends Omit<GamePlayerState, "activeMine"> {
   chainMode: "meteora" | "native";
   activation: { active: boolean; activeUntil: number };
+  /** `eligible` is whether a roll can happen right now (a live shift); the payout gate is `claim`. */
   discovery: { eligible: boolean; epoch: number; portfolioUsd: number | null };
+  /** What the wallet needs before it can collect, each requirement on its own. */
+  claim: ClaimRequirements;
   activeMine: {
     coin: import("./contracts").GameCoin | null;
     balance: { claimable: string; amountWhole: number; lastSettledAt: number };
@@ -830,16 +862,15 @@ export async function getPlayerGameStateDetail(
       lastSettledAt: entry.lastSettledAt,
     };
   }));
-  const walletCreatedAt = context.services.wallet ? await context.services.wallet.walletCreatedAt(wallet) : null;
-  const portfolioUsd = context.services.portfolio ? await context.services.portfolio.portfolioUsd(wallet) : null;
-  const eligible = Boolean(walletCreatedAt && now - walletCreatedAt >= DISCOVERY_MIN_WALLET_AGE_SECONDS) &&
-    player.activeDays >= 5 && player.validActivations >= 5 && isPortfolioEligible(portfolioUsd ?? 0);
+  const claim = await loadClaimRequirements(context, player);
+  const active = isEligibleForBlock(player.activeUntil || null, now, player.activatedAt || null);
   return {
     ...settledPlayer,
     crew: { ...player.crew },
     chainMode: gameChainMode(context.env),
-    activation: { active: isEligibleForBlock(player.activeUntil || null, now, player.activatedAt || null), activeUntil: player.activeUntil },
-    discovery: { eligible, epoch: discoveryEpoch(now), portfolioUsd },
+    activation: { active, activeUntil: player.activeUntil },
+    discovery: { eligible: active, epoch: discoveryEpoch(now), portfolioUsd: claim.portfolioUsd },
+    claim,
     activeMine: coin ? {
       coin,
       balance: { claimable: balance?.claimable.toString() ?? "0", amountWhole: Number(balance?.claimable ?? 0n) / Number(TOKEN_SCALE), lastSettledAt: balance?.lastSettledAt ?? 0 },

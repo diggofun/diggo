@@ -883,7 +883,17 @@ export interface GameState {
     reserve: { initial: string; released: string; committed: string; paid: string; remaining: string } | null;
   } | null;
   activation: { active: boolean; activeUntil: number };
+  /** `eligible`: a discovery roll can happen now (a live shift). Rolling is open to every wallet. */
   discovery: { eligible: boolean; epoch: number; portfolioUsd: number | null };
+  /** What the wallet needs before it can collect coins. Absent on an older Worker. */
+  claim?: {
+    met: boolean;
+    walletAge: boolean;
+    activeDays: boolean;
+    activations: boolean;
+    portfolio: boolean;
+    portfolioUsd: number | null;
+  };
   crew: Record<GameCrewComponent, number>;
   claims: GameClaim[];
   balances?: Array<{ mint: string; name: string | null; symbol: string | null; claimable?: string; amount?: string; amountWhole: number | string }>;

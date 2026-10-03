@@ -8,7 +8,7 @@ import bs58 from "bs58";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { MINING_RESERVE, TOKEN_SCALE, type GameCoin, type GameServices } from "./contracts";
 import type { RuntimeEnv } from "../env";
-import { accrueMining, discoveryId, isPortfolioEligible, releasedMiningAllocation } from "./rules";
+import { CLAIM_MIN_WALLET_AGE_SECONDS, accrueMining, discoveryId, evaluateClaimRequirements, isPortfolioEligible, releasedMiningAllocation } from "./rules";
 import { collectClaimable, ensurePlayerMine, getPlayerGameStateDetail, handleActivate, handleActivationChallenge, handleClaimAll, handleClaimAllConfirm, handleDiscovery, settleMining, settlePlayerMining } from "./service";
 import { MemoryGameStore, mineConservation, starterCrew } from "./store";
 
@@ -31,6 +31,9 @@ function gameContext(store: MemoryGameStore, coinSource: GameCoin | readonly Gam
       async listActiveMines() { return coins; },
       async getMine(mint) { return coins.find((entry) => entry.mint === mint) ?? null; },
     },
+    // An old wallet holding $25, unless a test overrides these: the claim gate has its own tests.
+    wallet: { async walletCreatedAt() { return now - 30 * 86_400; } },
+    portfolio: { async portfolioUsd() { return 25; } },
    payout: {
      async prepare() { throw new Error("not used"); },
      async confirm() { return false; },
@@ -42,6 +45,12 @@ function gameContext(store: MemoryGameStore, coinSource: GameCoin | readonly Gam
    },
  };
   return { env: env as never, services, store, now: () => now };
+}
+
+/** Gives a stored player the play history the claim gate asks for (five days, five shifts). */
+async function qualify(store: MemoryGameStore, wallet = WALLET): Promise<void> {
+  const player = (await store.getPlayer(wallet))!;
+  await store.savePlayer({ ...player, activeDays: 5, validActivations: 5 }, await store.playerVersion(wallet));
 }
 
 /** A request carrying a bearer session, so the handlers see the wallet it resolves to. */
@@ -88,6 +97,32 @@ function authenticatedEnv(wallet: string) {
   const cache = env.TOKEN_CACHE as unknown as KV;
   return { env, put: (key: string, value: string) => cache.put(key, value), wallet };
 }
+
+describe("claim requirements", () => {
+  const NOW = 10_000_000;
+  const ok = { walletCreatedAt: NOW - CLAIM_MIN_WALLET_AGE_SECONDS, now: NOW, activeDays: 5, validActivations: 5, portfolioUsd: 10 };
+
+  it("is met exactly at every boundary and not one step below", () => {
+    expect(evaluateClaimRequirements(ok).met).toBe(true);
+    expect(evaluateClaimRequirements({ ...ok, walletCreatedAt: ok.walletCreatedAt + 1 })).toMatchObject({ met: false, walletAge: false });
+    expect(evaluateClaimRequirements({ ...ok, activeDays: 4 })).toMatchObject({ met: false, activeDays: false });
+    expect(evaluateClaimRequirements({ ...ok, validActivations: 4 })).toMatchObject({ met: false, activations: false });
+    expect(evaluateClaimRequirements({ ...ok, portfolioUsd: 9.99 })).toMatchObject({ met: false, portfolio: false });
+  });
+
+  it("reports each requirement separately so the client can name what is missing", () => {
+    const view = evaluateClaimRequirements({ ...ok, activeDays: 1, portfolioUsd: 0 });
+    expect(view).toEqual({ met: false, walletAge: true, activeDays: false, activations: true, portfolio: false, portfolioUsd: 0 });
+  });
+
+  it("fails closed when an input could not be read", () => {
+    expect(evaluateClaimRequirements({ ...ok, walletCreatedAt: null }).met).toBe(false);
+    expect(evaluateClaimRequirements({ ...ok, walletCreatedAt: 0 }).met).toBe(false);
+    expect(evaluateClaimRequirements({ ...ok, walletCreatedAt: Number.NaN }).met).toBe(false);
+    expect(evaluateClaimRequirements({ ...ok, portfolioUsd: null })).toMatchObject({ met: false, portfolio: false, portfolioUsd: null });
+    expect(evaluateClaimRequirements({ ...ok, portfolioUsd: Number.NaN }).met).toBe(false);
+  });
+});
 
 describe("off-chain game rules", () => {
   it("releases the 200M reserve lazily and never beyond the cap", () => {
@@ -287,6 +322,7 @@ describe("off-chain game rules", () => {
     const { env, put } = authenticatedEnv(WALLET);
     await put(`auth:session:session-${WALLET}`, WALLET);
     await store.ensurePlayer(WALLET, 0, starterCrew());
+    await qualify(store);
     await store.saveBalance({ wallet: WALLET, mint: MINT, claimable: TOKEN_SCALE * 4n, lastSettledAt: 100 }, 0n);
     const other = "22222222222222222222222222222222";
     await store.ensurePlayer(other, 0, starterCrew());
@@ -326,6 +362,7 @@ describe("off-chain game rules", () => {
     const { env, put } = authenticatedEnv(WALLET);
     await put(`auth:session:session-${WALLET}`, WALLET);
     await store.ensurePlayer(WALLET, 0, starterCrew());
+    await qualify(store);
     await store.saveBalance({ wallet: WALLET, mint: MINT, claimable: TOKEN_SCALE * 3n, lastSettledAt: 100 }, 0n);
     const mine = await store.ensureMine(MINT, 1, 1, 1);
     const committed = TOKEN_SCALE * 4n;
@@ -365,6 +402,7 @@ describe("off-chain game rules", () => {
     // Graduated, because this test is about the per-message item ceiling, not about graduation.
     const mines = Array.from({ length: 13 }, (_, index) => ({ ...coin(1, true), mint: `${index}`.repeat(43).slice(0, 44) }));
     await store.ensurePlayer(WALLET, 0, starterCrew());
+    await qualify(store);
     for (const entry of mines) await store.saveBalance({ wallet: WALLET, mint: entry.mint, claimable: TOKEN_SCALE, lastSettledAt: 1 }, 0n);
     const base = gameContext(store, coin(1, true), now, env);
     const context = {
@@ -390,6 +428,7 @@ describe("off-chain game rules", () => {
     const payable = "44444444444444444444444444444444";
     const launched = [{ ...coin(1), mint: held, graduated: false }, { ...coin(1), mint: payable, graduated: true }];
     await store.ensurePlayer(WALLET, 0, starterCrew());
+    await qualify(store);
     await store.saveBalance({ wallet: WALLET, mint: held, claimable: TOKEN_SCALE * 2n, lastSettledAt: 10 }, 0n);
     await store.saveBalance({ wallet: WALLET, mint: payable, claimable: TOKEN_SCALE * 5n, lastSettledAt: 10 }, 0n);
     const base = gameContext(store, launched, now, env);
@@ -500,6 +539,7 @@ describe("off-chain game rules", () => {
     const { env, put } = authenticatedEnv(WALLET);
     await put(`auth:session:session-${WALLET}`, WALLET);
     await store.ensurePlayer(WALLET, 0, starterCrew());
+    await qualify(store);
     await store.saveBalance({ wallet: WALLET, mint: MINT, claimable: TOKEN_SCALE * 2n, lastSettledAt: 10 }, 0n);
     const response = await handleClaimAll(gameContext(store, coin(1, false), now, env), sessionRequest(WALLET));
     expect(response.status).toBe(409);
@@ -574,5 +614,82 @@ describe("off-chain game rules", () => {
     const live = await handleDiscovery(context as never, sessionRequest(WALLET));
     expect(live.status).toBe(200);
     expect((await live.json() as { discovered: boolean }).discovered).toBe(true);
+  });
+
+  it("lets a brand-new wallet with an empty portfolio roll a discovery, and holds the payout", async () => {
+    const store = new MemoryGameStore();
+    const now = 2_000;
+    const { env, put } = authenticatedEnv(WALLET);
+    await put(`auth:session:session-${WALLET}`, WALLET);
+    const created = await store.ensurePlayer(WALLET, now, starterCrew());
+    // No play history, a wallet the chain has never seen, nothing in the portfolio.
+    await store.savePlayer({ ...created, activatedAt: now - 60, activeUntil: now + 3_600, activeMine: MINT, activeMiningPower: 10 }, 0);
+    const base = gameContext(store, [{ ...coin(now - 100, false) }], now, { ...env, DISCOVERY_SECRET: "s".repeat(48) });
+    const context = {
+      ...base,
+      services: { ...base.services, wallet: { async walletCreatedAt() { return null; } }, portfolio: { async portfolioUsd() { return 0; } } },
+    };
+
+    const rolled = await handleDiscovery(context as never, sessionRequest(WALLET));
+    expect(rolled.status).toBe(200);
+    expect((await rolled.json() as { discovered: boolean }).discovered).toBe(true);
+
+    // The reward is real but pending: the same wallet is refused at the payout, and nothing is prepared.
+    let prepared = false;
+    context.services.payout.prepareBatch = async () => { prepared = true; throw new Error("must not be reached"); };
+    const refused = await handleClaimAll(context as never, sessionRequest(WALLET));
+    expect(refused.status).toBe(403);
+    const body = await refused.json() as { code: string; requirements: { met: boolean; walletAge: boolean; portfolio: boolean } };
+    expect(body.code).toBe("CLAIM_REQUIREMENTS_NOT_MET");
+    expect(body.requirements).toMatchObject({ met: false, walletAge: false, portfolio: false });
+    expect(prepared).toBe(false);
+    expect((await store.listClaimsForWallet(WALLET))[0]?.status).toBe("PENDING");
+  });
+
+  it("opens the payout once the wallet meets every requirement, and never earlier", async () => {
+    const store = new MemoryGameStore();
+    const now = 500;
+    const { env, put } = authenticatedEnv(WALLET);
+    await put(`auth:session:session-${WALLET}`, WALLET);
+    await store.ensurePlayer(WALLET, 0, starterCrew());
+    await store.saveBalance({ wallet: WALLET, mint: MINT, claimable: TOKEN_SCALE * 3n, lastSettledAt: 100 }, 0n);
+    const base = gameContext(store, coin(1, true), now, env);
+    let portfolio = 9.99;
+    const context = { ...base, services: { ...base.services, portfolio: { async portfolioUsd() { return portfolio; } } } };
+    let calls = 0;
+    context.services.payout.prepareBatch = async (_wallet, items) => { calls += 1; return { id: "b", transaction: "tx", expiresAt: 590, items }; };
+
+    // Everything else is fine except five play days and five shifts, then except $0.01 of portfolio.
+    expect((await handleClaimAll(context as never, sessionRequest(WALLET))).status).toBe(403);
+    await qualify(store);
+    expect((await handleClaimAll(context as never, sessionRequest(WALLET))).status).toBe(403);
+    expect(calls).toBe(0);
+    portfolio = 10;
+    expect((await handleClaimAll(context as never, sessionRequest(WALLET))).status).toBe(200);
+    expect(calls).toBe(1);
+  });
+
+  it("refuses the payout when a requirement source fails, instead of paying out unchecked", async () => {
+    const store = new MemoryGameStore();
+    const { env, put } = authenticatedEnv(WALLET);
+    await put(`auth:session:session-${WALLET}`, WALLET);
+    await store.ensurePlayer(WALLET, 0, starterCrew());
+    await qualify(store);
+    await store.saveBalance({ wallet: WALLET, mint: MINT, claimable: TOKEN_SCALE, lastSettledAt: 100 }, 0n);
+    const base = gameContext(store, coin(1, true), 500, env);
+    const context = { ...base, services: { ...base.services, portfolio: { async portfolioUsd(): Promise<number> { throw new Error("rpc down"); } } } };
+    const response = await handleClaimAll(context as never, sessionRequest(WALLET));
+    expect(response.status).toBe(503);
+    expect((await response.json() as { code: string }).code).toBe("CLAIM_REQUIREMENTS_UNAVAILABLE");
+  });
+
+  it("reports the claim requirements, and a roll that only needs a live shift, in the player state", async () => {
+    const store = new MemoryGameStore();
+    const now = 2_000;
+    const created = await store.ensurePlayer(WALLET, now, starterCrew());
+    await store.savePlayer({ ...created, activeDays: 2, validActivations: 2, activatedAt: now - 60, activeUntil: now + 3_600, activeMine: MINT }, 0);
+    const state = await getPlayerGameStateDetail(gameContext(store, coin(1, false), now) as never, WALLET);
+    expect(state.discovery.eligible).toBe(true);
+    expect(state.claim).toMatchObject({ met: false, walletAge: true, portfolio: true, activeDays: false, activations: false });
   });
 });

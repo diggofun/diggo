@@ -181,8 +181,11 @@ function FindCard({ token, name, symbol, amount, note, ready }: { token: TokenSu
 }
 
 export function MeteoraDiscoveriesScreen({ game, tokens, connected, busy, error, notice, onDiscover, claimAllPending, claimAllError, claimAllNotice, onClaimAll }: { game: GameState | null; tokens: TokenSummary[]; connected: boolean; busy: boolean; error: string; notice: string; onDiscover(): void; claimAllPending: boolean; claimAllError: string; claimAllNotice: string; onClaimAll(): void }) {
-  const eligible = game?.discovery.eligible ?? false;
-  const portfolioUsd = game?.discovery.portfolioUsd ?? 0;
+  /** Digging is open to everyone; a roll only needs a live shift. */
+  const shiftLive = game?.activation.active ?? game?.discovery.eligible ?? false;
+  const claim = game?.claim;
+  /** Collecting needs wallet age, play days and a funded wallet. An older Worker reports no detail. */
+  const canClaim = claim?.met ?? game?.discovery.eligible ?? false;
   const claims = game?.claims.filter((claim) => claim.kind === "discovery" && claim.status === "PENDING") ?? [];
   const balances = game?.balances ?? [];
   const names = new Map(tokens.map((token) => [token.mint, token]));
@@ -192,11 +195,14 @@ export function MeteoraDiscoveriesScreen({ game, tokens, connected, busy, error,
   const pendingBalances = balances.filter((balance) => !hasGraduated(tokens, balance.mint));
   const availableClaims = claimsWithoutBalance.filter((claim) => hasGraduated(tokens, claim.mint));
   const pendingClaims = claimsWithoutBalance.filter((claim) => !hasGraduated(tokens, claim.mint));
-  const requirements = [
-    { met: (game?.activeDays ?? 0) >= 5, label: "5 active days" },
-    { met: (game?.validActivations ?? 0) >= 5, label: "5 shifts" },
-    { met: portfolioUsd >= 10, label: "$10 portfolio" },
-  ];
+  const requirements = claim
+    ? [
+        { met: claim.walletAge, label: "Wallet 7+ days old" },
+        { met: claim.activeDays, label: "5 active days" },
+        { met: claim.activations, label: "5 shifts" },
+        { met: claim.portfolio, label: "$10 in your wallet" },
+      ]
+    : [];
   const rewardCounts = discoveryRewardCounts(
     game?.claimAll as (GameState["claimAll"] & DiscoveryClaimCounts) | undefined,
     availableBalances.length + availableClaims.length,
@@ -211,19 +217,12 @@ export function MeteoraDiscoveriesScreen({ game, tokens, connected, busy, error,
       <header className="screen-head screen-head-row">
         <div>
           <h1>Discoveries</h1>
-          <p>Coins your bots dug up. Claim the ready ones in one go.</p>
+          <p>{shiftLive ? "Coins your bots dug up. Anyone can dig." : "Start a shift to dig for a discovery. Anyone can dig."}</p>
         </div>
-        <button className="btn btn-primary" type="button" disabled={!connected || !eligible || busy} onClick={onDiscover}>
+        <button className="btn btn-primary" type="button" disabled={!connected || !shiftLive || busy} onClick={onDiscover}>
           {busy ? "Digging…" : "Run this window's discovery"}
         </button>
       </header>
-      <div className="chip-row" aria-label="Discovery requirements">
-        {requirements.map((requirement) => (
-          <span className={"chip" + (requirement.met ? " is-met" : "")} key={requirement.label}>
-            {requirement.met && <IconCheck size={14} />} {requirement.label}
-          </span>
-        ))}
-      </div>
       {notice && <p className="form-message" role="status">{notice}</p>}
       {error && <p className="form-message" role="alert">{error}</p>}
       {claimAllError && <p className="form-message" role="alert">{claimAllError}</p>}
@@ -235,11 +234,23 @@ export function MeteoraDiscoveriesScreen({ game, tokens, connected, busy, error,
           <span>{coins(rewardCounts.available)}</span>
         </div>
         {rewardCounts.available > 0 ? (
-          <button className="btn btn-primary" type="button" disabled={!connected || claimAllPending} onClick={onClaimAll}>{claimAllPending ? "Signing…" : "Claim all"}</button>
+          <button className="btn btn-primary" type="button" disabled={!connected || !canClaim || claimAllPending} onClick={onClaimAll}>{claimAllPending ? "Signing…" : "Claim all"}</button>
         ) : (
           <small>No rewards from graduated coins are available to claim yet.</small>
         )}
       </div>
+      {!canClaim && (
+        <div className="claim-gate">
+          <p>Digging is open to everyone. To collect your coins you need:</p>
+          <div className="chip-row" aria-label="Claim requirements">
+            {requirements.map((requirement) => (
+              <span className={"chip" + (requirement.met ? " is-met" : "")} key={requirement.label}>
+                {requirement.met && <IconCheck size={14} />} {requirement.label}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       {rewardCounts.available > 0 && (
         <div className="find-grid">
           {availableBalances.map((balance) => {

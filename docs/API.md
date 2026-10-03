@@ -107,10 +107,20 @@ pending for a later retry. Claim history is limited to the most recent 20 entrie
 ### Discovery and referrals
 
 `POST /api/game/discovery` accepts an empty JSON object `{}` and returns `{ discovered, claim? }`.
-It requires a wallet at least seven days old (the oldest signature timestamp, cached in D1), a SOL
-portfolio of at least $10, and at least five active days and five valid activations. The $10 value is
-SOL balance multiplied by the cached/fallback SOL/USD oracle price, not a paid requirement.
-`POST /api/game/discovery` is idempotent per wallet/epoch and reserves discovery ORE from the mine.
+Digging is open to every wallet: a roll only needs a live activation window (`ACTIVATION_REQUIRED`
+otherwise) and the configured `DISCOVERY_SECRET`. It carries no wallet-age, play-day or portfolio
+gate, because a roll only records a *pending* reward. It is idempotent per wallet/epoch and reserves
+the discovery reward from the mine.
+
+Collecting is what is gated. `POST /api/game/claim/all` returns `403 CLAIM_REQUIREMENTS_NOT_MET`
+(with a `requirements` object saying which of the four is missing) until the wallet has all of:
+an oldest signature at least seven days old (cached in D1), a SOL portfolio of at least $10, at
+least five active days and five valid activations. The $10 value is SOL balance multiplied by the
+cached/fallback SOL/USD oracle price, not a paid requirement. A requirement source that fails or
+reads nothing counts as not met (`503 CLAIM_REQUIREMENTS_UNAVAILABLE` on an error), so an
+unreadable input never opens the payout. The same four flags are returned to the client as `claim`
+in the player state (`GET /api/game/player/:wallet`), and `discovery.eligible` there means "a roll
+can happen now" (a live shift).
 
 In Meteora mode, referral qualification uses at least 0.5 SOL of indexed swap volume from
 `getWalletVolumeLamports`. A successful credit is up to 250 ORE per qualified referral, with a

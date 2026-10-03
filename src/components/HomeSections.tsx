@@ -389,6 +389,7 @@ export function HowItWorks() {
 
 const HOME_FAQ: { q: string; a: string }[] = [
   { q: "Does it cost anything to play?", a: "No. You only need a little SOL for network fees." },
+  { q: "Who can claim?", a: "Anyone can dig. To collect, your wallet needs to be 7+ days old with $10 in it, after 5 active days." },
   { q: "What do I get when I claim?", a: "Real SPL memecoins, sent to the wallet that signs the claim." },
   { q: "Why is some of my reward pending?", a: "Coins still on their bonding curve pay out once they graduate." },
   { q: "Are ORE and Mining Power tokens?", a: "No. They're game progress: you can't buy, sell or withdraw them." },

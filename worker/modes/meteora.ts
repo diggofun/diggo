@@ -71,6 +71,7 @@ function emptyPlayerState(env: RuntimeEnvLike, wallet: string): PlayerGameState 
     chainMode: gameChainMode(env),
     activation: { active: false, activeUntil: 0 },
     discovery: { eligible: false, epoch: 0, portfolioUsd: 0 },
+    claim: { met: false, walletAge: false, activeDays: false, activations: false, portfolio: false, portfolioUsd: 0 },
     activeMine: null,
     claims: [],
     balances: [],
