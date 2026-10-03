@@ -30,7 +30,7 @@ routine: swings at a rock, a hop, a look the other way) and `attention` (wiggle)
 and `botAt(index)` pick stable looks, so the same coin, wallet or slot always shows the same bot.
 
 `src/components/BotMine.tsx` draws the mine: bots beside rocks, crystals and nuggets, chips flying
-on every strike. `MineScene` sizes the crew from the crew tier and applies cosmetics as colours.
+on every strike. `MineScene` sizes the crew from the crew tier.
 
 ## Brand files (`public/assets/brand`)
 

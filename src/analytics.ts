@@ -37,7 +37,6 @@ export interface AnalyticsEvents {
   rewards_claim_failed: { reason: string };
   discovery_revealed: { rarity?: string; token_symbol?: string };
   upgrade_purchased: { item: string; level?: number; ore_cost?: number };
-  cosmetic_equipped: { item: string };
   swap_quote_requested: { side: Side; mint: string; is_official_diggo: boolean };
   swap_submitted: { side: Side; mint: string; amount_sol?: number };
   swap_confirmed: { side: Side; mint: string; amount_sol?: number };

@@ -56,7 +56,7 @@ test("the drawer holds the destinations the tab bar leaves out, and they navigat
 
   const drawer = await openDrawer(page);
   await expect(drawer).toHaveAttribute("aria-label", "Main navigation");
-  for (const label of ["Leaderboards", "$DIGGO", "Referrals", "Cosmetics", "Watchlist"]) {
+  for (const label of ["Leaderboards", "$DIGGO", "Referrals", "Settings", "Watchlist"]) {
     await expect(drawer.getByRole("link", { name: label, exact: true })).toBeVisible();
   }
   await expect(drawer.getByRole("button", { name: "Create coin", exact: true })).toBeVisible();

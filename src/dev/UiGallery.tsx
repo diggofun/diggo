@@ -201,16 +201,6 @@ const SAMPLE_SPENT_MINE_INFO: MineInfo = {
   curveMiningDaysRemaining: null,
 };
 
-/** Equipped maps that exercise every cosmetic slot the mine scene reads. */
-const LOADOUTS: readonly { name: string; equipped: Record<string, string> }[] = [
-  { name: "Defaults", equipped: {} },
-  { name: "Steel + rail cart", equipped: { outfit: "outfit_steel", cart: "cart_rail", pickaxe: "pickaxe_iron" } },
-  { name: "Gilded + hauler", equipped: { outfit: "outfit_gilded", cart: "cart_hauler", pickaxe: "pickaxe_diamond" } },
-  { name: "Legendary + Sunset", equipped: { outfit: "outfit_legendary", cart: "cart_hover", mine_theme: "theme_sunset", pickaxe: "pickaxe_plasma" } },
-  { name: "Arcane shaft", equipped: { outfit: "outfit_neon", mine_theme: "theme_arcane" } },
-  { name: "Deep core", equipped: { mine_theme: "theme_deepcore", cart: "cart_hauler" } },
-];
-
 /** The brand files, from public/assets/brand, at the sizes they ship. */
 const BRAND_FILES: readonly { src: string; alt: string; className?: string }[] = [
   { src: "/assets/brand/diggo-wordmark-640.png", alt: "Diggo wordmark", className: "is-wordmark" },
@@ -368,23 +358,6 @@ export function UiGallery() {
           onOpenToken={noop}
           onTrade={noop}
         />
-      )}
-      {show("loadouts") && (
-        <section className="page-shell ui-gallery-tiers">
-          <h2>Equipped cosmetics in the mine</h2>
-          <p className="ui-gallery-note">
-            The real MineScene with each loadout equipped. Colours only — no cosmetic changes Mining
-            Power, ORE or discovery odds.
-          </p>
-          <div>
-            {LOADOUTS.map((loadout) => (
-              <figure className="ui-gallery-figure" key={loadout.name}>
-                <MineScene tier={4} active cosmetics={loadout.equipped} />
-                <figcaption>{loadout.name}</figcaption>
-              </figure>
-            ))}
-          </div>
-        </section>
       )}
       {show("art") && (
         <section className="page-shell ui-gallery-tiers">

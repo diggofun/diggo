@@ -95,8 +95,7 @@ export function LeaderboardsScreen({ tokens, onSelectMine }: LeaderboardsScreenP
 
       {data?.season && (
         <p className="leaderboard-season">
-          {data.season.name}, ends {new Date(data.season.endsAt * 1_000).toLocaleDateString()}. Prizes are
-          cosmetic and capped; token amounts are never a prize.
+          {data.season.name}, ends {new Date(data.season.endsAt * 1_000).toLocaleDateString()}.
         </p>
       )}
       {error && <p className="form-message">{error}</p>}

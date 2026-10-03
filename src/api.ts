@@ -21,7 +21,6 @@
  */
 import type {
   AchievementView,
-  CosmeticsView,
   DiscoveryOpportunity,
   DiscoveryRecord,
   MineInfo,
@@ -655,20 +654,6 @@ export async function getAchievements(
   return getJson<{ achievements: AchievementView[]; earnedCount: number; oreGranted: number }>(
     playerPath(wallet, "/achievements"),
   );
-}
-
-export async function getCosmetics(): Promise<CosmeticsView> {
-  return getJson<CosmeticsView>("/api/cosmetics");
-}
-
-export async function equipCosmetic(
-  cosmeticId: string,
-): Promise<{ equipped: Record<string, string>; slot: string }> {
-  return postJson("/api/cosmetics/equip", { cosmeticId });
-}
-
-export async function unequipCosmetic(slot: string): Promise<{ equipped: Record<string, string>; slot: string }> {
-  return postJson("/api/cosmetics/unequip", { slot });
 }
 
 export async function getNotifications(): Promise<NotificationsView> {

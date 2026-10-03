@@ -10,7 +10,6 @@ import {
   IconClose,
   IconBalance,
   IconAdmin,
-  IconCosmetics,
   IconCrew,
   IconDiscoveries,
   IconHome,
@@ -46,7 +45,6 @@ export type PageId =
   | "diggo"
   | "leaderboards"
   | "mines"
-  | "cosmetics"
   | "trade"
   | "create"
   | "profile"
@@ -78,7 +76,6 @@ const PLAY_ITEMS: NavItem[] = [
 /** Everything else, a step down in the drawer. */
 const MORE_ITEMS: NavItem[] = [
   { page: "referrals", href: "/referrals", label: "Referrals", icon: IconUserGroup },
-  { page: "cosmetics", href: "/cosmetics", label: "Cosmetics", icon: IconCosmetics },
   { page: "settings", href: "/settings", label: "Settings", icon: IconSettings },
 ];
 

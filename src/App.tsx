@@ -41,7 +41,6 @@ import { TURNSTILE_SITE_KEY } from "./constants";
 import { NEUTRAL_VERIFICATION_TEXT, runGated, VerificationRequiredError } from "./verification";
 import { CREW_COMPONENT_LABELS, CREW_COMPONENTS } from "./crewLabels";
 import { requestWalletMenu, useDiggoWallet } from "./wallet";
-import { clearEquippedCosmetics, loadEquippedCosmetics } from "./cosmetics";
 import { AppHeader, type PageId } from "./components/AppHeader";
 import { AboutDiggo, ExploreBoard, FinalCta, HomeFaq, HomeHero, HowItWorks, SelectedMine, SiteFooter } from "./components/HomeSections";
 import { EmptyState, ErrorState, LoadingScreen, RouteFallback } from "./components/StatusViews";
@@ -67,7 +66,6 @@ import { BotMine } from "./components/BotMine";
  */
 const AdminScreen = lazy(() => import("./components/AdminScreen").then((module) => ({ default: module.AdminScreen })));
 const SettingsScreen = lazy(() => import("./components/SettingsScreen").then((module) => ({ default: module.SettingsScreen })));
-const CosmeticsScreen = lazy(() => import("./components/CosmeticsScreen").then((module) => ({ default: module.CosmeticsScreen })));
 const CrewScreen = lazy(() => import("./components/CrewScreen").then((module) => ({ default: module.CrewScreen })));
 const DashboardPanel = lazy(() => import("./components/DashboardPanel").then((module) => ({ default: module.DashboardPanel })));
 /**
@@ -108,7 +106,6 @@ const ROUTES: Record<string, PageId> = {
   "/create": "create",
   "/crew": "crew",
   "/discoveries": "discoveries",
-  "/cosmetics": "cosmetics",
   "/profile": "profile",
   "/portfolio": "profile",
   "/referrals": "referrals",
@@ -126,7 +123,6 @@ const PAGE_TITLES: Partial<Record<PageId, string>> = {
   trade: "Trade",
   leaderboards: "Leaderboards",
   mines: "Mine details",
-  cosmetics: "Cosmetics",
   create: "Create a coin",
   profile: "Your profile",
   referrals: "Referrals",
@@ -482,16 +478,6 @@ export default function App() {
   useEffect(() => {
     void refreshDiscoveries();
   }, [refreshDiscoveries]);
-
-  /**
-   * The dashboard draws the player's mine, so it needs the equipped cosmetics too. Loading them
-   * once here means the look is right on the first visit to the dashboard rather than only after
-   * a trip to the cosmetics page; src/cosmetics.ts de-duplicates the request with that screen.
-   */
-  useEffect(() => {
-    if (signedIn) void loadEquippedCosmetics();
-    else clearEquippedCosmetics();
-  }, [signedIn]);
 
   /**
    * A reward the player collected on chain has just been confirmed to the backend, so the ledger
@@ -1150,7 +1136,6 @@ export default function App() {
             </section>
           )}
 
-          {page === "cosmetics" && <CosmeticsScreen signedIn={signedIn} />}
           {page === "profile" && connected && config.chainMode === "meteora" && (
             <>
               <MeteoraPortfolioScreen game={game} portfolio={meteoraPortfolio} tokens={tokens} />
