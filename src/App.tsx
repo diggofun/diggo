@@ -234,7 +234,7 @@ export default function App() {
 
   useEffect(() => {
     const title = PAGE_TITLES[page];
-    document.title = title ? title + " · Diggo.fun" : "Diggo.fun — Build and manage your memecoin mining crew";
+    document.title = title ? title + " · Diggo.fun" : "Diggo.fun — Launch & earn memecoins for free";
   }, [page]);
 
   // Read before captureLandingReferral() below strips ?ref= (or /r/<code>) from the address bar.

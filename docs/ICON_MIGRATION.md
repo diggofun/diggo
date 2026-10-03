@@ -36,6 +36,6 @@ on every strike. `MineScene` sizes the crew from the crew tier.
 
 `scripts/brand/make-bot-brand.mjs` builds every brand file from `scripts/brand/source`: the
 transparent mark and wordmark (the backdrop is removed by flooding inward from the image border,
-so the bots' eyes stay), the favicons, the app icons and the social card `public/og-image-v3.png`.
+so the bots' eyes stay), the favicons, the app icons and the social card `public/og-image-v4.jpg` (the banner, shown when a link is shared).
 `/assets/*` is served as immutable, so a changed icon needs a new `?v=` in `index.html` and the
 manifest.

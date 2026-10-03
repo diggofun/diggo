@@ -220,13 +220,15 @@ async function main() {
   await writeFile(output("favicon.svg"), svg);
   await writeFile(output("assets/brand/favicon.svg"), svg);
 
-  // The social card: the wordmark on the page colour, 1200x630.
-  const cardWord = await wordmark.clone().resize(940, 380, { fit: "inside" }).png().toBuffer();
-  const card = await sharp({ create: { width: 1200, height: 630, channels: 4, background: PAGE } })
-    .composite([{ input: cardWord, gravity: "center" }])
-    .png(PNG)
+  // The social card shown when a link is shared (WhatsApp, Discord, X, ...): the banner itself, on
+  // its own black, letterboxed into 1200x630 with its margins kept. A JPEG well under 300 KB, the size WhatsApp reliably shows.
+  // A new look needs a new file name: chat apps cache a preview image by URL for weeks.
+  const card = await sharp(source("diggo-banner.png"))
+    .resize(1200, 630, { fit: "contain", background: "#090808" })
+    .flatten({ background: "#090808" })
+    .jpeg({ quality: 88, mozjpeg: true })
     .toBuffer();
-  await writeFile(output("og-image-v3.png"), card);
+  await writeFile(output("og-image-v4.jpg"), card);
 
   const meta = async (buffer) => {
     const info = await sharp(buffer).metadata();

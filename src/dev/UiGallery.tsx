@@ -371,7 +371,7 @@ export function UiGallery() {
             ))}
           </div>
           <h2>Social card</h2>
-          <img className="ui-gallery-social" src="/og-image-v3.png" alt="The social card: the Diggo wordmark on the page colour" />
+          <img className="ui-gallery-social" src="/og-image-v4.jpg" alt="The social card: the Diggo banner" />
           <h2>Discovery art by rarity</h2>
           <div>
             {RARITIES.map((rarity) => (
