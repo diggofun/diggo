@@ -31,12 +31,8 @@ export const ICON_GLYPHS: Record<IconName, ReactNode> = {
       <path d="M9.2 13.5L8.2 20.5l3.8-2l3.8 2l-1-7" />
     </>
   ),
-  balance: (
-    <>
-      <path d="M12 4.5v15M8.5 19.5h7M5 7.5h14" />
-      <path d="M5 7.5l-2.5 6h5z M19 7.5l-2.5 6h5z" {...solid} />
-    </>
-  ),
+  // The Solana mark: three slanted bars, the middle one leaning the other way.
+  balance: <path d="M8 4.4h11.6l-3.4 3.2H4.6z M4.4 10.4h11.6l3.4 3.2H7.8z M8 16.4h11.6l-3.4 3.2H4.6z" strokeWidth={1.2} {...solid} />,
   ban: (
     <>
       <circle cx="12" cy="12" r="8.5" />
