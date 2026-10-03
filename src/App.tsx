@@ -960,7 +960,7 @@ export default function App() {
               />
               <AboutDiggo />
               <ExploreBoard tokens={tokens} limit={4} onLaunch={openLaunch} />
-              {signedIn && economy}
+              {signedIn && config.chainMode !== "meteora" && economy}
               <HowItWorks />
               <HomeFaq />
               <FinalCta onLaunch={openLaunch} />

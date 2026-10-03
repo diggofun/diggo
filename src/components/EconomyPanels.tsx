@@ -12,7 +12,6 @@ import type { RewardClaimView } from "../api";
 import { DIGGO_CONFIG, crewTier } from "../../shared/economics";
 import { CREW_COMPONENTS } from "../crewLabels";
 import { money, oreAmount, tokenAmount } from "../format";
-import { IconBadge, IconLayers, IconOre } from "../icons";
 import { needsOnChainCollection, useRewardCollection, type CollectionState } from "../rewardsClaim";
 
 export interface EconomyPanelsProps {
@@ -94,9 +93,6 @@ export function EconomyPanels({
     <section className="economy-split page-shell">
       <article className="economy-panel real-rewards">
         <header>
-          <span className="economy-badge">
-            REAL REWARDS
-          </span>
           <h3>Token rewards</h3>
           <p>Tokens your bots earned, per mine. You sign every payout.</p>
         </header>
@@ -215,10 +211,7 @@ export function EconomyPanels({
 
       <article className="economy-panel game-progression">
         <header>
-          <span className="economy-badge">
-            <IconBadge size={13} /> GAME PROGRESSION
-          </span>
-          <h3>Your dug-in progress</h3>
+          <h3>Your progress</h3>
           <p>ORE, levels and tier upgrade your crew. They can&apos;t be bought, sold or withdrawn.</p>
         </header>
 
@@ -226,7 +219,7 @@ export function EconomyPanels({
           <div className="progression-grid">
             <div className="progression-cell">
               <span>
-                <IconOre size={13} /> ORE
+                ORE
               </span>
               <strong>{oreAmount(player.oreBalance)}</strong>
               <small>
@@ -236,14 +229,14 @@ export function EconomyPanels({
             </div>
             <div className="progression-cell">
               <span>
-                <IconLayers size={13} /> MINING LEVEL
+                Mining level
               </span>
               <strong>{totalLevel}</strong>
               <small>levels earned across your five crew branches</small>
             </div>
             <div className="progression-cell">
               <span>
-                <IconBadge size={13} /> CREW TIER
+                Crew tier
               </span>
               <strong>{tier?.name ?? "—"}</strong>
               <small>
@@ -253,7 +246,7 @@ export function EconomyPanels({
             </div>
             <div className="progression-cell">
               <span>
-                EXPERIENCE
+                Experience
               </span>
               <strong>{oreAmount(player.xp ?? 0)}</strong>
               <small>

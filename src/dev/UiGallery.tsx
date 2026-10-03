@@ -14,6 +14,7 @@ import { Bot, BOT_COLORS, BOT_EYEWEAR, BOT_HATS, BOT_SHAPE_NAMES } from "../comp
 import { CrewScreen } from "../components/CrewScreen";
 import { DashboardPanel } from "../components/DashboardPanel";
 import { DiscoveriesPanel } from "../components/DiscoveriesPanel";
+import { EconomyPanels } from "../components/EconomyPanels";
 import { ExploreBoard, SelectedMine } from "../components/HomeSections";
 import { DiscoveryArt, MineScene } from "../components/MineScene";
 import { MineInfoPanel } from "../components/MineInfoPanel";
@@ -281,6 +282,12 @@ export function UiGallery() {
             );
           })}
         </section>
+      )}
+      {show("economy") && (
+        <>
+          <EconomyPanels player={samplePlayer({})} tokens={[SAMPLE_MINE]} claims={[]} loading={false} signedIn claimingId={null} claimError="" onClaim={noop} onOpenToken={noop} />
+          <EconomyPanels player={null} tokens={[SAMPLE_MINE]} claims={[]} loading={false} signedIn={false} claimingId={null} claimError="" onClaim={noop} onOpenToken={noop} />
+        </>
       )}
       {show("bots") && (
         <section className="page-shell ui-bot-gallery" aria-label="Bots">
