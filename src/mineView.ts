@@ -22,6 +22,14 @@ type TokenPower = Pick<TokenSummary, "mint" | "networkPower">;
 /** The live mine-info payload's view of the same figure. */
 type InfoPower = Pick<MineInfo, "mint" | "totalMiningPower">;
 
+/** Unknown reserve data must not look like an exhausted mine. A measured zero is valid. */
+export function miningReserveShare(token: Pick<TokenSummary, "reserveRemaining" | "reserveTotal">): number | null {
+  const { reserveRemaining, reserveTotal } = token;
+  if (reserveRemaining === null || reserveTotal === null || !Number.isFinite(reserveRemaining) ||
+      !Number.isFinite(reserveTotal) || reserveRemaining < 0 || reserveTotal <= 0) return null;
+  return Math.min(1, reserveRemaining / reserveTotal);
+}
+
 /**
  * The total Mining Power to print for one mine, or null when no loaded source can state it.
  *

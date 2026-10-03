@@ -11,7 +11,7 @@ import { IconArrowDownRight, IconArrowUpRight, IconCheck, IconChevronDown, IconC
 import type { MineInfo, PlayerProfile, TokenSummary } from "../../shared/types";
 import { GAMEPLAY_DEFAULTS } from "../../shared/economics";
 import { compact, countdown, money, percent, shortAddress, solAmount } from "../format";
-import { describeEmissionWindow, resolveNetworkPower } from "../mineView";
+import { describeEmissionWindow, miningReserveShare, resolveNetworkPower } from "../mineView";
 import { requestWalletMenu } from "../wallet";
 import { BrandMark } from "./AppHeader";
 import { BotMine } from "./BotMine";
@@ -128,7 +128,7 @@ const SORTS: { id: SortMode; label: string }[] = [
 
 function sortTokens(tokens: TokenSummary[], mode: SortMode): TokenSummary[] {
   const list = [...tokens];
-  const left = (token: TokenSummary) => (token.reserveTotal > 0 ? token.reserveRemaining / token.reserveTotal : 1);
+  const left = (token: TokenSummary) => miningReserveShare(token) ?? Number.POSITIVE_INFINITY;
   if (mode === "new") return list.sort((a, b) => b.createdAt - a.createdAt);
   if (mode === "reduction") return list.sort((a, b) => a.nextEpochAt - b.nextEpochAt);
   if (mode === "almost") return list.sort((a, b) => left(a) - left(b));
@@ -190,7 +190,7 @@ function TokenCard({ token }: { token: TokenSummary }) {
    */
   const curve = token.curveMining;
   const onCurve = curve?.onCurve === true && curve.cap > 0;
-  const reserveShare = token.reserveTotal > 0 ? token.reserveRemaining / token.reserveTotal : 0;
+  const reserveShare = miningReserveShare(token);
   const bar = onCurve ? curve.progress : reserveShare;
   return (
     <a className="token-card" href={"/mines?mint=" + encodeURIComponent(token.mint)} aria-label={"Open the " + token.name + " mine"}>
@@ -215,9 +215,9 @@ function TokenCard({ token }: { token: TokenSummary }) {
         </span>
       </div>
       <strong className="token-price">{money(token.priceUsd)}</strong>
-      <div className="progress" aria-hidden="true"><i style={{ width: percent(bar) }} /></div>
+      {bar !== null && <div className="progress" aria-hidden="true"><i style={{ width: percent(bar) }} /></div>}
       <small className="token-foot">
-        {onCurve ? percent(curve.progress) + " of the launch cap mined" : Math.round(reserveShare * 100) + "% of the reserve left"}
+        {onCurve ? percent(curve.progress) + " of the launch cap mined" : reserveShare === null ? "— reserve left" : Math.round(reserveShare * 100) + "% of the reserve left"}
         {" · "}
         {compact(token.networkPower)} power
       </small>
@@ -240,11 +240,12 @@ export function SelectedMine({
   now: number;
 }) {
   const [copied, setCopied] = useState(false);
-  const reservePercent = token.reserveTotal > 0 ? (token.reserveRemaining / token.reserveTotal) * 100 : 0;
   /** Pre-graduation the curve's own launch cap is the budget paying this mine's blocks. */
   const curve = token.curveMining;
   const onCurve = curve.onCurve;
   const hasCurveBudget = onCurve && curve.cap > 0;
+  const reserveShare = hasCurveBudget ? curve.remaining / curve.cap : miningReserveShare(token);
+  const remaining = hasCurveBudget ? curve.remaining : token.reserveRemaining;
   const networkPower = resolveNetworkPower(token, mineInfo);
   /** Only mine info estimates the runway, and only for the mine it was fetched for. */
   const curveDaysRemaining = mineInfo && mineInfo.mint === token.mint ? mineInfo.curveMiningDaysRemaining : null;
@@ -280,8 +281,8 @@ export function SelectedMine({
       <div className="stat-row">
         <article className="stat">
           <span>{hasCurveBudget ? "Launch cap left" : "Unmined supply"}</span>
-          <strong>{reservePercent.toFixed(1)}%</strong>
-          <small>{compact(token.reserveRemaining)} ${token.symbol}</small>
+          <strong>{reserveShare === null ? "—" : (reserveShare * 100).toFixed(1) + "%"}</strong>
+          <small>{remaining === null ? "—" : compact(remaining)} ${token.symbol}</small>
         </article>
         <article className="stat">
           <span>Network power</span>

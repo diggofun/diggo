@@ -9,6 +9,11 @@ function finite(value: unknown, fallback = 0): number {
   return typeof number === "number" && Number.isFinite(number) ? number : fallback;
 }
 
+function reserveAmount(value: unknown): number | null {
+  const number = finite(value, Number.NaN);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
 function text(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() !== "" ? value : fallback;
 }
@@ -67,8 +72,8 @@ export function normalizeTokenSummary(input: unknown): TokenSummary | null {
     curveMining: curveMining(raw.curveMining, graduated),
     sellCapacity: { sol: finite(sell.sol), tokens: sell.tokens === null ? null : finite(sell.tokens) },
     marketCapUsd: finite(raw.marketCapUsd),
-    reserveRemaining: finite(raw.reserveRemaining),
-    reserveTotal: finite(raw.reserveTotal),
+    reserveRemaining: reserveAmount(raw.reserveRemaining),
+    reserveTotal: reserveAmount(raw.reserveTotal),
     rewardPerBlock: finite(raw.rewardPerBlock),
     networkPower: finite(raw.networkPower),
     nextBlockAt: finite(raw.nextBlockAt),

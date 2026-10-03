@@ -79,8 +79,9 @@ export interface TokenSummary {
   /** What a seller can really get out of the curve right now. */
   sellCapacity: CurveSellCapacitySummary;
   marketCapUsd: number;
-  reserveRemaining: number;
-  reserveTotal: number;
+  /** Mining allocation in whole tokens; null when the API has not reported it. */
+  reserveRemaining: number | null;
+  reserveTotal: number | null;
   rewardPerBlock: number;
   networkPower: number;
   nextBlockAt: number;

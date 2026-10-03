@@ -27,8 +27,19 @@ describe("normalizeTokenSummary", () => {
     expect(token.priceSol).toBe(0);
     expect(token.change24h).toBeNull();
     expect(token.volume24hUsd).toBe(0);
+    expect(token.reserveRemaining).toBeNull();
+    expect(token.reserveTotal).toBeNull();
     expect(token.sellCapacity).toEqual({ sol: 0, tokens: 0 });
     expect((token as unknown as { pool: string }).pool).toBe(SLIM_DIGGO.pool);
+  });
+
+  it("preserves measured reserves, including a genuinely exhausted mine", () => {
+    expect(normalizeTokenSummary({ ...SLIM_DIGGO, reserveRemaining: "199614036.59762284", reserveTotal: "200000000" }))
+      .toMatchObject({ reserveRemaining: 199614036.59762284, reserveTotal: 200000000 });
+    expect(normalizeTokenSummary({ ...SLIM_DIGGO, reserveRemaining: 0, reserveTotal: 200000000 }))
+      .toMatchObject({ reserveRemaining: 0, reserveTotal: 200000000 });
+    expect(normalizeTokenSummary({ ...SLIM_DIGGO, reserveRemaining: null, reserveTotal: "bad" }))
+      .toMatchObject({ reserveRemaining: null, reserveTotal: null });
   });
 
   it("keeps real values from a full summary", () => {

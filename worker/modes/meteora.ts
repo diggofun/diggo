@@ -348,7 +348,9 @@ export function meteoraConfig(env: RuntimeEnvLike) {
 
 export async function meteoraBootstrap(env: RuntimeEnvLike, ctx: ExecutionContext) {
   const result = await env.DB.prepare(
-    "SELECT pool, base_mint, name, symbol, uri, created_at, quote_reserve, migration_quote_threshold, is_graduated FROM meteora_pools WHERE config=?1 ORDER BY created_at DESC",
+    "SELECT p.pool, p.base_mint, p.name, p.symbol, p.uri, p.created_at, p.quote_reserve, p.migration_quote_threshold, p.is_graduated, " +
+    "m.initial_reserve, m.remaining FROM meteora_pools p LEFT JOIN game_mines m ON m.mint=p.base_mint " +
+    "WHERE p.config=?1 ORDER BY p.created_at DESC",
   ).bind(String(env.METEORA_DBC_CONFIG || "")).all<Record<string, unknown>>();
   ctx.waitUntil(Promise.resolve());
   return json({
@@ -359,6 +361,9 @@ export async function meteoraBootstrap(env: RuntimeEnvLike, ctx: ExecutionContex
       createdAt: Number(row.created_at) || 0, status: Number(row.is_graduated) === 1 ? "graduated" : "active",
       venue: "meteora", graduated: Number(row.is_graduated) === 1,
       quoteReserve: String(row.quote_reserve), migrationQuoteThreshold: String(row.migration_quote_threshold),
+      // Match mineLedgerView, including a new pool whose ledger has not been initialized yet.
+      reserveTotal: wholeTokens(BigInt(String(row.initial_reserve ?? MINING_RESERVE))),
+      reserveRemaining: wholeTokens(BigInt(String(row.remaining ?? MINING_RESERVE))),
     })),
     syncedAt: nowSeconds(),
     ...meteoraConfig(env),
