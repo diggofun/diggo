@@ -5,7 +5,7 @@ import { compact, countdown, oreAmount, shortAddress, tokenAmount } from "../for
 import type { GameCrewComponent, GameState, MeteoraPortfolio } from "../api";
 import { IconCheck } from "../icons";
 import { MineScene } from "./MineScene";
-import { Bot, botAt, botFor } from "./Bot";
+import { Bot, botAt } from "./Bot";
 import { useProfileBot } from "../preferences";
 import { PushToggle } from "./PushToggle";
 import { TokenOrb } from "./TokenOrb";
