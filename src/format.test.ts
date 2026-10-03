@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { money, usdApprox } from "./format";
+import { miningProgressPercent, money, usdApprox } from "./format";
+
+describe("miningProgressPercent", () => {
+  it.each([
+    [0, "0%"],
+    [1.558853373915e-5, "0.0016%"],
+    [1.9552640241182e-3, "0.20%"],
+    [0.000000005, "<0.000001%"],
+    [0.00000001, "0.000001%"],
+    [0.5, "50.00%"],
+    [0.99999, ">99.99%"],
+    [1, "100%"],
+    [2, "100%"],
+    [-1, "0%"],
+    [Number.NaN, "—"],
+  ])("formats %s as %s without hiding mined tokens", (value, expected) => {
+    expect(miningProgressPercent(value)).toBe(expected);
+  });
+});
 
 describe("money", () => {
   it("shows zero when a price is missing or invalid", () => {

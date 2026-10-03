@@ -321,7 +321,8 @@ async function mineLedgerView(env: RuntimeEnvLike, mint: string) {
     reserveTotal: wholeTokens(initial),
     reserveRemaining: wholeTokens(remaining),
     committed: wholeTokens(committed),
-    progress: initial > 0n ? Number((committed * 1_000_000n) / initial) / 1_000_000 : 0,
+    // Display-only ratio: truncating to millionths hid the first 200 mined tokens as zero.
+    progress: initial > 0n ? Number(committed) / Number(initial) : 0,
     power,
   };
 }

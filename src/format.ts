@@ -79,3 +79,15 @@ export function solAmount(value: number): string {
 export function percent(fraction: number): string {
   return `${(Math.max(0, Math.min(1, fraction)) * 100).toFixed(fraction >= 0.9995 ? 0 : 2)}%`;
 }
+
+/** Small mining progress must stay visible; only an untouched budget is actually 0%. */
+export function miningProgressPercent(fraction: number): string {
+  if (!Number.isFinite(fraction)) return "—";
+  const value = Math.max(0, Math.min(1, fraction)) * 100;
+  if (value === 0) return "0%";
+  if (value === 100) return "100%";
+  if (value < 0.000001) return "<0.000001%";
+  if (value >= 99.995) return ">99.99%";
+  const decimals = value < 0.01 ? Math.min(6, 1 - Math.floor(Math.log10(value))) : 2;
+  return value.toFixed(decimals) + "%";
+}

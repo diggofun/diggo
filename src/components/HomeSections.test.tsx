@@ -92,3 +92,28 @@ describe("time-based mining display", () => {
     expect(html).not.toContain("per block");
   });
 });
+
+describe("mined progress display", () => {
+  it.each([
+    [1.558853373915e-5, "0.0016%"],
+    [5e-18, "&lt;0.000001%"],
+    [0, "0%"],
+    [1, "100%"],
+  ])("shows nonzero mined progress %s accurately", (progress, label) => {
+    const mine = normalizeMineInfo({
+      ...coin, miningEmission: { kind: "TIME", durationDays: 3650 },
+      emissionSource: "RESERVE", remainingReserve: 200000000 * (1 - progress),
+      reserveTotal: 200000000, fullyMinedProgress: progress,
+    })!;
+    const html = renderToStaticMarkup(<MineInfoPanel mine={mine} mineName="Diggo" now={0} loading={false} error="" />);
+    expect(html).toContain("Mined so far");
+    expect(html).toContain(`<small>${label}</small>`);
+    expect(html).toContain(`aria-label="Mine ${label} mined"`);
+    if (progress > 0 && progress < 1) {
+      expect(html).not.toContain("<small>0%</small>");
+      expect(html).not.toContain("<small>0.00%</small>");
+      expect(html).not.toContain('style="width:0%"');
+    }
+    expect(html).not.toContain('style="width:&lt;');
+  });
+});

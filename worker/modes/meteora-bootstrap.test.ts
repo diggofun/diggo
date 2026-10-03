@@ -36,7 +36,7 @@ function harness(remaining: bigint | null) {
 }
 
 describe("Meteora bootstrap mining reserve", () => {
-  it.each([MINING_RESERVE, 199614036597622840n, 0n, null])(
+  it.each([MINING_RESERVE, MINING_RESERVE - 1n, MINING_RESERVE - 1000000000n, 199614036597622840n, 0n, null])(
     "serves the same reserve as mine info, including zero and a newly indexed pool: %s",
     async (remaining) => {
       const env = harness(remaining);
@@ -55,6 +55,7 @@ describe("Meteora bootstrap mining reserve", () => {
       expect(tokens[0]!.reserveTotal).toBe(mine.reserveTotal);
       expect(tokens[0]!.reserveRemaining).toBe(mine.remainingReserve);
       expect(mine.miningEmission).toEqual(tokens[0]!.miningEmission);
+      expect(mine.fullyMinedProgress).toBe(Number(MINING_RESERVE - (remaining ?? MINING_RESERVE)) / Number(MINING_RESERVE));
     },
   );
 });

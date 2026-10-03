@@ -16,7 +16,7 @@
  */
 import { IconLayers, IconMine, IconTimer } from "../icons";
 import type { MineInfo, MiningAccounting } from "../../shared/types";
-import { compact, countdown, percent, tokenAmount } from "../format";
+import { compact, countdown, miningProgressPercent, percent, tokenAmount } from "../format";
 import { curveCapSpent, describeMineStatus, runwayLabel } from "../mineView";
 
 export interface MineInfoPanelProps {
@@ -85,6 +85,7 @@ export function MineInfoPanel({
    * it is the reserve the mine has spent.
    */
   const budgetProgress = hasCurveBudget ? curve.progress : mine.fullyMinedProgress;
+  const progressLabel = miningProgressPercent(budgetProgress);
   const curveDaysLeft = hasCurveBudget ? mine.curveMiningDaysRemaining : null;
   const schedule = mine.reductionSchedule ?? [];
   const scheduleMax = Math.max(1, ...schedule);
@@ -233,18 +234,18 @@ export function MineInfoPanel({
                 "Mined so far"
               )}
             </span>
-            <small>{percent(budgetProgress)}</small>
+            <small>{progressLabel}</small>
           </div>
           <div
             className="tier-progress-bar"
             role="img"
             aria-label={
               hasCurveBudget
-                ? "Curve mining " + percent(budgetProgress) + " of the launch cap mined"
-                : "Mine " + percent(budgetProgress) + " mined"
+                ? "Curve mining " + progressLabel + " of the launch cap mined"
+                : "Mine " + progressLabel + " mined"
             }
           >
-            <i style={{ width: percent(budgetProgress) }} />
+            <i style={{ width: (Number.isFinite(budgetProgress) ? Math.max(0, Math.min(1, budgetProgress)) * 100 : 0) + "%" }} />
           </div>
           {hasCurveBudget && (
             <div className="curve-mining-meta">
