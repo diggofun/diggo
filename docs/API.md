@@ -164,7 +164,7 @@ behind them.
 | GET | `/api/tokens/:slug` | One coin |
 | GET | `/api/tokens/:mint/trades?limit=` | Indexed trades for one coin |
 | GET | `/api/tokens/:mint/live` | The live market snapshot Durable Object |
-| GET | `/api/leaderboards?limit=` | Every board, each capped at `limit` |
+| GET | `/api/leaderboards?limit=` | Every board, each capped at `limit`; each entry carries `username` and `bot` (Meteora mode ranks `game_players`) |
 | GET | `/api/mines/:slug/info` | Mine information, including the vault ledger check |
 | GET | `/api/mines/:slug/report?wallet=` | One wallet's position on one coin |
 | GET | `/api/coins/:mint/discoveries` | A coin's indexed rolls |
@@ -175,7 +175,7 @@ behind them.
 | GET | `/api/discovery/budget` | The protocol-wide daily discovery budget |
 | GET | `/api/cosmetics` | The cosmetic catalogue and what the caller owns |
 | GET | `/api/notifications` | Notifications derived from indexed state |
-| GET | `/api/profile/:wallet` | Public username |
+| GET | `/api/profile/:wallet` | Public username and profile bot (`{ shape, color, accessory }` or null) |
 | GET | `/api/push/key` | The VAPID application server key |
 | GET | `/api/status` | Indexer and crank diagnostics |
 | GET | `/media/:key` | An uploaded image |
@@ -231,6 +231,7 @@ These mutate off-chain data only. Each requires a signed wallet session.
 | POST | `/api/auth/challenge` | Issue a sign-in challenge |
 | POST | `/api/auth/verify` | Exchange a signature for a session |
 | POST | `/api/profile/username` | Set the caller's username |
+| POST | `/api/profile/bot` | Save the caller's profile bot `{ bot: { shape, color, accessory } \| null }`; one accessory at most, lists in `shared/profileBot.ts` |
 | POST | `/api/tokens/register` | Attach a description and image to a coin **the indexer has already seen** |
 | POST | `/api/media` | Upload an image |
 | POST | `/api/cosmetics/equip`, `/api/cosmetics/unequip` | Equip a cosmetic (visual only) |

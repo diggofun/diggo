@@ -324,6 +324,8 @@ export interface LeaderboardEntryView {
   rank: number;
   wallet: string;
   username: string | null;
+  /** The player's profile bot, or null for the default bot of their wallet. */
+  bot: import("../../shared/profileBot").ProfileBot | null;
   metric: number;
   crewTier: string;
   crewPower: number;

@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { BOT_EYEWEAR, BOT_HATS } from "./components/Bot";
-import { BOT_ACCESSORIES, accessoryOf, defaultBot, oneAccessory, parseBotLook, withAccessory } from "./preferences";
+import { BOT_EYEWEAR, BOT_HATS, BOT_SHAPES } from "./components/Bot";
+import { BOT_SHAPE_NAMES } from "../shared/profileBot";
+import { BOT_ACCESSORIES, accessoryOf, defaultBot, lookOf, oneAccessory, profileBotOf, withAccessory } from "./preferences";
 
 describe("profile bot preferences", () => {
+  it("draws every shape the Worker accepts, and no other", () => {
+    expect(Object.keys(BOT_SHAPES)).toEqual([...BOT_SHAPE_NAMES]);
+  });
+
   it("offers every hat and every eyewear in the single accessory slot", () => {
     expect(BOT_ACCESSORIES).toHaveLength(1 + (BOT_HATS.length - 1) + (BOT_EYEWEAR.length - 1));
     expect(new Set(BOT_ACCESSORIES).size).toBe(BOT_ACCESSORIES.length);
@@ -17,21 +22,17 @@ describe("profile bot preferences", () => {
     for (const accessory of BOT_ACCESSORIES) expect(accessoryOf(withAccessory(base, accessory))).toBe(accessory);
   });
 
+  it("round-trips a look through the stored form", () => {
+    for (const accessory of BOT_ACCESSORIES) {
+      const look = withAccessory({ shape: "ghost", color: "#3b82f6", hat: "none", eyewear: "none" }, accessory);
+      expect(lookOf(profileBotOf(look))).toEqual(look);
+    }
+  });
+
   it("trims the default look to one accessory", () => {
     for (let i = 0; i < 200; i += 1) {
       const look = defaultBot(`wallet-${i}`);
       expect(look.hat === "none" || look.eyewear === "none").toBe(true);
     }
-  });
-
-  it("rejects stored looks it does not know", () => {
-    expect(parseBotLook(null)).toBeNull();
-    expect(parseBotLook("{")).toBeNull();
-    expect(parseBotLook(JSON.stringify({ shape: "dragon", color: "#ff6a00" }))).toBeNull();
-    expect(parseBotLook(JSON.stringify({ shape: "circle", color: "red" }))).toBeNull();
-    expect(parseBotLook(JSON.stringify({ shape: "star", color: "#3b82f6", hat: "crown", eyewear: "shades" }))).toEqual({
-      shape: "star", color: "#3b82f6", hat: "crown", eyewear: "none",
-    });
-    expect(parseBotLook(JSON.stringify({ shape: "star", color: "#3b82f6", hat: "wizard" }))).toMatchObject({ hat: "none" });
   });
 });

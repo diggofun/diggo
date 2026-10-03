@@ -32,13 +32,13 @@ import {
   refreshPlayer,
 } from "./indexing";
 import { recordJobRun } from "./indexStore";
-import { leaderboards } from "./leaderboard";
+import { gameLeaderboards, leaderboards } from "./leaderboard";
 import { chainReachable, mineInfo, mineReport } from "./mine";
 import { getNotifications, markNotificationsRead, runSocialCron } from "./notifications";
 import { getSolUsd } from "./oracle";
 import { playerProfile } from "./player";
 import { portfolioForWallet } from "./portfolio";
-import { publicProfile, setUsername } from "./profile";
+import { publicProfile, setProfileBot, setUsername } from "./profile";
 import {
   deletePushSubscription,
   pushPublicKey,
@@ -107,6 +107,9 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
       if (request.method === "GET" && meteoraPortfolioMatch) return meteoraPortfolio(env, meteoraPortfolioMatch[1]!);
       const meteoraMineMatch = pathname.match(/^\/api\/mines\/([^/]+)\/info$/);
       if (request.method === "GET" && meteoraMineMatch) return meteoraMineInfo(env, meteoraMineMatch[1]!, url.searchParams.get("wallet"));
+      if (request.method === "GET" && pathname === "/api/leaderboards") {
+        return gameLeaderboards(request, env, Number.parseInt(url.searchParams.get("limit") ?? "", 10) || 25);
+      }
     }
     if (request.method === "GET" && pathname === "/api/config") {
       const chain = resolveChainConfig(env, {
@@ -208,6 +211,7 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
     if (request.method === "POST" && pathname === "/api/profile/username") {
       return setUsername(request, env);
     }
+    if (request.method === "POST" && pathname === "/api/profile/bot") return setProfileBot(request, env);
     if (request.method === "POST" && pathname === "/api/media") return uploadMedia(request, env);
     if (request.method === "POST" && pathname === "/api/tokens/register") {
       return registerLaunchedToken(request, env);

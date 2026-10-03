@@ -135,8 +135,8 @@ describe("leaderboards", () => {
     expect(power?.entries.map((entry) => entry.wallet)).toEqual([WALLET_PAID, WALLET_FREE]);
     // Exactly the ranked fields, and no bond flag among them.
     expect(power?.entries.map((entry) => Object.keys(entry).sort())).toEqual([
-      ["crewPower", "crewTier", "metric", "rank", "username", "wallet"],
-      ["crewPower", "crewTier", "metric", "rank", "username", "wallet"],
+      ["bot", "crewPower", "crewTier", "metric", "rank", "username", "wallet"],
+      ["bot", "crewPower", "crewTier", "metric", "rank", "username", "wallet"],
     ]);
   });
 });

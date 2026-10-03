@@ -156,6 +156,8 @@ export default function App() {
   const [activateError, setActivateError] = useState("");
   const [launchOpen, setLaunchOpen] = useState(false);
   const [session, setSession] = useState<string | null>(null);
+  /** The wallet the Worker confirmed as an admin (ADMIN_WALLETS), or null. Only shows the link. */
+  const [adminWallet, setAdminWallet] = useState<string | null>(null);
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [game, setGame] = useState<GameState | null>(null);
@@ -276,6 +278,21 @@ export default function App() {
   // Remember the referrer before anything can navigate away, and take the code out of the visible
   // URL so an in-app link cannot drop it. Runs once, ahead of the session probe below.
   const [landingReferral] = useState(() => captureLandingReferral());
+
+  // The admin link is shown only to a wallet the Worker names as an admin. Every admin route checks
+  // again on the server, so this decides visibility, never access.
+  useEffect(() => {
+    if (!session) return;
+    let current = true;
+    void getWalletSession()
+      .then((answer) => {
+        if (current && answer?.admin === true && answer.wallet === session) setAdminWallet(answer.wallet);
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [session]);
 
   useEffect(() => {
     let current = true;
@@ -920,6 +937,7 @@ export default function App() {
         page={page}
         session={session}
         signedIn={signedIn}
+        isAdmin={signedIn && session !== null && adminWallet === session}
         summary={summary}
         game={config.chainMode === "meteora" ? game : null}
         solBalance={solBalance}
@@ -1167,7 +1185,7 @@ export default function App() {
             </section>
           )}
           {page === "referrals" && <ReferralsScreen signedIn={signedIn} />}
-          {page === "settings" && <SettingsScreen seed={session ?? connected?.address ?? "guest"} />}
+          {page === "settings" && <SettingsScreen wallet={signedIn ? session : null} />}
           {page === "admin" && (
             <AdminScreen
               signedIn={signedIn}

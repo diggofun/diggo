@@ -12,6 +12,7 @@
  * both slip past a cooldown they should share.
  */
 import { DIGGO_CONFIG } from "../shared/config";
+import { parseProfileBot, type ProfileBot } from "../shared/profileBot";
 import {
   USERNAME_MESSAGES,
   USERNAME_RULES,
@@ -70,6 +71,14 @@ export async function usernameFor(env: RuntimeEnv, wallet: string): Promise<stri
   return row?.username ?? null;
 }
 
+/** The saved profile bot, or null when the player kept the default one for their wallet. */
+export async function profileBotFor(env: RuntimeEnv, wallet: string): Promise<ProfileBot | null> {
+  const row = await env.DB.prepare("SELECT shape, color, accessory FROM profile_bots WHERE wallet = ?1")
+    .bind(wallet)
+    .first<{ shape: string; color: string; accessory: string }>();
+  return row ? parseProfileBot(row) : null;
+}
+
 async function loadUsernameRow(env: RuntimeEnv, wallet: string): Promise<UsernameRow | null> {
   return env.DB.prepare("SELECT username, username_normalized, updated_at FROM usernames WHERE wallet = ?1")
     .bind(wallet)
@@ -104,7 +113,7 @@ function gateResponse(gate: GateResult): Response {
 }
 
 /**
- * GET /api/profile/:wallet -> { wallet, username | null }.
+ * GET /api/profile/:wallet -> { wallet, username | null, bot | null }.
  *
  * Public on purpose: the leaderboard and the header both show the name, so it is not a secret. The
  * response is never cached, because a player who just renamed would otherwise keep seeing the old
@@ -112,7 +121,8 @@ function gateResponse(gate: GateResult): Response {
  */
 export async function publicProfile(_request: Request, env: RuntimeEnv, wallet: string): Promise<Response> {
   if (!isBase58Address(wallet)) return apiError("Invalid Solana wallet");
-  return json({ wallet, username: await usernameFor(env, wallet) }, { headers: { "cache-control": "no-store" } });
+  const [username, bot] = await Promise.all([usernameFor(env, wallet), profileBotFor(env, wallet).catch(() => null)]);
+  return json({ wallet, username, bot }, { headers: { "cache-control": "no-store" } });
 }
 
 /**
@@ -187,4 +197,38 @@ export async function setUsername(request: Request, env: RuntimeEnv): Promise<Re
     ts: now,
   });
   return json({ username: stored, changed: true }, { headers: { "cache-control": "no-store" } });
+}
+
+/** Per-IP budget for saving a profile bot. Picking a look takes a few clicks, so it is roomier. */
+const PROFILE_BOT_RATE_LIMIT = 30;
+
+/**
+ * POST /api/profile/bot { bot: { shape, color, accessory } | null } -> 200 { bot | null }
+ *
+ * Saves the signed-in wallet's profile bot; null forgets it, so the default bot for the wallet
+ * shows again. 400 for a look outside the shared lists (including a second accessory), 401 without
+ * a signed session and 429 past the rate limit. No cooldown: unlike a name, a look claims nothing.
+ */
+export async function setProfileBot(request: Request, env: RuntimeEnv): Promise<Response> {
+  const wallet = await sessionWallet(request, env);
+  if (!wallet) return apiError("Wallet authentication required", 401);
+  if (!(await checkRateLimit(request, env, "profile-bot", PROFILE_BOT_RATE_LIMIT))) {
+    return apiError("Too many requests", 429);
+  }
+  const body = await readJson<{ bot?: unknown }>(request);
+  const noStore = { headers: { "cache-control": "no-store" } };
+  if (body.bot === null) {
+    await env.DB.prepare("DELETE FROM profile_bots WHERE wallet = ?1").bind(wallet).run();
+    return json({ bot: null }, noStore);
+  }
+  const bot = parseProfileBot(body.bot);
+  if (!bot) return json({ code: "INVALID_BOT", message: "Pick a shape, a colour and at most one accessory." }, { status: 400 });
+  await env.DB.prepare(
+    "INSERT INTO profile_bots (wallet, shape, color, accessory, updated_at) VALUES (?1, ?2, ?3, ?4, ?5) " +
+      "ON CONFLICT(wallet) DO UPDATE SET shape = excluded.shape, color = excluded.color, " +
+      "accessory = excluded.accessory, updated_at = excluded.updated_at",
+  )
+    .bind(wallet, bot.shape, bot.color, bot.accessory, Math.floor(Date.now() / 1_000))
+    .run();
+  return json({ bot }, noStore);
 }

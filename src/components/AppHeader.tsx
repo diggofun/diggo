@@ -111,6 +111,8 @@ interface AppHeaderProps {
   page: PageId;
   session: string | null;
   signedIn: boolean;
+  /** True only for a wallet the Worker lists in ADMIN_WALLETS; hides the Admin link otherwise. */
+  isAdmin?: boolean;
   summary: PortfolioSummary | null;
   game: GameState | null;
   solBalance: number | null;
@@ -118,7 +120,7 @@ interface AppHeaderProps {
   onAuthenticated(wallet: string): void;
 }
 
-export function AppHeader({ page, session, signedIn, summary, game, solBalance, onLaunch, onAuthenticated }: AppHeaderProps) {
+export function AppHeader({ page, session, signedIn, isAdmin = false, summary, game, solBalance, onLaunch, onAuthenticated }: AppHeaderProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   /*
    * SOL/USD for the balance chip. Fetched here rather than lifted into App because it is purely a
@@ -216,7 +218,7 @@ export function AppHeader({ page, session, signedIn, summary, game, solBalance, 
         </nav>
 
         <div className="sidebar-shortcuts">
-          {signedIn && (
+          {isAdmin && (
             <NavLink item={{ page: "admin", href: "/admin", label: "Admin", icon: IconAdmin }} active={page === "admin"} className="sidebar-link" onNavigate={() => setSidebarOpen(false)} />
           )}
           <a
@@ -225,7 +227,7 @@ export function AppHeader({ page, session, signedIn, summary, game, solBalance, 
             aria-current={page === "profile" ? "page" : undefined}
             onClick={() => setSidebarOpen(false)}
           >
-            {signedIn && session ? <ProfileBot seed={session} size={32} /> : <IconWallet size={22} />}
+            {signedIn && session ? <ProfileBot wallet={session} size={32} /> : <IconWallet size={22} />}
             <span>{signedIn && session ? shortAddress(session) : "Connect wallet"}</span>
           </a>
         </div>
@@ -285,8 +287,8 @@ function NavLink({
 }
 
 /** The player's own bot: the look picked in settings, or the default for their wallet. */
-function ProfileBot({ seed, size, className }: { seed: string; size: number; className?: string }) {
-  const { look } = useProfileBot(seed);
+function ProfileBot({ wallet, size, className }: { wallet: string; size: number; className?: string }) {
+  const { look } = useProfileBot(wallet);
   return <Bot {...look} size={size} still className={className} />;
 }
 
@@ -386,7 +388,7 @@ function WalletControl({ session, onAuthenticated }: { session: string | null; o
               connection dot. A connected-but-unsigned wallet keeps the dot, because there the dot
               is the "not signed in yet" signal the player acts on. */}
           {isAuthenticated ? (
-            <ProfileBot seed={connected.address} size={26} className="wallet-button-icon" />
+            <ProfileBot wallet={connected.address} size={26} className="wallet-button-icon" />
           ) : (
             <i className="wallet-dot" aria-hidden="true" />
           )}

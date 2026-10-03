@@ -29,6 +29,7 @@ import { fingerprintRequest, recordActivityRow } from "./signals";
 import { METRIC, metric } from "./telemetry";
 import { gateAction, type GateResult } from "./risk";
 import { captureAttribution } from "./referrals";
+import { isAdminWallet } from "./admin";
 
 export interface ChallengeRecord {
   wallet: string;
@@ -399,6 +400,6 @@ export async function verifyWallet(request: Request, env: RuntimeEnv): Promise<R
 export async function walletSession(request: Request, env: RuntimeEnv): Promise<Response> {
   const wallet = await sessionWallet(request, env);
   return wallet
-    ? json({ wallet }, { headers: { "cache-control": "no-store" } })
+    ? json({ wallet, admin: isAdminWallet(env, wallet) }, { headers: { "cache-control": "no-store" } })
     : apiError("Wallet authentication required", 401);
 }

@@ -24,7 +24,6 @@ import type {
   CosmeticsView,
   DiscoveryOpportunity,
   DiscoveryRecord,
-  Leaderboards,
   MineInfo,
   MiningAccounting,
   MiningReport,
@@ -42,6 +41,7 @@ import type { Candle, CandleInterval } from "../shared/candles";
 import { normalizeMineInfo, normalizeTokenSummaries, normalizeTokenSummary } from "./tokenSummary";
 import { officialMintFromEnv } from "../shared/officialMint";
 import type { AdminDashboardPayload } from "../shared/adminDashboard";
+import type { ProfileBot } from "../shared/profileBot";
 
 /** An HTTP failure carrying the Worker's status and machine-readable code. */
 export class ApiError extends Error {
@@ -353,10 +353,10 @@ export async function captureReferral(code: string): Promise<{ code: string; cap
   return postJson("/api/referrals/capture", { code });
 }
 
-export async function getWalletSession(): Promise<{ wallet: string } | null> {
+export async function getWalletSession(): Promise<{ wallet: string; admin?: boolean } | null> {
   const response = await request("/api/auth/session");
   if (response.status === 401) return null;
-  return parseResponse<{ wallet: string }>(response);
+  return parseResponse<{ wallet: string; admin?: boolean }>(response);
 }
 
 export async function uploadTokenImage(file: File): Promise<string> {
@@ -445,6 +445,8 @@ export interface PublicProfile {
   wallet: string;
   /** The chosen display name, or null when the player never set one. */
   username: string | null;
+  /** The saved profile bot, or null when the player kept the default one. */
+  bot?: ProfileBot | null;
 }
 
 export async function getProfile(wallet: string): Promise<PublicProfile> {
@@ -453,6 +455,11 @@ export async function getProfile(wallet: string): Promise<PublicProfile> {
 
 export async function setUsername(username: string): Promise<{ username: string }> {
   return postJson<{ username: string }>("/api/profile/username", { username });
+}
+
+/** Saves the signed-in wallet's profile bot; null goes back to the default bot. */
+export async function setProfileBot(bot: ProfileBot | null): Promise<{ bot: ProfileBot | null }> {
+  return postJson<{ bot: ProfileBot | null }>("/api/profile/bot", { bot });
 }
 
 /* Reward claims: real token rewards, kept strictly apart from ORE progression (spec 53, 57) */
@@ -619,31 +626,23 @@ export async function verifyChallenge(input: {
 
 /* Leaderboards, achievements, cosmetics, notifications (spec 34, 68, 75) */
 
-export interface RankedEntry {
+export interface LeaderboardEntry {
   rank: number;
   wallet: string;
   /** Public username when the player set one; the screen falls back to the shortened wallet. */
-  username?: string | null;
-  power: number;
-  crewTier: number;
-  crewTotalLevel: number;
-  streak: number;
-  longestStreak: number;
-  activeDays: number;
-  achievementCount: number;
-  seasonalPoints: number;
-  oreBalance: number;
-  activeMint: string | null;
+  username: string | null;
+  /** The player's profile bot; null draws the default bot for the wallet. */
+  bot?: ProfileBot | null;
+  metric: number;
+  crewTier: string;
+  crewPower: number;
 }
 
-/** The legacy keys plus the spec-68 progression categories the Worker now returns. */
-export interface LeaderboardsView extends Leaderboards {
-  crew?: RankedEntry[];
-  streak?: RankedEntry[];
-  achievements?: RankedEntry[];
-  seasonal?: RankedEntry[];
-  season?: { id: string; name: string; endsAt: number };
-  policy?: { realValuePrizes: boolean; rewardsTokenAmounts: boolean; requiresAdditionalAntiSybilProtectionForRealValuePrizes: boolean };
+/** GET /api/leaderboards (worker/leaderboard.ts): every board the Worker ranks. */
+export interface LeaderboardsView {
+  boards: { key: string; label: string; entries: LeaderboardEntry[] }[];
+  season: { id: string; name: string; endsAt: number } | null;
+  computedAt: number;
 }
 
 export async function getLeaderboards(): Promise<LeaderboardsView> {

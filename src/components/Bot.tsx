@@ -12,6 +12,9 @@
  */
 import { useState, type CSSProperties, type ReactNode } from "react";
 import "./bot.css";
+import { BOT_COLORS, BOT_EYEWEAR, BOT_HATS, BOT_SHAPE_NAMES, type BotEyewear, type BotHat, type BotShape } from "../../shared/profileBot";
+
+export { BOT_COLORS, BOT_EYEWEAR, BOT_HATS, BOT_SHAPE_NAMES, type BotEyewear, type BotHat, type BotShape };
 
 interface ShapeDef {
   /** Outline in a 100x100 box. */
@@ -39,22 +42,8 @@ export const BOT_SHAPES = {
   bean: { d: "M30 14c14-6 22 8 34 6c16-3 30 8 30 28c0 26-20 44-46 44C24 92 8 76 8 54C8 34 16 20 30 14z", eyes: [58, 38], head: [72, 18] },
   octagon: { d: "M32 8h36l24 24v36L68 92H32L8 68V32z", eyes: [56, 34], head: [52, 8] },
   bell: { d: "M50 8c24 0 38 20 38 44c0 10 4 18 8 22c2 3 0 6-3 6H7c-3 0-5-3-3-6c4-4 8-12 8-22C12 28 26 8 50 8z", eyes: [56, 40], head: [52, 8] },
-} as const satisfies Record<string, ShapeDef>;
+} as const satisfies Record<BotShape, ShapeDef>;
 
-export type BotShape = keyof typeof BOT_SHAPES;
-
-export const BOT_SHAPE_NAMES = Object.keys(BOT_SHAPES) as BotShape[];
-
-/** LowBot's eight creature colours first, then eight more from its avatar palette and Tailwind. */
-export const BOT_COLORS = [
-  "#ff6a00", "#3b82f6", "#a855f7", "#10b981", "#f43f5e", "#eab308", "#06b6d4", "#ec4899",
-  "#84cc16", "#6366f1", "#14b8a6", "#ef2b3c", "#38bdf8", "#d946ef", "#8d6e4f", "#ffffff",
-] as const;
-
-export const BOT_HATS = ["none", "hardhat", "cap", "beanie", "crown", "party", "bow", "tophat"] as const;
-export type BotHat = (typeof BOT_HATS)[number];
-export const BOT_EYEWEAR = ["none", "glasses", "shades", "goggles"] as const;
-export type BotEyewear = (typeof BOT_EYEWEAR)[number];
 
 /** Wardrobe rotation for line-ups: plenty of bare heads, so the outfits stay a treat. */
 const HAT_ROTATION: readonly BotHat[] = ["none", "cap", "hardhat", "beanie", "none", "crown", "party", "bow", "tophat"];

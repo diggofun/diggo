@@ -1,24 +1,18 @@
 /**
- * Device preferences: the colour theme and the player's own bot. Both live in localStorage only;
- * they change how this browser draws the site, never anything on chain or on the Worker.
+ * Preferences: the colour theme (this device, localStorage) and the player's profile bot (saved
+ * on the Worker next to the username, so it follows the wallet and shows on the leaderboards).
  */
 import { useSyncExternalStore } from "react";
-import {
-  BOT_COLORS,
-  BOT_EYEWEAR,
-  BOT_HATS,
-  BOT_SHAPE_NAMES,
-  botFor,
-  type BotEyewear,
-  type BotHat,
-  type BotLook,
-  type BotShape,
-} from "./components/Bot";
+import { botFor, type BotEyewear, type BotHat, type BotLook } from "./components/Bot";
+import { BOT_ACCESSORIES, type BotAccessory, type BotColor, type ProfileBot } from "../shared/profileBot";
+import { setProfileBot } from "./api";
+import { rememberProfileBot, useProfileBotOf } from "./username";
+
+export { BOT_ACCESSORIES, type BotAccessory };
 
 export type ThemeMode = "dark" | "light";
 
 const THEME_KEY = "diggo:theme";
-const BOT_KEY = "diggo:profile-bot";
 const CHANGE_EVENT = "diggo:preferences";
 
 const THEME_COLORS: Record<ThemeMode, string> = { dark: "#141414", light: "#f4f4f5" };
@@ -71,18 +65,6 @@ export function useTheme(): ThemeMode {
   return useSyncExternalStore(subscribe, loadTheme, () => "dark");
 }
 
-/**
- * The single accessory slot: a hat or a piece of eyewear, never both. "none" is the bare head.
- * Values are prefixed so a hat and eyewear can share one list.
- */
-export type BotAccessory = "none" | `hat:${Exclude<BotHat, "none">}` | `eyewear:${Exclude<BotEyewear, "none">}`;
-
-export const BOT_ACCESSORIES: readonly BotAccessory[] = [
-  "none",
-  ...BOT_HATS.filter((hat): hat is Exclude<BotHat, "none"> => hat !== "none").map((hat) => `hat:${hat}` as const),
-  ...BOT_EYEWEAR.filter((eyewear): eyewear is Exclude<BotEyewear, "none"> => eyewear !== "none").map((eyewear) => `eyewear:${eyewear}` as const),
-];
-
 export function accessoryOf(look: Pick<BotLook, "hat" | "eyewear">): BotAccessory {
   if (look.hat !== "none") return `hat:${look.hat}` as BotAccessory;
   if (look.eyewear !== "none") return `eyewear:${look.eyewear}` as BotAccessory;
@@ -100,23 +82,14 @@ export function oneAccessory(look: BotLook): BotLook {
   return withAccessory(look, accessoryOf(look));
 }
 
-/** Parses a stored look; anything unknown or malformed yields null, so the default bot shows. */
-export function parseBotLook(raw: string | null): BotLook | null {
-  if (!raw) return null;
-  try {
-    const value = JSON.parse(raw) as Partial<Record<keyof BotLook, unknown>>;
-    if (!BOT_SHAPE_NAMES.includes(value.shape as BotShape)) return null;
-    if (!(BOT_COLORS as readonly string[]).includes(value.color as string)) return null;
-    const hat = BOT_HATS.includes(value.hat as BotHat) ? (value.hat as BotHat) : "none";
-    const eyewear = BOT_EYEWEAR.includes(value.eyewear as BotEyewear) ? (value.eyewear as BotEyewear) : "none";
-    return oneAccessory({ shape: value.shape as BotShape, color: value.color as string, hat, eyewear });
-  } catch {
-    return null;
-  }
+/** The look a stored profile bot draws. */
+export function lookOf(bot: ProfileBot): BotLook {
+  return withAccessory({ shape: bot.shape, color: bot.color, hat: "none", eyewear: "none" }, bot.accessory);
 }
 
-function storedBot(): string | null {
-  return read(BOT_KEY);
+/** The profile bot a look stores. */
+export function profileBotOf(look: BotLook): ProfileBot {
+  return { shape: look.shape, color: look.color as BotColor, accessory: accessoryOf(look) };
 }
 
 /** The look a seed draws by default, already trimmed to one accessory. */
@@ -124,13 +97,27 @@ export function defaultBot(seed: string): BotLook {
   return oneAccessory(botFor(seed));
 }
 
-export function saveProfileBot(look: BotLook | null): void {
-  write(BOT_KEY, look ? JSON.stringify(oneAccessory(look)) : null);
+/**
+ * A player's bot: their saved look, or the stable default for their wallet. Pass null for nobody
+ * (a guest), which draws the default guest bot and asks the server for nothing.
+ */
+export function useProfileBot(wallet: string | null): { look: BotLook; custom: boolean; known: boolean } {
+  const { bot, known } = useProfileBotOf(wallet);
+  return bot ? { look: lookOf(bot), custom: true, known } : { look: defaultBot(wallet ?? "guest"), custom: false, known };
 }
 
-/** The player's bot: their saved look, or the stable default for their wallet. */
-export function useProfileBot(seed: string): { look: BotLook; custom: boolean } {
-  const raw = useSyncExternalStore(subscribe, storedBot, () => null);
-  const saved = parseBotLook(raw);
-  return saved ? { look: saved, custom: true } : { look: defaultBot(seed), custom: false };
+/**
+ * Saves the signed-in player's bot (null: back to the default). The store updates first, so every
+ * bot on the page changes at once; a refused save puts the previous one back and rethrows.
+ */
+export async function saveProfileBot(wallet: string, look: BotLook | null, previous: ProfileBot | null): Promise<void> {
+  const next = look ? profileBotOf(look) : null;
+  rememberProfileBot(wallet, next);
+  try {
+    const saved = await setProfileBot(next);
+    rememberProfileBot(wallet, saved.bot);
+  } catch (error) {
+    rememberProfileBot(wallet, previous);
+    throw error;
+  }
 }

@@ -10,10 +10,12 @@
 import { useEffect, useState } from "react";
 import { IconLeaderboards } from "../icons";
 import type { TokenSummary } from "../../shared/types";
-import { getLeaderboards, type LeaderboardsView, type RankedEntry } from "../api";
-import { compact } from "../format";
+import { getLeaderboards, type LeaderboardEntry, type LeaderboardsView } from "../api";
+import { compact, oreAmount } from "../format";
 import { describeMineStatus } from "../mineView";
+import { lookOf, defaultBot } from "../preferences";
 import { displayName } from "../username";
+import { Bot } from "./Bot";
 import { TokenOrb } from "./TokenOrb";
 
 export interface LeaderboardsScreenProps {
@@ -21,28 +23,26 @@ export interface LeaderboardsScreenProps {
   onSelectMine(mint: string): void;
 }
 
-type Tab = "crew" | "streak" | "achievements" | "seasonal" | "mines";
-
-const TABS: { id: Tab; label: string }[] = [
-  { id: "crew", label: "Crew power" },
-  { id: "streak", label: "Streak" },
-  { id: "achievements", label: "Achievements" },
-  { id: "seasonal", label: "Season" },
-  { id: "mines", label: "Mines" },
+/** Board keys the Worker ranks, in the order the tabs show them, with a short tab label. */
+const BOARD_TABS: { key: string; label: string }[] = [
+  { key: "power", label: "Mining power" },
+  { key: "ore", label: "ORE" },
+  { key: "crew", label: "Crew" },
+  { key: "streak", label: "Streak" },
+  { key: "discovery", label: "Discoveries" },
 ];
 
-function valueFor(tab: Tab, entry: RankedEntry): string {
-  if (tab === "crew") return compact(entry.power) + " power";
-  if (tab === "streak") return entry.streak + " days";
-  if (tab === "achievements") return entry.achievementCount + " earned";
-  return entry.seasonalPoints.toLocaleString() + " pts";
+function valueFor(key: string, entry: LeaderboardEntry): string {
+  if (key === "power") return compact(entry.metric) + " power";
+  if (key === "ore") return oreAmount(entry.metric) + " ORE";
+  if (key === "crew") return entry.metric + " levels";
+  if (key === "streak") return entry.metric + (entry.metric === 1 ? " day" : " days");
+  if (key === "discovery") return (entry.metric / 1e9).toFixed(3) + " SOL";
+  return compact(entry.metric);
 }
 
-function detailFor(tab: Tab, entry: RankedEntry): string {
-  if (tab === "crew") return "tier " + entry.crewTier + ", " + entry.crewTotalLevel + " levels";
-  if (tab === "streak") return "longest " + entry.longestStreak + ", " + entry.activeDays + " active days";
-  if (tab === "achievements") return entry.activeDays + " active days";
-  return entry.achievementCount + " achievements";
+function detailFor(entry: LeaderboardEntry): string {
+  return entry.crewTier.charAt(0) + entry.crewTier.slice(1).toLowerCase() + " crew";
 }
 
 function mineSymbol(symbol: string): string {
@@ -51,7 +51,7 @@ function mineSymbol(symbol: string): string {
 
 export function LeaderboardsScreen({ tokens, onSelectMine }: LeaderboardsScreenProps) {
   const [data, setData] = useState<LeaderboardsView | null>(null);
-  const [tab, setTab] = useState<Tab>("crew");
+  const [tab, setTab] = useState<string>("power");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -63,8 +63,12 @@ export function LeaderboardsScreen({ tokens, onSelectMine }: LeaderboardsScreenP
       .catch(() => setError("Leaderboards are unavailable right now."));
   }, []);
 
-  const entries: RankedEntry[] = data && tab !== "mines" ? data[tab] ?? [] : [];
-  const mines = data?.mines ?? tokens;
+  const tabs = [
+    ...BOARD_TABS.filter((entry) => data?.boards.some((board) => board.key === entry.key)),
+    { key: "mines", label: "Mines" },
+  ];
+  const entries = data?.boards.find((board) => board.key === tab)?.entries ?? [];
+  const mines = tokens;
   const rows = tab === "mines" ? mines.length : entries.length;
 
   return (
@@ -81,8 +85,8 @@ export function LeaderboardsScreen({ tokens, onSelectMine }: LeaderboardsScreenP
           </h2>
         </div>
         <div className="filter-tabs">
-          {TABS.map((entry) => (
-            <button key={entry.id} className={tab === entry.id ? "active" : ""} onClick={() => setTab(entry.id)}>
+          {tabs.map((entry) => (
+            <button key={entry.key} className={tab === entry.key ? "active" : ""} onClick={() => setTab(entry.key)}>
               {entry.label}
             </button>
           ))}
@@ -121,9 +125,12 @@ export function LeaderboardsScreen({ tokens, onSelectMine }: LeaderboardsScreenP
           entries.map((entry) => (
             <div className="leaderboard-row" key={tab + "-" + entry.wallet}>
               <b>{entry.rank}</b>
-              <span>{displayName(entry.wallet, entry.username)}</span>
+              <span className="leaderboard-name">
+                <Bot {...(entry.bot ? lookOf(entry.bot) : defaultBot(entry.wallet))} size={34} still />
+                {displayName(entry.wallet, entry.username)}
+              </span>
               <strong>{valueFor(tab, entry)}</strong>
-              <em>{detailFor(tab, entry)}</em>
+              <em>{detailFor(entry)}</em>
             </div>
           ))}
 

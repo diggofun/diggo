@@ -341,7 +341,7 @@ main { padding-bottom: 24px; }
 .leaderboard-row { min-height: 60px; padding: 0 18px; border-radius: 18px; background: var(--card); font: 500 14px/1.2 var(--font-sans); }
 .leaderboard-head { min-height: 36px; background: transparent; color: var(--muted-2); font: 500 13px/1 var(--font-sans); }
 .leaderboard-row > b { color: var(--muted); font-weight: 650; }
-.leaderboard-name { font-weight: 650; }
+.leaderboard-name { display: flex; align-items: center; gap: 10px; min-width: 0; font-weight: 650; overflow-wrap: anywhere; }
 .leaderboard-empty { padding: 32px; border-radius: 22px; background: var(--card); color: var(--muted); font: 500 14px/1.4 var(--font-sans); }
 
 /* Modals */
@@ -412,7 +412,10 @@ main { padding-bottom: 24px; }
   .tab-bar a.active, .tab-bar a[aria-current="page"] { background: var(--card-active); color: var(--fg); }
   .tab-bar a:active { transform: scale(.96); }
   body { padding-bottom: calc(var(--tabbar-h) + 20px + env(safe-area-inset-bottom)); }
-  .app-sidebar { bottom: calc(var(--tabbar-h) + 20px + env(safe-area-inset-bottom)); }
+  /* The open drawer covers the tab bar instead of ending above it: the tab bar's height grows with
+     its labels, so a fixed gap left the last links (the profile row) underneath it. */
+  .app-sidebar { bottom: 0; z-index: 92; padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
+  .sidebar-backdrop { z-index: 91; }
   .hero h1, .page-home .hero h1 { font-size: clamp(40px, 11vw, 52px); }
   .hero-lead { font-size: 17px; }
   .hero-actions .btn { flex: 1 1 auto; }
@@ -588,3 +591,6 @@ details > summary { cursor: pointer; }
 :root[data-theme="light"] .tab-bar { background: rgba(255, 255, 255, .94); }
 :root[data-theme="light"] .swap-chart-empty, :root[data-theme="light"] .candle-empty { background: rgba(255, 255, 255, .9); }
 .bot-editor-preview { padding-top: 12px; }
+.bot-editor-fields { margin: 0; padding: 0; min-width: 0; display: grid; gap: 14px; border: 0; }
+.bot-editor-fields:disabled { opacity: .5; }
+.bot-editor-fields:disabled button { cursor: not-allowed; }

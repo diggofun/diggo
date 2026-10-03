@@ -14,6 +14,7 @@
  */
 import { useEffect, useSyncExternalStore } from "react";
 import { getProfile, getWalletSession } from "./api";
+import type { ProfileBot } from "../shared/profileBot";
 import { shortAddress } from "./format";
 
 /** A minimal external store: a value, its readers, and a change notification. */
@@ -36,6 +37,8 @@ function createStore<T>(initial: T) {
 }
 
 const usernames = createStore<ReadonlyMap<string, string | null>>(new Map());
+/** Profile bots ride on the same profile answer: null means "the default bot for this wallet". */
+const profileBots = createStore<ReadonlyMap<string, ProfileBot | null>>(new Map());
 const pendingWallets = createStore<ReadonlySet<string>>(new Set());
 const session = createStore<{ resolved: boolean; wallet: string | null }>({ resolved: false, wallet: null });
 
@@ -46,12 +49,20 @@ export function rememberUsername(wallet: string, username: string | null): void 
   usernames.set(next);
 }
 
+/** Writes a saved (or forgotten) profile bot into the store. */
+export function rememberProfileBot(wallet: string, bot: ProfileBot | null): void {
+  const next = new Map(profileBots.get());
+  next.set(wallet, bot);
+  profileBots.set(next);
+}
+
 async function load(wallet: string): Promise<void> {
-  if (usernames.get().has(wallet) || pendingWallets.get().has(wallet)) return;
+  if ((usernames.get().has(wallet) && profileBots.get().has(wallet)) || pendingWallets.get().has(wallet)) return;
   pendingWallets.set(new Set(pendingWallets.get()).add(wallet));
   try {
     const profile = await getProfile(wallet);
     rememberUsername(wallet, profile.username);
+    rememberProfileBot(wallet, profile.bot ?? null);
   } catch {
     // Left unanswered on purpose: the reader shows the shortened wallet and may ask again.
   } finally {
@@ -107,4 +118,21 @@ export function useViewerUsername(): UsernameState {
     void resolveSession();
   }, []);
   return useUsername(current.wallet);
+}
+
+export interface ProfileBotState {
+  /** The saved bot, or null while unknown or when the player kept the default. */
+  readonly bot: ProfileBot | null;
+  /** True once the server has answered for this wallet. */
+  readonly known: boolean;
+}
+
+/** A wallet's saved profile bot, loaded with its username from GET /api/profile/:wallet. */
+export function useProfileBotOf(wallet: string | null): ProfileBotState {
+  const byWallet = useSyncExternalStore(profileBots.subscribe, profileBots.get, profileBots.get);
+  useEffect(() => {
+    if (wallet !== null) void load(wallet);
+  }, [wallet]);
+  if (wallet === null) return { bot: null, known: false };
+  return { bot: byWallet.get(wallet) ?? null, known: byWallet.has(wallet) };
 }

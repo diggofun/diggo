@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { BOT_COLORS, BOT_SHAPE_NAMES, Bot, type BotLook } from "./Bot";
+import { profileBotOf } from "../preferences";
 import {
   BOT_ACCESSORIES,
   accessoryOf,
@@ -35,18 +37,29 @@ function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-/** Settings: the colour theme and the player's own bot. Both stay on this device. */
-export function SettingsScreen({ seed }: { seed: string }) {
+/**
+ * Settings: the colour theme (kept on this device) and the player's profile bot (saved with the
+ * wallet, like the username, so it shows next to their name on the leaderboards).
+ */
+export function SettingsScreen({ wallet }: { wallet: string | null }) {
   const theme = useTheme();
-  const { look, custom } = useProfileBot(seed);
+  const { look, custom } = useProfileBot(wallet);
   const accessory = accessoryOf(look);
-  const update = (next: BotLook) => saveProfileBot(next);
+  const [message, setMessage] = useState("");
+  const save = (next: BotLook | null) => {
+    if (!wallet) return;
+    setMessage("");
+    void saveProfileBot(wallet, next, custom ? profileBotOf(look) : null).catch((error: unknown) =>
+      setMessage(error instanceof Error ? error.message : "Your bot could not be saved. Try again."),
+    );
+  };
+  const update = (next: BotLook) => save(next);
 
   return (
     <section className="page-shell settings-screen">
       <header className="screen-head">
         <h1>Settings</h1>
-        <p>Saved on this device.</p>
+        <p>Pick a theme and dress your bot.</p>
       </header>
 
       <article className="settings-card">
@@ -72,12 +85,21 @@ export function SettingsScreen({ seed }: { seed: string }) {
           <Bot {...look} size={140} mood="idle" />
           <div>
             <h2>Your bot</h2>
-            <p>It stands for you in the header and on your profile.</p>
-            <button type="button" className="btn btn-ghost btn-sm" disabled={!custom} onClick={() => saveProfileBot(null)}>
-              Reset
-            </button>
+            <p>
+              {wallet
+                ? "It stands next to your name on the leaderboards, in the header and on your profile."
+                : "Connect and sign in with your wallet to pick your bot. It is saved with your wallet, like your username."}
+            </p>
+            {wallet && (
+              <button type="button" className="btn btn-ghost btn-sm" disabled={!custom} onClick={() => save(null)}>
+                Reset
+              </button>
+            )}
+            {message && <p className="form-message" role="alert">{message}</p>}
           </div>
         </div>
+
+        <fieldset className="bot-editor-fields" disabled={!wallet}>
 
         <h3 id="bot-shape">Shape</h3>
         <div className="bot-picker" role="radiogroup" aria-labelledby="bot-shape">
@@ -139,6 +161,7 @@ export function SettingsScreen({ seed }: { seed: string }) {
             );
           })}
         </div>
+        </fieldset>
       </article>
     </section>
   );

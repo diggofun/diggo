@@ -298,7 +298,7 @@ export function MeteoraPortfolioScreen({ game, portfolio, tokens }: { game: Game
   const reserve = threshold > 0 && quoteReserve > 0 ? Math.max(0, Math.min(1, quoteReserve / threshold)) : 0;
   const graduated = mine?.coin.graduated ?? portfolio?.graduated ?? false;
   const wallet = game?.wallet ?? "";
-  const { look: profileBot } = useProfileBot(wallet || "guest");
+  const { look: profileBot } = useProfileBot(wallet || null);
   return (
     <section className="screen page-shell" id="portfolio">
       <header className="screen-head profile-head">
