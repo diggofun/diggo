@@ -29,13 +29,13 @@ export interface LegalDocument {
 
 export const OPERATOR_PLACEHOLDER =
   "[OPERATING COMPANY LEGAL NAME], [REGISTERED ADDRESS], [COUNTRY], company number [NUMBER]";
-export const LEGAL_CONTACT = "[legal@example.com - replace with a monitored address]";
-export const PRIVACY_CONTACT = "[privacy@example.com - replace with a monitored address]";
+export const LEGAL_CONTACT = "contact@jurekdev.pl";
+export const PRIVACY_CONTACT = "contact@jurekdev.pl";
 export const GOVERNING_LAW_PLACEHOLDER = "[GOVERNING LAW AND COURTS - to be confirmed]";
 
-export const UPDATED = "26 September 2026";
+export const UPDATED = "3 October 2026";
 /** The Terms were revised on their own date; the other documents were not revised with them. */
-export const TERMS_UPDATED = "23 September 2026";
+export const TERMS_UPDATED = "3 October 2026";
 /** The operator fills this in with the jurisdictions its counsel has cleared or excluded. */
 export const RESTRICTED_JURISDICTIONS_PLACEHOLDER = "[RESTRICTED JURISDICTIONS LIST]";
 

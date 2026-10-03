@@ -83,9 +83,17 @@ describe("terms of service compliance clauses", () => {
     expect(text).toContain("promises value, yield, return, price, liquidity or a buyer");
   });
 
-  it("dates the Terms separately from the documents that were not revised", () => {
+  it("dates the Terms and the Privacy Policy from their latest revision", () => {
     expect(terms.updated).toBe(TERMS_UPDATED);
-    expect(LEGAL_DOCUMENTS.privacy.updated).toBe("26 September 2026");
+    expect(LEGAL_DOCUMENTS.privacy.updated).toBe("3 October 2026");
+  });
+
+  it("names a real contact address in the Terms and the Privacy Policy", () => {
+    for (const doc of [terms, LEGAL_DOCUMENTS.privacy]) {
+      const body = doc.sections.flatMap((section) => section.paragraphs).join(" ");
+      expect(body).toContain("contact@jurekdev.pl");
+      expect(body).not.toContain("example.com");
+    }
   });
 });
 
