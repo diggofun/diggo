@@ -210,7 +210,7 @@ const PRIVACY: LegalDocument = {
   title: "Privacy Policy",
   summary:
     "What Diggo.fun processes, why, for how long, and how to exercise your rights under the GDPR.",
-  updated: UPDATED,
+  updated: "4 October 2026",
   sections: [
     {
       heading: "1. Who is responsible for your data",
@@ -259,6 +259,7 @@ const PRIVACY: LegalDocument = {
       heading: "4. Analytics",
       paragraphs: [
         "Analytics is off by default and only starts after you choose 'Allow analytics' in the consent banner. Until then, nothing is loaded from our analytics provider and nothing is sent to it.",
+        "After that choice, campaign attribution records the traffic source, medium, campaign and creative labels from tagged links, and the referring domain. We remember your first source and latest non-direct source in your browser for up to 30 days, so navigating between pages or returning directly does not lose the campaign. These labels are attached to analytics events to compare how visitors from TikTok, X, YouTube and other sources use Diggo. Withdrawing analytics consent removes this attribution record.",
         "When it is on, we use PostHog (EU cloud, reached through diggo.fun itself): page views, the product events we explicitly record (for example launching a mine, a swap or a reward claim) and session recordings, which section 5 describes in full. Once you sign in with a wallet, these are linked to that wallet's public address. We never send private keys, signatures, transaction contents or email addresses. Autocapture and surveys are off. You can withdraw consent at any time from the Cookie & Storage Notice or the banner, and analytics and recording stop straight away.",
       ],
     },
@@ -432,7 +433,7 @@ const COOKIES: LegalDocument = {
   id: "cookies",
   title: "Cookie & Storage Notice",
   summary: "Every cookie, local storage item and service worker the site uses, and why.",
-  updated: UPDATED,
+  updated: "4 October 2026",
   sections: [
     {
       heading: "1. What this notice covers",
@@ -461,6 +462,7 @@ const COOKIES: LegalDocument = {
         "ph_<project key>_posthog (first-party cookie and localStorage, cookie 365 days) - PostHog's anonymous identifier and the current analytics session.",
         "ph_<project key>_window_id and ph_<project key>_primary_window_exists (sessionStorage, cleared when the tab closes) - tell tabs apart so a session recording plays back in the right order.",
         "__ph_opt_in_out_<project key> (localStorage) - whether PostHog capture is switched on or off in this browser.",
+        "diggo.acquisition.v1 (localStorage, up to 30 days) - the first and latest non-direct campaign source, medium, campaign/creative labels and referring domain. It is created only after analytics consent and removed when that consent is withdrawn.",
         "Push alerts (service worker and subscription) - if you switch alerts on, your browser registers the push-only service worker at /sw.js and creates a subscription with your browser vendor's push service. Switching alerts off removes the registration and the server-side record.",
         "Telegram alerts - if you link a chat with a one-time code. Send /stop to the bot, or turn it off in the app, to unlink.",
       ],

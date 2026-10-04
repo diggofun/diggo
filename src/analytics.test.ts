@@ -245,4 +245,21 @@ describe("analytics privacy boundary", () => {
     expect(reason).not.toContain(WALLET);
     expect(reason.length).toBeLessThanOrEqual(80);
   });
+
+  it("attributes automatic pageviews and product conversions, and removes storage on withdrawal", async () => {
+    const { consent, startAnalytics, track } = await load();
+    const { captureAcquisition, ACQUISITION_STORAGE_KEY } = await import("./acquisition");
+    captureAcquisition("https://diggo.fun/?utm_source=tiktok&utm_medium=paid_social&utm_campaign=launch&utm_content=video_1");
+    expect(window.localStorage.getItem(ACQUISITION_STORAGE_KEY)).toBeNull();
+    consent.recordConsent("all");
+    await startAnalytics(CONFIG);
+    const config = posthog.init.mock.calls[0]![1];
+    const pageview = config.before_send({ event: "$pageview", properties: { $pathname: "/" } });
+    expect(pageview.properties).toMatchObject({ traffic_source: "tiktok", traffic_paid: true, traffic_campaign: "launch", traffic_content: "video_1" });
+    track("crew_activated", { tier: 1 });
+    expect(posthog.capture).toHaveBeenCalledWith("crew_activated", expect.objectContaining({ traffic_source: "tiktok", first_traffic_source: "tiktok", tier: 1 }));
+    consent.recordConsent("essential");
+    expect(window.localStorage.getItem(ACQUISITION_STORAGE_KEY)).toBeNull();
+    expect(config.before_send({ event: "$pageview", properties: {} })).toBeNull();
+  });
 });

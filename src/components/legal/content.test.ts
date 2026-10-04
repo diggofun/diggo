@@ -85,7 +85,7 @@ describe("terms of service compliance clauses", () => {
 
   it("dates the Terms and the Privacy Policy from their latest revision", () => {
     expect(terms.updated).toBe(TERMS_UPDATED);
-    expect(LEGAL_DOCUMENTS.privacy.updated).toBe("3 October 2026");
+    expect(LEGAL_DOCUMENTS.privacy.updated).toBe("4 October 2026");
   });
 
   it("names a real contact address in the Terms and the Privacy Policy", () => {

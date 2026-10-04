@@ -9,8 +9,10 @@ import { solanaClient } from "./solana";
 import { PendingTransactionProvider } from "./onchain";
 import { useDiggoWallet } from "./wallet";
 import { startTheme } from "./preferences";
+import { captureAcquisition } from "./acquisition";
 
 startTheme();
+captureAcquisition();
 
 function PendingScope() {
   const wallet = useDiggoWallet();

@@ -1,4 +1,5 @@
 import { hasAnalyticsConsent, subscribeConsent } from "./components/legal/consent";
+import { acquisitionProperties, clearAcquisition } from "./acquisition";
 
 /**
  * Product analytics (PostHog EU), gated on consent.
@@ -169,6 +170,7 @@ function enableCapture(instance: AnalyticsClient): void {
 /** Stops capture and replay now, and silences every event track() would have sent. */
 function disableCapture(): void {
   analyticsReady = false;
+  clearAcquisition();
   // An event that was waiting for a client must not suddenly be sent after a later opt-in: the
   // action happened before the new consent decision and would otherwise be reported out of time.
   pendingEvents.length = 0;
@@ -182,11 +184,12 @@ function disableCapture(): void {
 
 function dispatch(event: string, properties: Properties): void {
   if (!hasAnalyticsConsent()) return;
+  const attributed = { ...properties, ...acquisitionProperties() };
   if (analyticsReady && client) {
-    client.capture(event, properties);
+    client.capture(event, attributed);
     return;
   }
-  if (pendingConfig && pendingEvents.length < 20) pendingEvents.push({ event, properties });
+  if (pendingConfig && pendingEvents.length < 20) pendingEvents.push({ event, properties: attributed });
 }
 
 /**
@@ -242,6 +245,12 @@ export function startAnalytics(config: AnalyticsConfig): Promise<void> {
       disable_surveys: true,
       disable_session_recording: false,
       session_recording: { maskAllInputs: true },
+      before_send: (event) => {
+        if (!event || !hasAnalyticsConsent()) return null;
+        // Includes automatic pageviews, so the first funnel step has the same source as actions.
+        event.properties = { ...event.properties, ...acquisitionProperties() };
+        return event;
+      },
     });
     const instance = posthog as unknown as AnalyticsClient;
     client = instance;
