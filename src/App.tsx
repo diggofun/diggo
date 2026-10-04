@@ -1016,11 +1016,11 @@ export default function App() {
                 <section className="crew-screen page-shell">
                   <EmptyState
                     icon={<IconHammer size={26} />}
-                    title={connected ? "Loading your crew…" : "Your crew is waiting for a boss."}
+                    title={connected ? "Loading your crew…" : "Upgrade your mining."}
                   >
                     {connected
                       ? "Fetching crew levels, ORE and Mining Power."
-                      : "Connect and sign in with your wallet to hire Miners, add Drills and grow your operation."}
+                      : "Connect and sign in with your wallet to upgrade your miners and increase your mining power."}
                   </EmptyState>
                 </section>
               )}

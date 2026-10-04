@@ -58,8 +58,8 @@ export function MeteoraMineDashboard({ game, mine, now, connected, activating, e
   return (
     <section className="screen page-shell" id="mine">
       <header className="screen-head">
-        <h1>Your crew</h1>
-        <p>{active ? "On shift. Your bots are digging." : "Resting. Start a shift to send them in."}</p>
+        <h1>Earn memecoins</h1>
+        <p>{active ? "You're earning while your bots mine. Upgrade your miners to increase your mining power." : "Start a 24-hour mining shift and earn Solana memecoins while you're away."}</p>
       </header>
       <div className="mine-panel">
         <MineScene tier={tier?.tier ?? 1} active={active} />

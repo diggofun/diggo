@@ -8,7 +8,7 @@ import { getReferrals } from "../api";
 import { IconCopy } from "../icons";
 import { referralLink } from "../referralLink";
 
-const POST_TEXT = "My bot crew is digging memecoins for free on @Diggo_Fun. Get your own crew:";
+const POST_TEXT = "I'm earning Solana memecoins for free on @Diggo_Fun. Start earning:";
 
 export function ShareCard({ code, location }: { code: string; location: string }) {
   const [note, setNote] = useState("");
@@ -30,7 +30,7 @@ export function ShareCard({ code, location }: { code: string; location: string }
   return (
     <article className="share-card">
       <div className="share-card-head">
-        <h2>Show off your crew</h2>
+        <h2>Share your rewards</h2>
         <p>Your link shows this card wherever you post it, and anyone who joins through it earns you ORE.</p>
       </div>
       {imageOk && (

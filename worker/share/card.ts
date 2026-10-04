@@ -123,8 +123,8 @@ export function cardSvg(stats: ShareStats, wordmark: string): string {
     );
   } else {
     parts.push(
-      `<text x="560" y="314" font-size="34" font-weight="500" fill="${MUTED}">My bot crew is</text>`,
-      `<text x="560" y="392" font-size="60" font-weight="900" fill="${FG}">digging <tspan fill="url(#g)">memecoins</tspan></text>`,
+      `<text x="560" y="314" font-size="34" font-weight="500" fill="${MUTED}">Start earning</text>`,
+      `<text x="560" y="392" font-size="60" font-weight="900" fill="${FG}">Solana <tspan fill="url(#g)">memecoins</tspan></text>`,
     );
   }
   const pills = [
@@ -141,7 +141,7 @@ export function cardSvg(stats: ShareStats, wordmark: string): string {
     px += p.width + 12;
   }
   parts.push(
-    `<text x="560" y="560" font-size="34" font-weight="900" fill="${FG}">Get memecoins <tspan fill="url(#g)">for free.</tspan></text>`,
+    `<text x="560" y="560" font-size="34" font-weight="900" fill="${FG}">Earn memecoins <tspan fill="url(#g)">for free.</tspan></text>`,
     `<text x="1144" y="560" font-size="28" font-weight="500" fill="${MUTED}" text-anchor="end">diggo.fun</text>`,
     "</svg>",
   );
@@ -151,7 +151,7 @@ export function cardSvg(stats: ShareStats, wordmark: string): string {
 /** Title and description for the link preview. */
 export function previewText(stats: ShareStats): { title: string; description: string } {
   const name = displayNameOf(stats);
-  const title = `${name} is digging memecoins on Diggo.fun`;
-  const dug = stats.top ? `My bots dug ${formatAmount(stats.top.amount)} $${stats.top.symbol}` : "My bot crew is digging memecoins";
-  return { title, description: `${dug} for free. Get your own crew and earn memecoins for free.` };
+  const title = `${name} is earning memecoins on Diggo.fun`;
+  const dug = stats.top ? `My bots dug ${formatAmount(stats.top.amount)} $${stats.top.symbol}` : "Earn real Solana memecoins";
+  return { title, description: `${dug} for free. Start mining while you're away and upgrade your mining power.` };
 }

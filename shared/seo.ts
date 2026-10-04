@@ -14,10 +14,10 @@ function page(path: string, title: string, description: string, heading: string,
 
 /** Public landing pages are indexable; wallet-specific screens stay out of search results. */
 export const SEO_PAGES: readonly PageSeo[] = [
-  page("/", "Launch & Earn Memecoins for Free", "Launch a memecoin on Solana, or send your bots to mine one for free. What they dig up, you claim to your own wallet.", "Launch & earn memecoins for free."),
-  page("/explore", "Explore Solana Memecoins", "Explore memecoins launched on Diggo.fun. Compare coins, view their mining reserves and discover Solana tokens to trade or mine with your bot crew.", "Explore coins"),
+  page("/", "Earn Real Solana Memecoins for Free", "Earn real Solana memecoins while you're away. Start mining for free, upgrade your mining power and claim eligible rewards to your wallet.", "Earn real memecoins for free."),
+  page("/explore", "Explore Solana Memecoins", "Explore memecoins launched on Diggo.fun. Compare coins, view their mining reserves and discover Solana tokens to trade or earn by mining.", "Explore coins"),
   page("/create", "Launch a Solana Memecoin", "Create a fixed-supply Solana memecoin on Diggo.fun with Meteora trading and a mining game. Configure your coin and review launch costs before signing.", "Launch a coin"),
-  page("/mine", "Mine Memecoins for Free", "Send your bots to mine Solana memecoins for free on Diggo.fun. Start a shift, collect discoveries, upgrade with ORE and claim token rewards to your wallet.", "Mine memecoins for free"),
+  page("/mine", "Earn Solana Memecoins", "Earn Solana memecoins while you're away. Activate a 24-hour mining shift, upgrade your mining power with ORE and claim eligible rewards to your wallet.", "Earn memecoins"),
   page("/diggo", "Trade Diggo.fun ($DIGGO) on Solana", "View the official Diggo.fun ($DIGGO) coin on Solana. Check its market, explore the Meteora trading pool and swap from your own wallet.", "Trade Diggo.fun ($DIGGO)"),
   page("/leaderboards", "Mining Leaderboards", "Explore the Diggo.fun mining leaderboards and compare player progress in the Solana memecoin mining game.", "Mining leaderboards"),
   page("/terms", "Terms of Service", "Read the Diggo.fun Terms of Service, including eligibility, wallet responsibilities and the rules for using the Solana memecoin launchpad and mining game.", "Terms of Service"),

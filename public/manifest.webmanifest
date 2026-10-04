@@ -1,7 +1,7 @@
 {
   "name": "Diggo.fun",
   "short_name": "Diggo",
-  "description": "Build and manage your memecoin mining crew.",
+  "description": "Earn real Solana memecoins. Start mining, upgrade your mining power and claim eligible rewards to your wallet.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

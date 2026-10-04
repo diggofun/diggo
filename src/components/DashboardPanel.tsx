@@ -79,9 +79,9 @@ export function DashboardPanel({
       <div className="dashboard-head">
         <div>
           <h1 id="dashboard-title">
-            Your crew is
+            {active ? "Earning memecoins" : "Earn memecoins"}
             <br />
-            <span>{active ? "on shift." : "waiting."}</span>
+            <span>while you&apos;re away.</span>
           </h1>
         </div>
       </div>
@@ -286,10 +286,10 @@ function GuestDashboard() {
     <div className="dash-guest">
       <div className="dash-guest-copy">
         <span className="badge badge-idle"><i /> Not connected</span>
-        <h2>Wake up your crew.</h2>
+        <h2>Start earning memecoins.</h2>
         <p>
-          Connect a wallet to see your crew tier, ORE storage, streak and the block rewards your crew
-          has settled. Mining Power is earned only by playing.
+          Connect your wallet and start a mining shift. Upgrade your miners to increase your mining
+          power, then claim eligible memecoin rewards to your wallet.
         </p>
         <button className="btn btn-primary btn-lg" onClick={() => requestWalletMenu("dashboard")}>
           <IconWallet size={18} /> Connect wallet

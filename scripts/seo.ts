@@ -87,9 +87,9 @@ function initialContent(seo: PageSeo): string {
     content = `<h1>${escapeHtml(doc.title)}</h1><p>${escapeHtml(doc.summary)}</p><p>Version: ${escapeHtml(doc.updated)}</p>`;
     content += doc.sections.map((section) => `<section><h2>${escapeHtml(section.heading)}</h2>${section.paragraphs.map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`).join("")}${section.bullets ? `<ul>${section.bullets.map((bullet) => `<li>${escapeHtml(bullet)}</li>`).join("")}</ul>` : ""}</section>`).join("");
   } else if (seo.path === "/") {
-    content += `<section><h2>A launchpad with a mine under it.</h2><p>Creators launch fixed-supply coins on Solana with Meteora trading. Players activate a 24-hour shift and run a bot mining crew.</p></section>
-      <section><h2>Mine, discover and claim</h2><p>Bots dig while you are away. Collect discoveries and claim eligible SPL memecoins to the wallet that signs the transaction. Coins on their bonding curve pay out once they graduate.</p></section>
-      <section><h2>Upgrade your crew</h2><p>ORE and Mining Power are game progress only. They cannot be bought, sold or withdrawn. Memecoins can go to zero.</p></section>`;
+    content += `<section><h2>Memecoins to earn. Coins to launch.</h2><p>Start a 24-hour shift and collect memecoins while your bots work. Upgrade with ORE to increase your mining power. Creators can launch fixed-supply coins on Solana with Meteora trading.</p></section>
+      <section><h2>How to earn memecoins.</h2><p>Connect your wallet, activate a mining shift and earn while you are away. View your discoveries and claim eligible SPL memecoins to your wallet. Coins on their bonding curve pay out once they graduate.</p></section>
+      <section><h2>Upgrade your mining power</h2><p>ORE and Mining Power are game progress only. They cannot be bought, sold or withdrawn. Memecoins can go to zero.</p></section>`;
   }
   const links = SEO_PAGES.filter((entry) => entry.index).map((entry) => `<a href="${entry.path}">${escapeHtml(entry.path === "/" ? "Home" : entry.heading)}</a>`).join(" · ");
   return `<div id="root"><main class="page-shell legal-page">${content}<nav aria-label="Diggo pages">${links}</nav><noscript><p>Enable JavaScript to connect a wallet, play or trade.</p></noscript></main></div>`;

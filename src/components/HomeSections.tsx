@@ -52,17 +52,17 @@ export function HomeHero({
     <section className="hero page-shell" id="home">
       <div className="hero-copy">
         <h1>
-          Launch &amp; earn
+          Earn real
           <br />
           memecoins <span className="grad-word">for free.</span>
         </h1>
         <p className="hero-lead">
-          Launch a coin on Solana, or send your bots to mine one for free. What they dig up, you
-          claim to your own wallet.
+          Mine Solana memecoins while you&apos;re away. Upgrade your mining power to earn more,
+          then claim eligible rewards to your wallet.
         </p>
         <div className="hero-actions">
           <a className="btn btn-primary btn-lg" href="/mine">
-            Start mining <IconMine size={20} />
+            Start earning <IconMine size={20} />
           </a>
           <button type="button" className="btn btn-dark btn-lg" onClick={onLaunch}>
             Launch a coin <IconPlus size={20} />
@@ -91,7 +91,7 @@ export function HomeHero({
             </div>
             {!connected ? (
               <button className="btn btn-primary" type="button" onClick={() => requestWalletMenu("home_hero")}>
-                <IconWallet size={18} /> Connect to mine
+                <IconWallet size={18} /> Connect to earn
               </button>
             ) : isMiningActive ? (
               <button className="btn btn-dark" type="button" onClick={onManageCrew}>Manage crew</button>
@@ -335,8 +335,8 @@ export function AboutDiggo() {
   return (
     <section className="about-section page-shell" id="about" aria-labelledby="about-title">
       <div className="about-intro">
-        <h2 id="about-title">A launchpad with a mine under it.</h2>
-        <p>Every coin launched here becomes a mine. Your bots dig it daily. What they find is yours.</p>
+        <h2 id="about-title">Memecoins to earn. Coins to launch.</h2>
+        <p>Start a 24-hour shift and collect memecoins while your bots work. Upgrade with ORE to increase your mining power.</p>
       </div>
       <div className="bot-parade" aria-hidden="true">
         {Array.from({ length: 7 }, (_, index) => (
@@ -345,16 +345,16 @@ export function AboutDiggo() {
       </div>
       <div className="about-audiences">
         <article className="audience-card">
-          <h3>Players</h3>
+          <h3>Earn memecoins</h3>
           <ul>
             <li><IconCheck size={16} /> Open a 24-hour shift</li>
-            <li><IconCheck size={16} /> Bots dig while you&apos;re away</li>
-            <li><IconCheck size={16} /> Claim up to 12 coins at once</li>
+            <li><IconCheck size={16} /> Earn while you&apos;re away</li>
+            <li><IconCheck size={16} /> Claim eligible coins to your wallet</li>
           </ul>
-          <a className="btn btn-primary" href="/mine">Start mining</a>
+          <a className="btn btn-primary" href="/mine">Start earning</a>
         </article>
         <article className="audience-card">
-          <h3>Creators</h3>
+          <h3>Launch a coin</h3>
           <ul>
             <li><IconCheck size={16} /> Launch a fixed-supply coin</li>
             <li><IconCheck size={16} /> Trade on Meteora from block one</li>
@@ -372,17 +372,17 @@ export function AboutDiggo() {
 }
 
 const MINING_DAY: { icon: ReactNode; title: string; body: string }[] = [
-  { icon: <IconWallet />, title: "Activate", body: "Open a 24-hour shift from your wallet." },
-  { icon: <IconCrew />, title: "Bots dig", body: "They mine a random coin, even with the tab closed." },
-  { icon: <IconDiscoveries />, title: "Discover", body: "Mined coins pile up in Discoveries." },
-  { icon: <IconClaim />, title: "Claim all", body: "Up to 12 coins in one signed transaction." },
+  { icon: <IconWallet />, title: "Start mining", body: "Connect your wallet and activate a 24-hour shift." },
+  { icon: <IconCrew />, title: "Earn while away", body: "Bots mine Solana memecoins, even with the tab closed." },
+  { icon: <IconDiscoveries />, title: "Collect rewards", body: "View your earned coins in Discoveries." },
+  { icon: <IconClaim />, title: "Claim to wallet", body: "Claim up to 12 eligible coins in one signed transaction." },
 ];
 
 export function HowItWorks() {
   return (
     <section className="how-section page-shell" id="how">
       <div className="section-heading">
-        <h2>About a minute a day.</h2>
+        <h2>How to earn memecoins.</h2>
       </div>
       <ol className="steps">
         {MINING_DAY.map((step, index) => (
@@ -432,9 +432,9 @@ export function FinalCta({ onLaunch }: { onLaunch(): void }) {
           <Bot shape="cloud" color="#06b6d4" eyewear="goggles" size={54} mood="busy" phase={0.7} />
           <Bot shape="triangle" color="#ec4899" hat="party" size={48} mood="attention" phase={1.1} />
         </span>
-        <h2>Mine or launch.</h2>
+        <h2>Start earning memecoins.</h2>
         <div className="hero-actions">
-          <a className="btn btn-primary btn-lg" href="/mine">Start mining <IconMine size={20} /></a>
+          <a className="btn btn-primary btn-lg" href="/mine">Start earning <IconMine size={20} /></a>
           <button className="btn btn-dark btn-lg" onClick={onLaunch}>Launch a coin <IconArrowUpRight size={20} /></button>
         </div>
       </div>

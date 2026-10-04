@@ -29,7 +29,7 @@ describe("share card", () => {
 
   it("shows the haul only when there is one", () => {
     const empty = cardSvg(base, "data:,");
-    expect(empty).toContain("digging");
+    expect(empty).toContain("Start earning");
     expect(empty).toContain("Free to play");
     expect(empty).not.toContain("My bots dug");
     const rich = cardSvg({ ...base, username: "jurek", top: { symbol: "DIGGO", amount: 111560.78 }, longestStreak: 12, oreEarned: 4320, coins: 5 }, "data:,");
@@ -50,9 +50,9 @@ describe("share card", () => {
 
   it("writes the preview text from the same numbers", () => {
     expect(previewText({ ...base, username: "jurek", top: { symbol: "MOLE", amount: 2500 } })).toEqual({
-      title: "jurek is digging memecoins on Diggo.fun",
-      description: "My bots dug 2,500 $MOLE for free. Get your own crew and earn memecoins for free.",
+      title: "jurek is earning memecoins on Diggo.fun",
+      description: "My bots dug 2,500 $MOLE for free. Start mining while you're away and upgrade your mining power.",
     });
-    expect(previewText(base).description).toContain("My bot crew is digging memecoins");
+    expect(previewText(base).description).toContain("Earn real Solana memecoins");
   });
 });
