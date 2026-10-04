@@ -79,6 +79,28 @@ ready. More detail is in [CUSTODY.md](./CUSTODY.md) and [METEORA_OPS.md](./METEO
 
 ## Feature and operator configuration
 
+### Cloudflare data and media storage
+
+Diggo uses Cloudflare for its application data and media. No separate database or storage
+project with an inactivity pause is required:
+
+| Responsibility | Service | Configuration |
+| --- | --- | --- |
+| Game state, player profiles, mining ledgers and indexed markets | Cloudflare D1 | `DB` binding; apply `migrations/` with Wrangler |
+| Wallet challenges, sessions, rate limits and cached responses | Cloudflare Workers KV | `TOKEN_CACHE` binding |
+| Uploaded coin artwork and hosted token metadata | Cloudflare Workers KV | `media:` keys in `TOKEN_CACHE`, served through `/media/<key>` |
+| Frontend, brand assets and static public metadata | Cloudflare Workers Assets | `ASSETS` binding backed by `dist/` |
+
+Wallet sign-in verifies a Solana signature in the Worker and stores the session in KV. Media
+uploads use the same authenticated Worker; there is no external auth or storage service key to
+configure. D1 and KV do not pause a project after seven days of inactivity. Their usage limits
+still apply; see the Cloudflare D1 and Workers KV platform documentation.
+
+Production and staging have independent D1 databases and KV namespaces. Preserve the existing
+binding IDs on deployment so existing profiles, rewards, sessions and media remain available.
+
+### Optional integrations
+
 The Worker has a working configuration without every optional integration below. Set a secret only
 when the corresponding feature or operator action is enabled, and keep the matching public
 configuration in the target environment.
@@ -88,7 +110,6 @@ configuration in the target environment.
 | `ADMIN_WALLETS` | Comma-separated admin wallet addresses, added to the built-in admins in `worker/admin.ts` (`BUILT_IN_ADMIN_WALLETS`) |
 | `INDEXER_ADMIN_SECRET` | Required only for manual indexer refresh endpoints; the scheduled indexer does not depend on it |
 | `HELIUS_WEBHOOK_AUTH` | Required only when the Helius webhook delivery path is enabled and authenticated |
-| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Supabase integration configuration; the service-role key is a secret and is required only when that integration is used |
 | `DIGGO_DEVICE_SALT` | Strongly recommended for production signal hashing; absent, the Worker has a constant-salt fallback rather than failing to boot |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | All three are needed to enable Web Push; without the complete set, the push channel is unavailable |
 | `TELEGRAM_BOT_TOKEN` | Enables Telegram delivery; not needed when that channel is not enabled |
@@ -106,7 +127,6 @@ Configure enabled integrations per environment, for example:
 npx wrangler secret put ADMIN_WALLETS
 npx wrangler secret put INDEXER_ADMIN_SECRET
 npx wrangler secret put HELIUS_WEBHOOK_AUTH
-npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
 npx wrangler secret put DIGGO_DEVICE_SALT
 npx wrangler secret put VAPID_PUBLIC_KEY
 npx wrangler secret put VAPID_PRIVATE_KEY

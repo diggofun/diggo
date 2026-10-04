@@ -14,7 +14,6 @@ export interface SecretBindings {
   HELIUS_WEBHOOK_AUTH?: string;
   /** Secret required for the operator-only manual indexer refresh endpoints. */
   INDEXER_ADMIN_SECRET?: string;
-  SUPABASE_SERVICE_ROLE_KEY?: string;
   /** Cluster-matched RPC URL. Mainnet deployments should set this to a keyed provider secret. */
   DIGGO_RPC_URL?: string;
   /** Comma-separated fallback RPC endpoints, tried after DIGGO_RPC_URL. */

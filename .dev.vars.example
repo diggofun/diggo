@@ -64,8 +64,6 @@ ADMIN_WALLETS=
 #TURNSTILE_ACTIONS=
 # Helius webhook authorization header, compared in constant time.
 #HELIUS_WEBHOOK_AUTH=
-# Supabase service role key, for private token-artwork uploads.
-#SUPABASE_SERVICE_ROLE_KEY=
 
 # --- Operations: alerts and error reporting (worker/telemetry.ts) ------------------------------
 # Discord/Slack-compatible incoming webhook. Unset means fired alerts stay in the structured log

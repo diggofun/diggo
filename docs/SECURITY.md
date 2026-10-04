@@ -26,7 +26,7 @@ the current production path.
 - Web push subscriptions are scoped to the signed-in wallet: the VAPID public key is readable before sign-in (a browser needs it to subscribe), but registering or deleting a subscription only ever touches devices belonging to that session's wallet. Payloads are encrypted per RFC 8291 and the Worker stores no private key material for a device.
 - D1 input is handled with bound prepared statements.
 - Queue inserts use transaction signatures for idempotency.
-- Supabase Storage is private; Worker-mediated uploads accept PNG, JPEG, and WebP only and cap payloads at 2 MB.
+- Coin artwork is stored in Cloudflare KV and served through the Worker at `/media/<key>`. Uploads require a wallet session, accept PNG, JPEG, WebP and GIF based on their file signatures, reject SVG and cap payloads at 2 MB. Sessions and challenges are also stored in KV; application and profile data live in D1.
 - Static assets set CSP, anti-framing, MIME-sniffing, referrer and permission headers.
 - Worker logs use request IDs and do not echo internal errors to clients. Alerting and error reporting are optional and off by default: fired alerts go to the structured log and D1 counters, and to `ALERT_WEBHOOK_URL` when set; unhandled errors are reported as a plain Sentry envelope over fetch when `SENTRY_DSN` is set. Neither path can block or fail a player request.
 - A settled reward is recorded only after the Worker fetches the player's own `claim_rewards` transaction and verifies it is that reward's payout (`POST /api/rewards/claim/confirm`). A signature already backing another reward is refused, and `worker/reconcile.ts` compares paid claims against chain so a mismatch halts the affected mine's mint rather than paying twice.
