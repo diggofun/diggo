@@ -1,8 +1,10 @@
+import { useState } from "react";
 import type { TokenSummary } from "../../shared/types";
 import { crewPower, crewTier, upgradeOreCost } from "../../shared/economics";
 import { CREW_BOTS, CREW_COMPONENTS, CREW_COMPONENT_LABELS, CREW_ROLES } from "../crewLabels";
 import { compact, countdown, oreAmount, shortAddress, tokenAmount } from "../format";
 import { SponsoredMines } from "./SponsoredMines";
+import { SellModal } from "./SellModal";
 import { CreatorDashboard } from "./CreatorDashboard";
 import type { GameCrewComponent, GameState, MeteoraPortfolio } from "../api";
 import { IconCheck } from "../icons";
@@ -203,10 +205,16 @@ export function MeteoraDiscoveriesScreen({ game, tokens, connected, busy, error,
   const names = new Map(tokens.map((token) => [token.mint, token]));
   const balanceMints = new Set(balances.map((balance) => balance.mint));
   const claimsWithoutBalance = claims.filter((claim) => !balanceMints.has(claim.mint));
-  const availableBalances = balances.filter((balance) => hasGraduated(tokens, balance.mint));
-  const pendingBalances = balances.filter((balance) => !hasGraduated(tokens, balance.mint));
-  const availableClaims = claimsWithoutBalance.filter((claim) => hasGraduated(tokens, claim.mint));
-  const pendingClaims = claimsWithoutBalance.filter((claim) => !hasGraduated(tokens, claim.mint));
+  // A coin added as a mine pays out without graduating; the server says so per reward.
+  const balanceReady = (balance: (typeof balances)[number]) => balance.payable === true || hasGraduated(tokens, balance.mint);
+  const claimReady = (entry: (typeof claims)[number]) => entry.sponsored === true || hasGraduated(tokens, entry.mint);
+  const availableBalances = balances.filter(balanceReady);
+  const pendingBalances = balances.filter((balance) => !balanceReady(balance));
+  const availableClaims = claimsWithoutBalance.filter(claimReady);
+  const pendingClaims = claimsWithoutBalance.filter((entry) => !claimReady(entry));
+  // Coins already paid out to the wallet, which can be sold for SOL.
+  const held = [...new Map((game?.claims ?? []).filter((entry) => entry.status === "PAID").map((entry) => [entry.mint, entry])).values()];
+  const [selling, setSelling] = useState<{ mint: string; symbol: string } | null>(null);
   const progress = claim && game ? claimProgress({ claim, activeDays: game.activeDays, validActivations: game.validActivations }) : null;
   const rewardCounts = discoveryRewardCounts(
     game?.claimAll as (GameState["claimAll"] & DiscoveryClaimCounts) | undefined,
@@ -279,6 +287,31 @@ export function MeteoraDiscoveriesScreen({ game, tokens, connected, busy, error,
             return <FindCard key={claim.id} token={token} name={claim.name ?? token?.name ?? "Mined memecoin"} symbol={claim.symbol ?? token?.symbol ?? "tokens"} amount={Number(claim.amountWhole)} note={READY_NOTE} ready />;
           })}
         </div>
+      )}
+
+      {held.length > 0 && (
+        <>
+          <div className="ledger-head">
+            <div>
+              <h2>In your wallet</h2>
+              <span>{coins(held.length)}</span>
+            </div>
+            <small>Paid out. Keep them or sell for SOL.</small>
+          </div>
+          <div className="held-list">
+            {held.map((entry) => {
+              const symbol = entry.symbol ?? names.get(entry.mint)?.symbol ?? "tokens";
+              return (
+                <div className="held-row" key={entry.mint}>
+                  <TokenOrb symbol={symbol} imageUrl={names.get(entry.mint)?.imageUrl ?? null} />
+                  <strong>${symbol}</strong>
+                  <button className="btn btn-ghost btn-sm" type="button" onClick={() => setSelling({ mint: entry.mint, symbol })}>Sell</button>
+                </div>
+              );
+            })}
+          </div>
+          {selling && <SellModal mint={selling.mint} symbol={selling.symbol} onClose={() => setSelling(null)} />}
+        </>
       )}
 
       <div className="ledger-head">

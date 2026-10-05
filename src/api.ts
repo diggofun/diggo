@@ -831,6 +831,25 @@ export async function getCreatorMines(): Promise<{ mines: CreatorMineView[] }> {
   return getJson("/api/creator/mines");
 }
 
+export interface SwapQuoteView {
+  quote: Record<string, unknown>;
+  inAmount: string;
+  decimals: number;
+  balance: string;
+  outLamports: string;
+  priceImpactPct: number;
+  feeBps: number;
+}
+
+/** A Jupiter quote for selling `amount` whole tokens (or "max") of `mint` for SOL. */
+export async function getSwapQuote(mint: string, amount: string): Promise<SwapQuoteView> {
+  return postJson("/api/swap/quote", { mint, amount });
+}
+
+export async function buildSwap(quote: Record<string, unknown>): Promise<{ transaction: string; expiresAt: number }> {
+  return postJson("/api/swap/build", { quote });
+}
+
 export async function getMineWars(): Promise<{ mines: MineWarsEntry[] }> {
   return getJson("/api/mines/wars");
 }
@@ -905,6 +924,8 @@ export interface GameClaim {
   createdAt: number;
   name?: string | null;
   symbol?: string | null;
+  /** True for a coin added as a mine: it pays out without graduating. */
+  sponsored?: boolean;
 }
 
 export interface GameState {
@@ -941,7 +962,7 @@ export interface GameState {
   };
   crew: Record<GameCrewComponent, number>;
   claims: GameClaim[];
-  balances?: Array<{ mint: string; name: string | null; symbol: string | null; claimable?: string; amount?: string; amountWhole: number | string }>;
+  balances?: Array<{ mint: string; name: string | null; symbol: string | null; claimable?: string; amount?: string; amountWhole: number | string; payable?: boolean }>;
   claimAll?: { supported: boolean; count: number; signatures: 1; maxItems: number };
 }
 

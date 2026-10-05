@@ -903,6 +903,8 @@ export async function getPlayerGameStateDetail(
       symbol: metadata?.symbol ?? null,
       claimable: entry.claimable.toString(),
       amountWhole: wholeAmount(entry.claimable, metadata),
+      // A coin added as a mine pays out without graduating; the client cannot tell from its token list.
+      payable: isPayableCoin(metadata),
       lastSettledAt: entry.lastSettledAt,
     };
   }));

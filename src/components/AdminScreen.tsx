@@ -33,6 +33,7 @@ import { shortAddress } from "../format";
 import { IconReject } from "../icons";
 import { useDiggoWallet } from "../wallet";
 import { SponsoredMinesAdmin } from "./SponsoredMinesAdmin";
+import { SwapFeeAdmin } from "./SwapFeeAdmin";
 
 /**
  * The sponsor console pulls in the on-chain client, so it is loaded only when an operator opens
@@ -540,6 +541,7 @@ export function AdminScreen({ signedIn, chainMode, programId, meteoraConfigPubke
       {chainMode === "meteora" && (
         <SponsoredMinesAdmin sign={connected ? (message) => connected.signMessage(message) : null} vault={dashboard?.vault.address ?? null} />
       )}
+      {chainMode === "meteora" && <SwapFeeAdmin />}
       <div className="section-heading">
         <div>
           <div className="eyebrow">
