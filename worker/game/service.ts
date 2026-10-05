@@ -11,6 +11,7 @@ import {
 } from "../auth";
 import { apiError, checkRateLimit, checkWalletRateLimit, isBase58Address, isBase58Signature, json, readJson } from "../http";
 import type { GameEnv, GameServices } from "./contracts";
+import { BOOST_WEIGHT } from "../../shared/boost";
 import { coinDecimals, coinReserve, gameChainMode, isPayableCoin, wholeAmount, type GameCoin, type GamePlayerState } from "./contracts";
 import { d1GameStore } from "./d1-store";
 import {
@@ -140,7 +141,10 @@ async function chooseEligibleMine(context: GameHandlerContext, now: number, curr
   if (current && await isEligibleMine(context, current, now)) return current;
   const candidates: GameCoin[] = [];
   for (const coin of await context.services.coins.listActiveMines()) {
-    if (await isEligibleMine(context, coin, now)) candidates.push(coin);
+    if (!(await isEligibleMine(context, coin, now))) continue;
+    // A paid boost makes a mine BOOST_WEIGHT times as likely to be picked.
+    const weight = coin.boostedUntil !== undefined && coin.boostedUntil > now ? BOOST_WEIGHT : 1;
+    for (let copy = 0; copy < weight; copy += 1) candidates.push(coin);
   }
   return candidates.length > 0 ? candidates[secureRandomIndex(candidates.length)]! : null;
 }

@@ -14,6 +14,7 @@
  */
 import { MINING_RESERVE, type GameCoin } from "./game/contracts";
 import { miningEndsAt } from "./game/rules";
+import { activeBoosts } from "./boostState";
 import type { MiningSchedule } from "../shared/miningSchedule";
 import { adminActor, requireAdminStepUp, stepUpPayload, writeAudit, type AdminStepUpProof } from "./admin";
 import type { RuntimeEnv } from "./env";
@@ -113,6 +114,7 @@ export async function listSponsoredMines(env: RuntimeEnv): Promise<Response> {
       ORDER BY s.status = 'ACTIVE' DESC, s.created_at DESC LIMIT 50`,
   ).bind(now).all<SponsoredMineRow & { remaining: string | null; committed: string | null; miners: number }>()
     .catch(() => null);
+  const boosts = await activeBoosts(env.DB, now);
   const mines: SponsoredMineView[] = (result?.results ?? []).map((row) => {
     const decimals = Number(row.decimals);
     return {
@@ -130,8 +132,11 @@ export async function listSponsoredMines(env: RuntimeEnv): Promise<Response> {
       remaining: whole(row.remaining ?? row.reserve, decimals),
       mined: whole(row.committed ?? "0", decimals),
       miners: Number(row.miners) || 0,
+      boostedUntil: boosts.get(row.mint) ?? null,
     };
   });
+  // Open boosted mines first; the query's order (open, newest) is kept otherwise.
+  mines.sort((a, b) => Number(b.status === "ACTIVE" && b.boostedUntil !== null) - Number(a.status === "ACTIVE" && a.boostedUntil !== null));
   return json({ mines }, { headers: { "cache-control": "public, max-age=30" } });
 }
 

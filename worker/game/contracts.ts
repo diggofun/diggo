@@ -35,6 +35,8 @@ export interface GameCoin {
   schedule?: MiningSchedule;
   /** Who funded a sponsored mine, for display. */
   sponsor?: string;
+  /** Unix seconds a paid boost lasts until, while one is running (worker/boosts.ts). */
+  boostedUntil?: number;
 }
 
 export function coinReserve(coin: Pick<GameCoin, "reserve">): bigint {

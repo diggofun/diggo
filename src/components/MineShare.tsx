@@ -6,9 +6,11 @@ import { useState } from "react";
 import { ApiError, preferMine } from "../api";
 import { track } from "../analytics";
 import { mineLink, rememberMine } from "../mineLink";
+import { BoostModal } from "./BoostModal";
 
-export function MineShare({ mint, symbol, location, canDig = false }: { mint: string; symbol: string; location: string; canDig?: boolean }) {
+export function MineShare({ mint, symbol, location, canDig = false, onBoosted }: { mint: string; symbol: string; location: string; canDig?: boolean; onBoosted?(): void }) {
   const [copied, setCopied] = useState(false);
+  const [boosting, setBoosting] = useState(false);
   const [note, setNote] = useState("");
   const link = mineLink(mint);
   const text = `Mine $${symbol} for free on Diggo.fun ⛏️`;
@@ -47,7 +49,9 @@ export function MineShare({ mint, symbol, location, canDig = false }: { mint: st
         {canDig && <button className="btn btn-primary btn-sm" type="button" onClick={() => void dig()}>Mine this</button>}
         <a className="btn btn-ghost btn-sm" href={intent} target="_blank" rel="noreferrer" onClick={() => track("mine_link_shared", { mint, location, target: "x" })}>Share on X</a>
         <button className="btn btn-ghost btn-sm" type="button" onClick={() => void copy()}>{copied ? "Copied" : "Copy link"}</button>
+        <button className="btn btn-ghost btn-sm" type="button" onClick={() => setBoosting(true)}>Boost</button>
       </div>
+      {boosting && <BoostModal mint={mint} symbol={symbol} onClose={() => setBoosting(false)} onBoosted={onBoosted} />}
       {note && <small className="mine-share-note">{note}</small>}
     </div>
   );

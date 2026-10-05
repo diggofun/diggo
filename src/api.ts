@@ -824,6 +824,16 @@ export async function registerMeteoraPool(pool: string, miningDays?: number): Pr
 }
 
 /** An unsigned transaction moving `amount` whole tokens of `mint` from the signed-in wallet into the mining vault. */
+/** An unsigned SOL payment for a boost of `mint`. */
+export async function prepareBoost(mint: string, tier: string): Promise<{ transaction: string; expiresAt: number; lamports: string }> {
+  return postJson("/api/mines/boost/prepare", { mint, tier });
+}
+
+/** Records a landed boost payment. Answers 425 while the payment is not visible yet. */
+export async function confirmBoost(signature: string, mint: string, tier: string): Promise<{ mint: string; endsAt: number }> {
+  return postJson("/api/mines/boost/confirm", { signature, mint, tier });
+}
+
 /** The platform fee on coins added as mines, in basis points (200 = 2%). */
 export async function getMineFee(): Promise<{ bps: number }> {
   return getJson("/api/mines/fee");

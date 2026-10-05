@@ -52,6 +52,9 @@ export interface MeteoraTransaction {
   logs: string[];
   preTokenBalances: { accountIndex: number; mint: string; owner: string | null; amount: string }[];
   postTokenBalances: { accountIndex: number; mint: string; owner: string | null; amount: string }[];
+  /** Lamport balances by account index, before and after. */
+  preBalances?: bigint[];
+  postBalances?: bigint[];
 }
 
 export interface MeteoraFinalizedTransactionProof {
@@ -316,6 +319,8 @@ async function readTransactionAtCommitment(
       innerInstructions?: Array<{ instructions?: unknown[] }> | null;
       preTokenBalances?: Array<{ accountIndex?: unknown; mint?: unknown; owner?: unknown; uiTokenAmount?: { amount?: unknown } }> | null;
       postTokenBalances?: Array<{ accountIndex?: unknown; mint?: unknown; owner?: unknown; uiTokenAmount?: { amount?: unknown } }> | null;
+      preBalances?: Array<number | bigint> | null;
+      postBalances?: Array<number | bigint> | null;
     } | null;
     transaction?: { signatures?: string[]; message?: { accountKeys?: Array<string | { pubkey: string }>; instructions?: unknown[] } };
   } | null;
@@ -371,6 +376,8 @@ async function readTransactionAtCommitment(
     logs: value.meta?.logMessages ?? [],
     preTokenBalances: tokenBalances(value.meta?.preTokenBalances),
     postTokenBalances: tokenBalances(value.meta?.postTokenBalances),
+    preBalances: (value.meta?.preBalances ?? []).map((lamports) => BigInt(lamports)),
+    postBalances: (value.meta?.postBalances ?? []).map((lamports) => BigInt(lamports)),
   };
 }
 

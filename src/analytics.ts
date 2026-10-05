@@ -54,6 +54,7 @@ export interface AnalyticsEvents {
   mine_link_shared: { mint: string; location: string; target: "x" };
   mine_link_copied: { mint: string; location: string };
   mine_link_applied: { mint: string; location?: string };
+  mine_boosted: { mint: string; tier: string };
   referral_signup: { ref_code: string };
   alerts_enabled: Record<string, never>;
   alerts_disabled: Record<string, never>;

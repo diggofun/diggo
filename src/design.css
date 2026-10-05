@@ -658,3 +658,12 @@ details > summary { cursor: pointer; }
 .mine-share-note { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .deposit-split { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; margin: -4px 0 0; padding: 12px 14px; border-radius: 14px; background: var(--control); font-size: 14px; }
 .deposit-split span:last-child { color: var(--muted); }
+
+/* Boosts (BoostModal.tsx). */
+.boost-modal { display: grid; gap: 14px; }
+.boost-modal h2 { margin-bottom: 0; }
+.boost-tiers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.boost-tier { display: grid; gap: 4px; padding: 14px 10px; border: 2px solid transparent; border-radius: 18px; background: var(--control); color: var(--fg); cursor: pointer; text-align: center; }
+.boost-tier span { color: var(--muted); font-size: 14px; }
+.boost-tier.active { border-color: #ff6a00; }
+.boosted-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: rgba(255, 106, 0, .16); color: #ff8a3d; font-size: 12px; font-weight: 700; }

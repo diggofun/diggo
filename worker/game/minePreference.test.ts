@@ -76,3 +76,37 @@ describe("mine links", () => {
     expect(player.activeMine).toBe(A);
   });
 });
+
+describe("boosted mines", () => {
+  it("are picked about three times as often for crews without a mine link", async () => {
+    const now = T0 + 60;
+    const boosted = { ...coin(B), boostedUntil: now + DAY };
+    let picks = 0;
+    const trials = 400;
+    for (let trial = 0; trial < trials; trial += 1) {
+      const store = new MemoryGameStore();
+      const shift = await onShift(store);
+      expect(await store.savePlayer({ ...shift, activeMine: null }, await store.playerVersion(ALICE))).toBe(true);
+      const player = await ensurePlayerMine(context(store, [coin(A), boosted], now), (await store.getPlayer(ALICE))!);
+      if (player.activeMine === B) picks += 1;
+    }
+    // Expected 75%; the bounds leave room for chance across 400 draws.
+    expect(picks / trials).toBeGreaterThan(0.65);
+    expect(picks / trials).toBeLessThan(0.85);
+  });
+
+  it("stop counting once the boost has ended", async () => {
+    const now = T0 + 60;
+    const expired = { ...coin(B), boostedUntil: now - 1 };
+    let picks = 0;
+    for (let trial = 0; trial < 400; trial += 1) {
+      const store = new MemoryGameStore();
+      const shift = await onShift(store);
+      expect(await store.savePlayer({ ...shift, activeMine: null }, await store.playerVersion(ALICE))).toBe(true);
+      const player = await ensurePlayerMine(context(store, [coin(A), expired], now), (await store.getPlayer(ALICE))!);
+      if (player.activeMine === B) picks += 1;
+    }
+    expect(picks / 400).toBeGreaterThan(0.38);
+    expect(picks / 400).toBeLessThan(0.62);
+  });
+});

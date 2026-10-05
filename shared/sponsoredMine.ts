@@ -86,4 +86,6 @@ export interface SponsoredMineView {
   remaining: number;
   mined: number;
   miners: number;
+  /** Unix seconds a paid boost lasts until, or null. */
+  boostedUntil: number | null;
 }

@@ -8,13 +8,13 @@
  */
 import { type FormEvent, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import bs58 from "bs58";
-import { ApiError, createProjectMine, getChallenge, getMineFee, prepareMineDeposit, verifyWallet, type PreparedClaimBatch, type ProjectMineDetails } from "../api";
+import { ApiError, createProjectMine, getMineFee, prepareMineDeposit, type PreparedClaimBatch, type ProjectMineDetails } from "../api";
 import { MINING_PERIOD_PRESETS } from "../../shared/miningSchedule";
 import { feeLabel, PROJECT_MINE_FEE_BPS, splitDeposit } from "../../shared/projectMineFee";
 import { IconClose } from "../icons";
 import { signPreparedClaim } from "../onchain/preparedClaim";
 import { useDiggoWallet } from "../wallet";
+import { withWalletSession } from "../walletSession";
 import { MineShare } from "./MineShare";
 import { useDialog } from "./useDialog";
 
@@ -79,23 +79,9 @@ export function AddCoinForm({ onAdded }: { onAdded(): void }) {
   const split = /^[1-9][0-9]{0,17}$/.test(form.amount) ? splitDeposit(BigInt(form.amount), feeBps) : null;
   const set = (key: keyof typeof form) => (event: { target: { value: string } }) => setForm((current) => ({ ...current, [key]: event.target.value }));
 
-  async function signIn(): Promise<void> {
-    if (!connected) throw new Error("Connect your wallet first");
-    const challenge = await getChallenge(connected.address);
-    const signature = await connected.signMessage(new TextEncoder().encode(challenge.message));
-    await verifyWallet(connected.address, challenge.nonce, bs58.encode(signature), null);
-  }
-
   /** Runs a request, signing in once if the session is missing. */
-  async function withSession<T>(action: () => Promise<T>): Promise<T> {
-    try {
-      return await action();
-    } catch (error) {
-      if (!(error instanceof ApiError) || error.status !== 401) throw error;
-      setMessage("Sign the message in your wallet to continue…");
-      await signIn();
-      return action();
-    }
+  function withSession<T>(action: () => Promise<T>): Promise<T> {
+    return withWalletSession(connected, action, () => setMessage("Sign the message in your wallet to continue…"));
   }
 
   async function finish(details: ProjectMineDetails): Promise<void> {

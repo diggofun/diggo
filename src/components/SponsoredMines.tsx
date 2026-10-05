@@ -51,6 +51,7 @@ export function SponsoredMines({ now, activeMint, viewer = null }: { now: number
                     {mine.sponsorUrl ? <a href={mine.sponsorUrl} target="_blank" rel="noopener noreferrer nofollow">{mine.sponsor}</a> : mine.sponsor}
                   </small>
                 </div>
+                {mine.boostedUntil !== null && mine.boostedUntil * 1000 > now && <span className="boosted-badge">🚀 Boosted</span>}
                 {mine.mint === activeMint && <span className="pill is-on">Your bots</span>}
               </div>
               <strong className="payout-amount">{tokenAmount(mine.remaining)} <small>left</small></strong>
@@ -61,7 +62,7 @@ export function SponsoredMines({ now, activeMint, viewer = null }: { now: number
                 <span>{compact(mine.mined)} of {compact(mine.reserve)} mined · {mine.miners} {mine.miners === 1 ? "crew" : "crews"}</span>
                 <span>{ends}</span>
               </div>
-              <MineShare mint={mine.mint} symbol={mine.symbol} location="mine_card" canDig={mine.mint !== activeMint} />
+              <MineShare mint={mine.mint} symbol={mine.symbol} location="mine_card" canDig={mine.mint !== activeMint} onBoosted={() => reload.current()} />
               {viewer && mine.sponsorWallet === viewer && (
                 <MiningPeriodEditor mint={mine.mint} endsAt={mine.endsAt} onChanged={() => reload.current()} />
               )}

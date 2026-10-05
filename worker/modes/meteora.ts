@@ -16,6 +16,7 @@ import {
   type GameHandlerContext,
   type PlayerGameState,
 } from "../game/service";
+import { activeBoosts } from "../boostState";
 import { activeSponsoredCoins, SCHEDULE_COLUMNS, SCHEDULE_JOIN, scheduleOf, sponsoredCoinByMint } from "../sponsored";
 import { gameChainMode, isPayableCoin, MINING_RESERVE, type GameCoin, type GameCoinSource, type GameEnv, type GamePlayerState, type GamePortfolioSource, type GameServices, type GameWalletSource, type MiningPayout } from "../game/contracts";
 import { wholeTokens } from "../game/store";
@@ -146,14 +147,15 @@ export function meteoraCoinSource(env: GameEnv): GameCoinSource {
   const config = () => String(env.METEORA_DBC_CONFIG || "");
   return {
     async listActiveMines() {
-      const sponsored = await activeSponsoredCoins(env.DB);
-      if (!config()) return sponsored;
+      const [sponsored, boosts] = await Promise.all([activeSponsoredCoins(env.DB), activeBoosts(env.DB)]);
+      const withBoost = (coin: GameCoin): GameCoin => (boosts.has(coin.mint) ? { ...coin, boostedUntil: boosts.get(coin.mint)! } : coin);
+      if (!config()) return sponsored.map(withBoost);
       const where = "WHERE p.config=?1 AND p.is_graduated=0 ORDER BY p.created_at DESC";
       const result = await env.DB.prepare(`SELECT ${POOL_COIN_COLUMNS} FROM meteora_pools p ${SCHEDULE_JOIN}p.base_mint ${where}`)
         .bind(config()).all<Record<string, unknown>>()
         // Until migration 0039 is applied there is no schedule table; every mine keeps its period.
         .catch(() => env.DB.prepare(`SELECT ${POOL_COLUMNS} FROM meteora_pools p ${where}`).bind(config()).all<Record<string, unknown>>());
-      return [...(result.results ?? []).map(poolRow), ...sponsored];
+      return [...(result.results ?? []).map(poolRow), ...sponsored].map(withBoost);
     },
     async getMine(mint) {
       const sponsored = await sponsoredCoinByMint(env.DB, mint);
