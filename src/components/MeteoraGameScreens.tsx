@@ -93,7 +93,7 @@ export function MeteoraMineDashboard({ game, mine, now, connected, activating, e
         <Stat label="ORE" value={oreAmount(game?.oreBalance ?? 0)} note={"Earned " + oreAmount(game?.oreEarned ?? 0)} />
         <Stat label="Active days" value={String(game?.activeDays ?? 0)} note={(game?.streakFreezes ?? 0) + " freezes"} />
       </div>
-      <SponsoredMines now={now} activeMint={game?.activeMine?.coin.mint ?? null} />
+      <SponsoredMines now={now} activeMint={game?.activeMine?.coin.mint ?? null} viewer={connected ? game?.wallet ?? null : null} />
     </section>
   );
 }

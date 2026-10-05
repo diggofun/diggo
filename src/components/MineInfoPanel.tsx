@@ -18,6 +18,7 @@ import { IconLayers, IconMine, IconTimer } from "../icons";
 import type { MineInfo, MiningAccounting } from "../../shared/types";
 import { compact, countdown, miningProgressPercent, percent, tokenAmount } from "../format";
 import { curveCapSpent, describeMineStatus, runwayLabel } from "../mineView";
+import { MiningPeriodEditor } from "./MiningPeriodEditor";
 
 export interface MineInfoPanelProps {
   mine: MineInfo | null;
@@ -25,6 +26,9 @@ export interface MineInfoPanelProps {
   now: number;
   loading: boolean;
   error: string;
+  /** The signed-in wallet; the coin's creator gets the mining period control. */
+  viewer?: string | null;
+  onPeriodChanged?: () => void;
 }
 
 function accountingNote(accounting: MiningAccounting | undefined): string {
@@ -40,6 +44,8 @@ export function MineInfoPanel({
   now,
   loading,
   error,
+  viewer = null,
+  onPeriodChanged,
 }: MineInfoPanelProps) {
   if (!mine) {
     return (
@@ -168,9 +174,13 @@ export function MineInfoPanel({
                 <small>time-based</small>
               </div>
               <p>
-                The {compact(mine.reserveTotal)} {mine.symbol} allocation is released gradually over {timeBased.durationDays.toLocaleString("en")} days.
+                The {compact(mine.reserveTotal)} {mine.symbol} allocation is released gradually
+                {mine.miningEndsAt ? " until " + new Date(mine.miningEndsAt * 1000).toLocaleDateString("en") : " over " + timeBased.durationDays.toLocaleString("en") + " days"}.
                 Your rewards depend on active mining time and your share of Mining Power.
               </p>
+              {viewer && mine.creator === viewer && (
+                <MiningPeriodEditor mint={mine.mint} endsAt={mine.miningEndsAt ?? null} onChanged={onPeriodChanged} />
+              )}
             </>
           ) : (
             <>

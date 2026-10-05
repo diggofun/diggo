@@ -13,6 +13,8 @@
  * POST /api/admin/sponsored-mines/close   { mint }
  */
 import { MINING_RESERVE, type GameCoin } from "./game/contracts";
+import { miningEndsAt } from "./game/rules";
+import type { MiningSchedule } from "../shared/miningSchedule";
 import { adminActor, requireAdminStepUp, stepUpPayload, writeAudit, type AdminStepUpProof } from "./admin";
 import type { RuntimeEnv } from "./env";
 import { apiError, isBase58Address, json, readJson } from "./http";
@@ -20,6 +22,18 @@ import { METEORA_TOKEN_PROGRAM_ID } from "./meteora/types";
 import { decodeTokenAccountAmount, decodeTokenMint, deriveAssociatedTokenAddress, readAccount } from "./meteora/rpc";
 import type { MeteoraRpcEnv } from "./meteora/types";
 import { parseSponsoredMineInput, wholeToRaw, type SponsoredMineView } from "../shared/sponsoredMine";
+
+/** The latest period change for a mine, joined as `ms`; columns are prefixed so they never collide. */
+export const SCHEDULE_COLUMNS = "ms.anchor_at AS schedule_anchor_at, ms.anchor_released AS schedule_anchor_released, ms.ends_at AS schedule_ends_at, ms.updated_at AS schedule_updated_at";
+export const SCHEDULE_JOIN = "LEFT JOIN mine_schedules ms ON ms.mint = ";
+
+export function scheduleOf(row: Record<string, unknown>): MiningSchedule | undefined {
+  const anchorAt = Number(row.schedule_anchor_at);
+  const endsAt = Number(row.schedule_ends_at);
+  const anchorReleased = String(row.schedule_anchor_released ?? "");
+  if (!Number.isSafeInteger(anchorAt) || !Number.isSafeInteger(endsAt) || endsAt <= anchorAt || !/^[0-9]+$/.test(anchorReleased)) return undefined;
+  return { anchorAt, anchorReleased, endsAt };
+}
 
 export interface SponsoredMineRow {
   mint: string;
@@ -33,16 +47,23 @@ export interface SponsoredMineRow {
   mining_seconds: number;
   status: string;
   created_at: number;
+  sponsor_wallet?: string | null;
+  schedule_anchor_at?: number | null;
+  schedule_anchor_released?: string | null;
+  schedule_ends_at?: number | null;
 }
 
-const COLUMNS = "mint, symbol, name, decimals, reserve, sponsor, sponsor_url, mining_starts_at, mining_seconds, status, created_at";
+const COLUMNS = "s.mint, s.symbol, s.name, s.decimals, s.reserve, s.sponsor, s.sponsor_url, s.mining_starts_at, s.mining_seconds, s.status, s.created_at, s.sponsor_wallet, " + SCHEDULE_COLUMNS;
+const FROM = "FROM sponsored_mines s LEFT JOIN mine_schedules ms ON ms.mint = s.mint";
 
 /**
  * The mine as the game sees it. A closed mine reports `graduated` so no crew is assigned to it and
  * nothing more accrues; `sponsored` keeps everything already earned payable.
  */
 export function sponsoredCoin(row: SponsoredMineRow): GameCoin {
+  const schedule = scheduleOf(row as unknown as Record<string, unknown>);
   return {
+    ...(schedule ? { schedule } : {}),
     mint: row.mint,
     symbol: row.symbol,
     name: row.name,
@@ -58,14 +79,14 @@ export function sponsoredCoin(row: SponsoredMineRow): GameCoin {
 }
 
 export async function activeSponsoredCoins(db: D1Database): Promise<GameCoin[]> {
-  const result = await db.prepare(`SELECT ${COLUMNS} FROM sponsored_mines WHERE status = 'ACTIVE' ORDER BY created_at DESC`)
+  const result = await db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE s.status = 'ACTIVE' ORDER BY s.created_at DESC`)
     .all<SponsoredMineRow>()
     .catch(() => null);
   return (result?.results ?? []).map(sponsoredCoin);
 }
 
 export async function sponsoredCoinByMint(db: D1Database, mint: string): Promise<GameCoin | null> {
-  const row = await db.prepare(`SELECT ${COLUMNS} FROM sponsored_mines WHERE mint = ?1`)
+  const row = await db.prepare(`SELECT ${COLUMNS} ${FROM} WHERE s.mint = ?1`)
     .bind(mint)
     .first<SponsoredMineRow>()
     .catch(() => null);
@@ -86,10 +107,9 @@ function whole(raw: string | null | undefined, decimals: number): number {
 export async function listSponsoredMines(env: RuntimeEnv): Promise<Response> {
   const now = Math.floor(Date.now() / 1_000);
   const result = await env.DB.prepare(
-    `SELECT s.mint, s.symbol, s.name, s.decimals, s.reserve, s.sponsor, s.sponsor_url, s.mining_starts_at, s.mining_seconds,
-            s.status, s.created_at, m.remaining, m.committed,
+    `SELECT ${COLUMNS}, m.remaining, m.committed,
             (SELECT COUNT(*) FROM game_players p WHERE p.active_mine = s.mint AND p.active_until > ?1) AS miners
-       FROM sponsored_mines s LEFT JOIN game_mines m ON m.mint = s.mint
+       ${FROM} LEFT JOIN game_mines m ON m.mint = s.mint
       ORDER BY s.status = 'ACTIVE' DESC, s.created_at DESC LIMIT 50`,
   ).bind(now).all<SponsoredMineRow & { remaining: string | null; committed: string | null; miners: number }>()
     .catch(() => null);
@@ -103,7 +123,8 @@ export async function listSponsoredMines(env: RuntimeEnv): Promise<Response> {
       sponsorUrl: row.sponsor_url,
       status: row.status === "ACTIVE" ? "ACTIVE" : "CLOSED",
       startsAt: Number(row.mining_starts_at),
-      endsAt: Number(row.mining_starts_at) + Number(row.mining_seconds),
+      endsAt: miningEndsAt(sponsoredCoin(row)),
+      sponsorWallet: row.sponsor_wallet ?? null,
       reserve: whole(row.reserve, decimals),
       // A mine nobody has dug yet has no ledger row: all of it remains.
       remaining: whole(row.remaining ?? row.reserve, decimals),
@@ -177,9 +198,9 @@ export async function adminRegisterSponsoredMine(request: Request, env: RuntimeE
   const seconds = input.days * 86_400;
   try {
     await env.DB.prepare(
-      "INSERT INTO sponsored_mines (mint, symbol, name, decimals, reserve, sponsor, sponsor_url, mining_starts_at, mining_seconds, status, created_by, created_at, updated_at)" +
-        " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'ACTIVE', ?10, ?8, ?8)",
-    ).bind(input.mint, input.symbol, input.name, decimals, reserve.toString(), input.sponsor, input.sponsorUrl, now, seconds, actor).run();
+      "INSERT INTO sponsored_mines (mint, symbol, name, decimals, reserve, sponsor, sponsor_url, mining_starts_at, mining_seconds, status, created_by, created_at, updated_at, sponsor_wallet)" +
+        " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'ACTIVE', ?10, ?8, ?8, ?11)",
+    ).bind(input.mint, input.symbol, input.name, decimals, reserve.toString(), input.sponsor, input.sponsorUrl, now, seconds, actor, input.sponsorWallet).run();
   } catch {
     return apiError("This mint already has a mine", 409);
   }

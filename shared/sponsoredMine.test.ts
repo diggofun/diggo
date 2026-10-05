@@ -7,7 +7,7 @@ const valid = { mint: MINT, symbol: "$pump", name: "Pump Coin", sponsor: "Pump t
 describe("parseSponsoredMineInput", () => {
   it("normalises a valid registration", () => {
     const parsed = parseSponsoredMineInput(valid);
-    expect(parsed).toEqual({ ok: true, value: { mint: MINT, symbol: "PUMP", name: "Pump Coin", sponsor: "Pump team", sponsorUrl: null, reserveWhole: "1000000", days: SPONSORED_DEFAULT_DAYS } });
+    expect(parsed).toEqual({ ok: true, value: { mint: MINT, symbol: "PUMP", name: "Pump Coin", sponsor: "Pump team", sponsorUrl: null, sponsorWallet: null, reserveWhole: "1000000", days: SPONSORED_DEFAULT_DAYS } });
   });
 
   it("accepts a numeric reserve, a duration and an https sponsor link", () => {
@@ -29,6 +29,7 @@ describe("parseSponsoredMineInput", () => {
     ["fractional days", { days: 1.5 }],
     ["an http link", { sponsorUrl: "http://example.com" }],
     ["a script link", { sponsorUrl: "javascript:alert(1)" }],
+    ["a bad sponsor wallet", { sponsorWallet: "nope" }],
   ])("rejects %s", (_label, override) => {
     expect(parseSponsoredMineInput({ ...valid, ...override }).ok).toBe(false);
   });

@@ -9,6 +9,7 @@
  * eligibility.
  */
 import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { MINING_PERIOD_DEFAULT_DAYS, MINING_PERIOD_PRESETS } from "../../shared/miningSchedule";
 import bs58 from "bs58";
 import { IconClose, IconRocket } from "../icons";
 import type { TokenSummary } from "../../shared/types";
@@ -69,6 +70,7 @@ export function LaunchModal({
   const [symbol, setSymbol] = useState("");
   const [description, setDescription] = useState("");
   const [initialBuy, setInitialBuy] = useState("0");
+  const [miningDays, setMiningDays] = useState(MINING_PERIOD_DEFAULT_DAYS);
   const [file, setFile] = useState<File | null>(null);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [state, setState] = useState<"idle" | "working" | "done">("idle");
@@ -172,7 +174,7 @@ export function LaunchModal({
           initialBuySol: Math.max(0, Number(initialBuy) || 0),
         });
         track("launch_confirmed", { mint: launch.mint });
-        const registration = await registerMeteoraPool(launch.pool);
+        const registration = await registerMeteoraPool(launch.pool, miningDays === MINING_PERIOD_DEFAULT_DAYS ? undefined : miningDays);
         setMessage("Registering your launch…");
         const bootstrap = await getBootstrap();
         const token = bootstrap.tokens.find((candidate) => candidate.mint === registration.mint);
@@ -292,6 +294,14 @@ export function LaunchModal({
             </div>
             <label>Description<textarea required maxLength={280} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What is this coin digging for?" /></label>
             <label>Initial creator buy (SOL)<input type="number" min="0" step="0.001" value={initialBuy} onChange={(event) => setInitialBuy(event.target.value)} placeholder="0.00" /><i>Optional. Executes atomically with launch and becomes real bonding-curve liquidity.</i></label>
+            {config.chainMode === "meteora" && (
+              <label>Mining period
+                <select value={miningDays} onChange={(event) => setMiningDays(Number(event.target.value))}>
+                  {MINING_PERIOD_PRESETS.map((preset) => <option key={preset.days} value={preset.days}>{preset.label}</option>)}
+                </select>
+                <i>How long bots take to mine the 200M mining reserve. Shorter pays miners faster. You can change it later on your coin's page.</i>
+              </label>
+            )}
             <label className="file-input">
               <span>Token artwork</span>
               <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />

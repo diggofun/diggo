@@ -819,8 +819,13 @@ export interface MeteoraPoolRegistration {
   config: string;
 }
 
-export async function registerMeteoraPool(pool: string): Promise<MeteoraPoolRegistration> {
-  return postJson<MeteoraPoolRegistration>("/api/meteora/pools/register", { pool });
+export async function registerMeteoraPool(pool: string, miningDays?: number): Promise<MeteoraPoolRegistration> {
+  return postJson<MeteoraPoolRegistration>("/api/meteora/pools/register", miningDays ? { pool, miningDays } : { pool });
+}
+
+/** Changes how long a mine takes to release its reserve. Only its creator or sponsor may. */
+export async function setMiningPeriod(mint: string, days: number): Promise<{ mint: string; days: number; endsAt: number }> {
+  return postJson("/api/mines/period", { mint, days });
 }
 
 export type GameCrewComponent = "miners" | "drills" | "carts" | "foreman" | "storage";
@@ -1061,6 +1066,7 @@ export interface SponsoredMineRegistration {
   name: string;
   sponsor: string;
   sponsorUrl?: string;
+  sponsorWallet?: string;
   reserve: string;
   days: number;
 }

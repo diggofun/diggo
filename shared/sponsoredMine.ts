@@ -16,6 +16,8 @@ export interface SponsoredMineInput {
   name: string;
   sponsor: string;
   sponsorUrl: string | null;
+  /** The sponsor's wallet, which may change the mining period later. */
+  sponsorWallet: string | null;
   /** Whole tokens, as an integer string. Converted to raw units once the mint's decimals are known. */
   reserveWhole: string;
   days: number;
@@ -49,6 +51,8 @@ export function parseSponsoredMineInput(body: Record<string, unknown>): Sponsore
       return { ok: false, error: "Sponsor link must be an https:// URL" };
     }
   }
+  const sponsorWallet = text(body.sponsorWallet, 44) || null;
+  if (sponsorWallet !== null && !BASE58.test(sponsorWallet)) return { ok: false, error: "Sponsor wallet must be a Solana address" };
   const reserveWhole = typeof body.reserve === "number" && Number.isSafeInteger(body.reserve)
     ? String(body.reserve)
     : text(body.reserve, 20).replace(/[,_ ]/g, "");
@@ -57,7 +61,7 @@ export function parseSponsoredMineInput(body: Record<string, unknown>): Sponsore
   if (!Number.isInteger(days) || days < SPONSORED_MIN_DAYS || days > SPONSORED_MAX_DAYS) {
     return { ok: false, error: `Duration must be ${SPONSORED_MIN_DAYS}-${SPONSORED_MAX_DAYS} days` };
   }
-  return { ok: true, value: { mint, symbol, name, sponsor, sponsorUrl, reserveWhole, days } };
+  return { ok: true, value: { mint, symbol, name, sponsor, sponsorUrl, sponsorWallet, reserveWhole, days } };
 }
 
 /** Whole tokens to raw units for a mint with `decimals` places. */
@@ -73,6 +77,8 @@ export interface SponsoredMineView {
   name: string;
   sponsor: string;
   sponsorUrl: string | null;
+  /** The wallet allowed to change this mine's mining period, if the sponsor gave one. */
+  sponsorWallet: string | null;
   status: "ACTIVE" | "CLOSED";
   startsAt: number;
   endsAt: number;

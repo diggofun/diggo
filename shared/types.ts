@@ -376,6 +376,10 @@ export interface MineInfo {
   epochEndsAt: number;
   playerPower: number | null;
   accounting: MiningAccounting;
+  /** The coin's creator, who may change the mining period (Meteora mode only). */
+  creator?: string | null;
+  /** When the mining reserve finishes releasing, in unix seconds (Meteora mode only). */
+  miningEndsAt?: number | null;
 }
 
 export type DiscoveryStatus = "PENDING" | "ELIGIBLE" | "CLAIMED" | "HELD" | "REJECTED";

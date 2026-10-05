@@ -10,7 +10,7 @@ import { SPONSORED_DEFAULT_DAYS, type SponsoredMineView } from "../../shared/spo
 
 type Sign = (message: Uint8Array) => Promise<Uint8Array>;
 
-const EMPTY = { mint: "", symbol: "", name: "", sponsor: "", sponsorUrl: "", reserve: "", days: String(SPONSORED_DEFAULT_DAYS) };
+const EMPTY = { mint: "", symbol: "", name: "", sponsor: "", sponsorUrl: "", sponsorWallet: "", reserve: "", days: String(SPONSORED_DEFAULT_DAYS) };
 
 export function SponsoredMinesAdmin({ sign, vault }: { sign: Sign | null; vault: string | null }) {
   const [mines, setMines] = useState<SponsoredMineView[]>([]);
@@ -38,6 +38,7 @@ export function SponsoredMinesAdmin({ sign, vault }: { sign: Sign | null; vault:
         name: form.name.trim(),
         sponsor: form.sponsor.trim(),
         ...(form.sponsorUrl.trim() ? { sponsorUrl: form.sponsorUrl.trim() } : {}),
+        ...(form.sponsorWallet.trim() ? { sponsorWallet: form.sponsorWallet.trim() } : {}),
         reserve: form.reserve.trim(),
         days: Number(form.days),
       }, sign);
@@ -79,6 +80,7 @@ export function SponsoredMinesAdmin({ sign, vault }: { sign: Sign | null; vault:
         <input placeholder="Name" required maxLength={40} {...field("name")} />
         <input placeholder="Sponsor" required maxLength={40} {...field("sponsor")} />
         <input placeholder="Sponsor link (https://…, optional)" {...field("sponsorUrl")} />
+        <input placeholder="Sponsor wallet (can change the period, optional)" {...field("sponsorWallet")} />
         <input placeholder="Reserve (whole tokens)" inputMode="numeric" required {...field("reserve")} />
         <input placeholder="Days" type="number" min={1} max={365} required {...field("days")} />
         <button className="btn btn-primary" type="submit" disabled={busy || !sign}>{busy ? "Signing…" : "Register mine"}</button>

@@ -49,6 +49,56 @@ export function releasedMiningAllocation(
   return (total * elapsed) / BigInt(period);
 }
 
+/**
+ * What a mine has released by `now`, honouring a period change. The curve runs through three points:
+ * (miningStartsAt, 0), (anchorAt, anchorReleased) and (endsAt, total), so it is continuous and never
+ * goes down: a change only re-spreads what is still to come.
+ */
+export function releasedOnSchedule(
+  now: number,
+  coin: Pick<GameCoin, "miningStartsAt" | "miningSeconds" | "schedule">,
+  total: bigint,
+): bigint {
+  const startsAt = coin.miningStartsAt;
+  const schedule = coin.schedule;
+  if (!schedule) return releasedMiningAllocation(now, startsAt, total, coin.miningSeconds);
+  if (total <= 0n || now <= startsAt) return 0n;
+  let anchored = /^[0-9]+$/.test(schedule.anchorReleased) ? BigInt(schedule.anchorReleased) : 0n;
+  if (anchored < 0n) anchored = 0n;
+  if (anchored > total) anchored = total;
+  const anchorAt = Math.max(startsAt, Math.floor(schedule.anchorAt));
+  if (now < anchorAt) return (anchored * BigInt(Math.floor(now - startsAt))) / BigInt(anchorAt - startsAt);
+  if (now >= schedule.endsAt || schedule.endsAt <= anchorAt) return total;
+  return anchored + ((total - anchored) * BigInt(Math.floor(now - anchorAt))) / BigInt(Math.floor(schedule.endsAt - anchorAt));
+}
+
+/** When a mine finishes releasing, in unix seconds. */
+export function miningEndsAt(coin: Pick<GameCoin, "miningStartsAt" | "miningSeconds" | "schedule">): number {
+  if (coin.schedule) return coin.schedule.endsAt;
+  const seconds = coin.miningSeconds !== undefined && Number.isSafeInteger(coin.miningSeconds) && coin.miningSeconds > 0 ? coin.miningSeconds : MINING_SECONDS;
+  return coin.miningStartsAt + seconds;
+}
+
+/**
+ * A new period starting now. `alreadyReleased` is the ledger's own released figure, so the anchor is
+ * never below what was actually handed out, even if the old curve said less.
+ */
+export function rescheduleMining(
+  coin: Pick<GameCoin, "miningStartsAt" | "miningSeconds" | "schedule">,
+  total: bigint,
+  alreadyReleased: bigint,
+  now: number,
+  days: number,
+) {
+  const onCurve = releasedOnSchedule(now, coin, total);
+  const anchored = onCurve > alreadyReleased ? onCurve : alreadyReleased;
+  return {
+    anchorAt: Math.max(now, coin.miningStartsAt),
+    anchorReleased: (anchored > total ? total : anchored).toString(),
+    endsAt: Math.max(now, coin.miningStartsAt) + days * 86_400,
+  };
+}
+
 export interface MiningAccrualInput {
   mine: GameCoin;
   wallet: string;

@@ -2,18 +2,21 @@
  * Sponsored mines: coins other projects put into the mining vault for bots to dig. Each card shows
  * how much is left, so players see the reserve shrink and sponsors see their deposit at work.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getSponsoredMines } from "../api";
 import { compact, countdown, tokenAmount } from "../format";
 import type { SponsoredMineView } from "../../shared/sponsoredMine";
+import { MiningPeriodEditor } from "./MiningPeriodEditor";
 import { TokenOrb } from "./TokenOrb";
 
-export function SponsoredMines({ now, activeMint }: { now: number; activeMint: string | null }) {
+export function SponsoredMines({ now, activeMint, viewer = null }: { now: number; activeMint: string | null; viewer?: string | null }) {
   const [mines, setMines] = useState<SponsoredMineView[] | null>(null);
+  const reload = useRef<() => void>(() => undefined);
   useEffect(() => {
     let live = true;
     const load = () => getSponsoredMines().then((list) => { if (live) setMines(list); }).catch(() => { if (live) setMines((current) => current ?? []); });
     void load();
+    reload.current = load;
     const timer = window.setInterval(load, 60_000);
     return () => { live = false; window.clearInterval(timer); };
   }, []);
@@ -50,6 +53,9 @@ export function SponsoredMines({ now, activeMint }: { now: number; activeMint: s
                 <span>{compact(mine.mined)} of {compact(mine.reserve)} mined · {mine.miners} {mine.miners === 1 ? "crew" : "crews"}</span>
                 <span>{ends}</span>
               </div>
+              {viewer && mine.sponsorWallet === viewer && (
+                <MiningPeriodEditor mint={mine.mint} endsAt={mine.endsAt} onChanged={() => reload.current()} />
+              )}
             </article>
           );
         })}

@@ -16,10 +16,10 @@ import {
   type GameHandlerContext,
   type PlayerGameState,
 } from "../game/service";
-import { activeSponsoredCoins, sponsoredCoinByMint } from "../sponsored";
+import { activeSponsoredCoins, SCHEDULE_COLUMNS, SCHEDULE_JOIN, scheduleOf, sponsoredCoinByMint } from "../sponsored";
 import { gameChainMode, isPayableCoin, MINING_RESERVE, type GameCoin, type GameCoinSource, type GameEnv, type GamePlayerState, type GamePortfolioSource, type GameServices, type GameWalletSource, type MiningPayout } from "../game/contracts";
 import { wholeTokens } from "../game/store";
-import { MINING_ALLOCATION_DAYS } from "../game/rules";
+import { MINING_ALLOCATION_DAYS, miningEndsAt } from "../game/rules";
 import { getSolUsd } from "../oracle";
 import { apiError, checkRateLimit, checkWalletRateLimit, isBase58Address, json } from "../http";
 import { getChainRpc, LAMPORTS_PER_SOL } from "../chainV2";
@@ -126,6 +126,7 @@ function rpcEnv(env: RuntimeEnvLike) {
 function poolRow(row: Record<string, unknown>): GameCoin {
   const mint = String(row.base_mint);
   const createdAt = Number(row.created_at) || nowSeconds();
+  const schedule = scheduleOf(row);
   return {
     mint,
     symbol: String(row.symbol || mint.slice(0, 6)),
@@ -133,8 +134,12 @@ function poolRow(row: Record<string, unknown>): GameCoin {
     createdAt,
     miningStartsAt: createdAt,
     graduated: Number(row.is_graduated) === 1,
+    ...(schedule ? { schedule } : {}),
   };
 }
+
+const POOL_COLUMNS = "p.base_mint, p.name, p.symbol, p.created_at, p.is_graduated";
+const POOL_COIN_COLUMNS = POOL_COLUMNS + ", " + SCHEDULE_COLUMNS;
 
 /** Launches on the Diggo Meteora config, plus the sponsored mines (worker/sponsored.ts). */
 export function meteoraCoinSource(env: GameEnv): GameCoinSource {
@@ -143,18 +148,21 @@ export function meteoraCoinSource(env: GameEnv): GameCoinSource {
     async listActiveMines() {
       const sponsored = await activeSponsoredCoins(env.DB);
       if (!config()) return sponsored;
-      const result = await env.DB.prepare(
-        "SELECT base_mint, name, symbol, created_at, is_graduated FROM meteora_pools WHERE config=?1 AND is_graduated=0 ORDER BY created_at DESC",
-      ).bind(config()).all<Record<string, unknown>>();
+      const where = "WHERE p.config=?1 AND p.is_graduated=0 ORDER BY p.created_at DESC";
+      const result = await env.DB.prepare(`SELECT ${POOL_COIN_COLUMNS} FROM meteora_pools p ${SCHEDULE_JOIN}p.base_mint ${where}`)
+        .bind(config()).all<Record<string, unknown>>()
+        // Until migration 0039 is applied there is no schedule table; every mine keeps its period.
+        .catch(() => env.DB.prepare(`SELECT ${POOL_COLUMNS} FROM meteora_pools p ${where}`).bind(config()).all<Record<string, unknown>>());
       return [...(result.results ?? []).map(poolRow), ...sponsored];
     },
     async getMine(mint) {
       const sponsored = await sponsoredCoinByMint(env.DB, mint);
       if (sponsored) return sponsored;
       if (!config()) return null;
-      const row = await env.DB.prepare(
-        "SELECT base_mint, name, symbol, created_at, is_graduated FROM meteora_pools WHERE config=?1 AND base_mint=?2",
-      ).bind(config(), mint).first<Record<string, unknown>>();
+      const where = "WHERE p.config=?1 AND p.base_mint=?2";
+      const row = await env.DB.prepare(`SELECT ${POOL_COIN_COLUMNS} FROM meteora_pools p ${SCHEDULE_JOIN}p.base_mint ${where}`)
+        .bind(config(), mint).first<Record<string, unknown>>()
+        .catch(() => env.DB.prepare(`SELECT ${POOL_COLUMNS} FROM meteora_pools p ${where}`).bind(config(), mint).first<Record<string, unknown>>());
       return row ? poolRow(row) : null;
     },
   };
@@ -405,6 +413,7 @@ export async function meteoraMineInfo(env: RuntimeEnvLike, slug: string, wallet:
   const balance = state?.activeMine?.coin?.mint === mint ? state.activeMine.balance : { claimable: "0" };
   const graduated = Number(row.is_graduated) === 1;
   const ledger = await mineLedgerView(env, mint);
+  const coin = await meteoraCoinSource(env).getMine(mint);
   const playerPower = state ? (state.activeMine?.coin?.mint === mint && state.activation.active ? state.activeMiningPower : 0) : null;
   return json({ mine: {
     mint, pool: String(row.pool), symbol: String(row.symbol || mint.slice(0, 6)), name: String(row.name || row.symbol || mint),
@@ -421,6 +430,9 @@ export async function meteoraMineInfo(env: RuntimeEnvLike, slug: string, wallet:
     estimatedShare: playerPower !== null && ledger.power > 0 ? Math.min(1, playerPower / ledger.power) : null,
     emissionSource: "RESERVE",
     miningEmission: TIME_MINING_EMISSION,
+    // The creator may change the mining period (worker/miningPeriod.ts); the page offers it to them.
+    creator: String(row.creator || "") || null,
+    miningEndsAt: coin ? miningEndsAt(coin) : null,
     // Before graduation the mining vault is empty by design: the pool's 20% leftover (200M) only
     // reaches it at migration. Rewards accrue as pending against that allocation meanwhile.
     accounting: { source: "OFFCHAIN", authoritative: false, label: "Pending reserve: accrues now, paid from the 200M leftover after graduation" },

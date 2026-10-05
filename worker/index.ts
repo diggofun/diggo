@@ -77,6 +77,7 @@ import { officialMintFromEnv } from "../shared/officialMint";
 import { handleMeteoraGameRoute, meteoraBootstrap, meteoraConfig, meteoraMineInfo, meteoraPlayerProfile, meteoraPortfolio, meteoraTokenBySlug, runMeteoraScheduled, runMeteoraSettlement } from "./modes/meteora";
 import { registerMeteoraPool } from "./meteora/registration";
 import { adminCloseSponsoredMine, adminRegisterSponsoredMine, listSponsoredMines } from "./sponsored";
+import { setMiningPeriod } from "./miningPeriod";
 import { meteoraCandles } from "./candles";
 import { isPosthogProxyPath, proxyPosthog } from "./posthogProxy";
 
@@ -263,6 +264,7 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
     if (request.method === "GET" && pathname === "/api/admin/dashboard") return adminDashboard(request, env);
     if (request.method === "POST" && pathname === "/api/admin/stepup") return adminStepUp(request, env);
     if (request.method === "GET" && pathname === "/api/sponsored-mines") return listSponsoredMines(env);
+    if (request.method === "POST" && pathname === "/api/mines/period") return setMiningPeriod(request, env);
     if (request.method === "POST" && pathname === "/api/admin/sponsored-mines") return adminRegisterSponsoredMine(request, env);
     if (request.method === "POST" && pathname === "/api/admin/sponsored-mines/close") return adminCloseSponsoredMine(request, env);
     if (request.method === "POST" && pathname === "/api/appeals") return submitAppeal(request, env);

@@ -1,4 +1,5 @@
 import type { RuntimeEnv } from "../env";
+import type { MiningSchedule } from "../../shared/miningSchedule";
 
 /** The two supported game authorities. The native path is intentionally not reimplemented here. */
 export type ChainMode = "meteora" | "native";
@@ -30,6 +31,8 @@ export interface GameCoin {
   decimals?: number;
   /** How long the reserve takes to release, in seconds. Defaults to the launch allocation period. */
   miningSeconds?: number;
+  /** The latest period change by the creator or sponsor; it overrides miningSeconds from anchorAt on. */
+  schedule?: MiningSchedule;
   /** Who funded a sponsored mine, for display. */
   sponsor?: string;
 }

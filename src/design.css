@@ -635,3 +635,12 @@ details > summary { cursor: pointer; }
 .sponsored-badge { color: #34d399; }
 .sponsored-admin-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 8px; }
 .sponsored-admin-form input { min-width: 0; }
+
+/* Mining period editor (MiningPeriodEditor.tsx). */
+.mining-period { display: grid; gap: 10px; margin-top: 16px; padding: 16px; border-radius: 20px; background: var(--control); }
+.mining-period-head { display: grid; gap: 2px; }
+.mining-period-head small, .mining-period-note { color: var(--muted); font-size: 13px; margin: 0; }
+.mining-period-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.mining-period-presets .chip { cursor: pointer; border: 0; border-radius: 999px; background: var(--card); }
+.mining-period-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.mining-period-row input { width: 96px; min-height: 36px; }

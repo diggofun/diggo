@@ -24,7 +24,7 @@ import {
   miningSettlementWindow,
   pickDiscoveryMint,
   playerCrewPower,
-  releasedMiningAllocation,
+  releasedOnSchedule,
   settleShiftOre,
   unixSeconds,
   weekIndex,
@@ -326,8 +326,8 @@ export async function settleMining(
   const visibleEligiblePower = await store.getEligiblePower(coin.mint, now);
   const totalEligiblePower = Math.max(assignedPower, visibleEligiblePower);
   // Released against the reserve the mine was created with, not the default launch allocation.
-  const releasedBefore = releasedMiningAllocation(window.start, coin.miningStartsAt, mine.initialReserve, coin.miningSeconds);
-  const releasedNow = releasedMiningAllocation(window.end, coin.miningStartsAt, mine.initialReserve, coin.miningSeconds);
+  const releasedBefore = releasedOnSchedule(window.start, coin, mine.initialReserve);
+  const releasedNow = releasedOnSchedule(window.end, coin, mine.initialReserve);
   const next = accrueMining({
     mine: coin,
     wallet: player.wallet,

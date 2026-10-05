@@ -897,6 +897,8 @@ export default function App() {
         now={now}
         loading={mineInfoLoading}
         error={mineInfoError}
+        viewer={session}
+        onPeriodChanged={() => void loadMineInfo(token.mint)}
       />
     );
 
