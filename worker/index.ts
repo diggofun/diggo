@@ -80,6 +80,7 @@ import { adminCloseSponsoredMine, adminRegisterSponsoredMine, listSponsoredMines
 import { setMiningPeriod } from "./miningPeriod";
 import { confirmBoost, prepareBoost } from "./boosts";
 import { mineWars } from "./mineWars";
+import { creatorMines } from "./creatorMines";
 import { createProjectMine, mineFeeInfo, prepareProjectMineDeposit } from "./projectMines";
 import { meteoraCandles } from "./candles";
 import { isPosthogProxyPath, proxyPosthog } from "./posthogProxy";
@@ -277,6 +278,7 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
     if (request.method === "POST" && pathname === "/api/mines/create") return createProjectMine(request, env);
     if (request.method === "GET" && pathname === "/api/mines/fee") return mineFeeInfo(env);
     if (request.method === "GET" && pathname === "/api/mines/wars") return mineWars(env);
+    if (request.method === "GET" && pathname === "/api/creator/mines") return creatorMines(request, env);
     if (request.method === "POST" && pathname === "/api/mines/boost/prepare") return prepareBoost(request, env);
     if (request.method === "POST" && pathname === "/api/mines/boost/confirm") return confirmBoost(request, env);
     if (request.method === "POST" && pathname === "/api/admin/sponsored-mines") return adminRegisterSponsoredMine(request, env);

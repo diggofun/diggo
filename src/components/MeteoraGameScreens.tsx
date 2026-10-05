@@ -3,6 +3,7 @@ import { crewPower, crewTier, upgradeOreCost } from "../../shared/economics";
 import { CREW_BOTS, CREW_COMPONENTS, CREW_COMPONENT_LABELS, CREW_ROLES } from "../crewLabels";
 import { compact, countdown, oreAmount, shortAddress, tokenAmount } from "../format";
 import { SponsoredMines } from "./SponsoredMines";
+import { CreatorDashboard } from "./CreatorDashboard";
 import type { GameCrewComponent, GameState, MeteoraPortfolio } from "../api";
 import { IconCheck } from "../icons";
 import { MineScene } from "./MineScene";
@@ -327,6 +328,7 @@ export function MeteoraPortfolioScreen({ game, portfolio, tokens }: { game: Game
         </div>
       </header>
       {wallet && <MyShareCard location="profile" />}
+      {wallet && <CreatorDashboard wallet={wallet} />}
       <div className="stat-row">
         <article className="stat"><span>ORE</span><strong>{oreAmount(game?.oreBalance ?? 0)}</strong><small>For crew upgrades</small></article>
         <article className="stat"><span>Streak</span><strong>{game?.streak ?? 0} days</strong><small>Best {game?.longestStreak ?? 0}</small></article>

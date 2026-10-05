@@ -670,3 +670,18 @@ details > summary { cursor: pointer; }
 .wars-name { display: grid; gap: 2px; min-width: 0; }
 .wars-name small { color: var(--muted); font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wars-rank { display: block; color: #ff8a3d; font-weight: 700; text-decoration: none; }
+
+/* Creator dashboard (CreatorDashboard.tsx). */
+.creator-dashboard { display: grid; gap: 12px; }
+.creator-dashboard .section-heading { margin-bottom: 0; }
+.creator-dashboard .section-heading > div { display: grid; gap: 4px; }
+.creator-dashboard .section-heading h2 { margin: 0; font-size: 22px; }
+.creator-dashboard .section-heading small { color: var(--muted); }
+.creator-mine .mine-panel-coin { display: flex; align-items: center; gap: 12px; }
+.creator-mine .mine-panel-coin > div:not(.token-orb) { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.creator-mine .mine-panel-coin small { color: var(--muted); }
+.creator-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr)); gap: 8px; }
+.creator-stats div { display: grid; gap: 2px; padding: 12px 14px; border-radius: 16px; background: var(--control); }
+.creator-stats strong { font-size: 22px; }
+.creator-stats span { color: var(--muted); font-size: 13px; }
+.creator-mine .mining-period { margin-top: 0; }
