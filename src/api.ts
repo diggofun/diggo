@@ -843,6 +843,11 @@ export async function createProjectMine(details: ProjectMineDetails): Promise<{ 
   return postJson("/api/mines/create", details);
 }
 
+/** Sends the signed-in player's crew to this mine from now on (a mine link); null goes back to random mines. */
+export async function preferMine(mint: string | null): Promise<{ mine: GameCoin | null }> {
+  return postJson("/api/game/mine", { mint });
+}
+
 /** Changes how long a mine takes to release its reserve. Only its creator or sponsor may. */
 export async function setMiningPeriod(mint: string, days: number): Promise<{ mint: string; days: number; endsAt: number }> {
   return postJson("/api/mines/period", { mint, days });

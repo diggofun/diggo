@@ -120,6 +120,25 @@ export class D1GameStore implements GameStore {
     return number(row?.version);
   }
 
+  async getPreferredMine(wallet: string): Promise<string | null> {
+    // Before migration 0041 there is no table: nobody has a preference yet.
+    const row = await this.db.prepare("SELECT mint FROM game_mine_preferences WHERE wallet = ?1").bind(wallet)
+      .first<{ mint: string }>()
+      .catch(() => null);
+    return row?.mint ?? null;
+  }
+
+  async setPreferredMine(wallet: string, mint: string | null, now: number): Promise<void> {
+    if (mint === null) {
+      await this.db.prepare("DELETE FROM game_mine_preferences WHERE wallet = ?1").bind(wallet).run();
+      return;
+    }
+    await this.db.prepare(
+      "INSERT INTO game_mine_preferences (wallet, mint, updated_at) VALUES (?1, ?2, ?3)" +
+        " ON CONFLICT(wallet) DO UPDATE SET mint = excluded.mint, updated_at = excluded.updated_at",
+    ).bind(wallet, mint, now).run();
+  }
+
   async getMine(mint: string): Promise<GameMineLedger | null> {
     const row = await this.db.prepare("SELECT * FROM game_mines WHERE mint = ?1").bind(mint).first<Record<string, unknown>>();
     return row ? mineFromRow(row) : null;

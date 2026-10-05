@@ -18,6 +18,7 @@ import { IconLayers, IconMine, IconTimer } from "../icons";
 import type { MineInfo, MiningAccounting } from "../../shared/types";
 import { compact, countdown, miningProgressPercent, percent, tokenAmount } from "../format";
 import { curveCapSpent, describeMineStatus, runwayLabel } from "../mineView";
+import { MineShare } from "./MineShare";
 import { MiningPeriodEditor } from "./MiningPeriodEditor";
 
 export interface MineInfoPanelProps {
@@ -178,6 +179,7 @@ export function MineInfoPanel({
                 {mine.miningEndsAt ? " until " + new Date(mine.miningEndsAt * 1000).toLocaleDateString("en") : " over " + timeBased.durationDays.toLocaleString("en") + " days"}.
                 Your rewards depend on active mining time and your share of Mining Power.
               </p>
+              <MineShare mint={mine.mint} symbol={mine.symbol} location="mine_info" canDig />
               {viewer && mine.creator === viewer && (
                 <MiningPeriodEditor mint={mine.mint} endsAt={mine.miningEndsAt ?? null} onChanged={onPeriodChanged} />
               )}

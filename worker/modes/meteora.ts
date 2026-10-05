@@ -21,7 +21,7 @@ import { gameChainMode, isPayableCoin, MINING_RESERVE, type GameCoin, type GameC
 import { wholeTokens } from "../game/store";
 import { MINING_ALLOCATION_DAYS, miningEndsAt } from "../game/rules";
 import { getSolUsd } from "../oracle";
-import { apiError, checkRateLimit, checkWalletRateLimit, isBase58Address, json } from "../http";
+import { apiError, checkRateLimit, checkWalletRateLimit, isBase58Address, json, readJson } from "../http";
 import { getChainRpc, LAMPORTS_PER_SOL } from "../chainV2";
 import { confirmClaimBatch, confirmMiningClaim, prepareClaimBatch, prepareMiningClaim, runMeteoraIndexer, runVaultSweep } from "../meteora";
 import { decodeTokenAccountAmount, decodeTokenMint, deriveAssociatedTokenAddress, readAccount, readSignatures } from "../meteora/rpc";
@@ -449,6 +449,16 @@ export async function meteoraSwitchMine(request: Request, env: RuntimeEnvLike) {
   const context = meteoraGameContext(env);
   const store = d1GameStore(env.DB);
   const now = nowSeconds();
+  // { mint } is a mine link: dig this mine from now on. { mint: null } goes back to random mines.
+  const body = await readJson<{ mint?: unknown }>(request, 1_024).catch(() => ({} as { mint?: unknown }));
+  if (body.mint === null) {
+    await store.setPreferredMine(wallet, null, now);
+  } else if (body.mint !== undefined) {
+    if (!isBase58Address(body.mint)) return apiError("Invalid mine");
+    const wanted = await context.services.coins.getMine(body.mint);
+    if (!wanted || wanted.graduated) return apiError("That mine is not open", 404);
+    await store.setPreferredMine(wallet, body.mint, now);
+  }
   const player = await store.ensurePlayer(wallet, now, { miners: 1, drills: 1, carts: 1, foreman: 1, storage: 1 });
   const settled = await settlePlayerMining(context, player);
   const mine = settled.activeMine ? await context.services.coins.getMine(settled.activeMine) : null;

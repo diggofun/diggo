@@ -22,6 +22,7 @@ import {
   getToken,
   verifyWallet,
   ApiError,
+  preferMine,
   type RewardClaimView,
   type DiggoConfig,
   type PortfolioSummary,
@@ -48,6 +49,7 @@ import { useVerificationGate } from "./components/VerificationGate";
 import { ConsentBanner } from "./components/ConsentBanner";
 import { WatchlistPanel } from "./components/WatchlistPanel";
 import { isLegalPath } from "./components/legal/routes";
+import { clearPendingMine, pendingMine } from "./mineLink";
 import { captureLandingReferral, clearRememberedReferral, readRememberedReferral, referralCodeFromLocation } from "./referralLink";
 import { usePendingTransaction } from "./onchain";
 import { signPreparedClaim } from "./onchain/preparedClaim";
@@ -389,6 +391,23 @@ export default function App() {
     if (config.chainMode === "meteora") void refreshGame();
     else { setGame(null); setMeteoraPortfolio(null); }
   }, [config.chainMode, refreshGame]);
+
+  // A mine link opened before signing in is applied as soon as there is a session.
+  useEffect(() => {
+    if (config.chainMode !== "meteora" || !session) return;
+    const mint = pendingMine();
+    if (!mint) return;
+    void preferMine(mint)
+      .then(() => {
+        clearPendingMine();
+        track("mine_link_applied", { mint });
+        return refreshGame();
+      })
+      .catch((error: unknown) => {
+        // A closed or unknown mine will never apply; anything else is retried on the next load.
+        if (error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 401 && error.status !== 429) clearPendingMine();
+      });
+  }, [config.chainMode, session, refreshGame]);
 
   // The Worker settles mining lazily when the player state is read. Polling keeps the dashboard's
   // accrued balance current while the browser is open, so activation does not require a reload or

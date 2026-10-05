@@ -39,7 +39,7 @@ import { getSolUsd } from "./oracle";
 import { playerProfile } from "./player";
 import { portfolioForWallet } from "./portfolio";
 import { publicProfile, setProfileBot, setUsername } from "./profile";
-import { shareCardPng, shareLandingPage } from "./share";
+import { mineCardPng, mineLandingPage, shareCardPng, shareLandingPage } from "./share";
 import {
   deletePushSubscription,
   pushPublicKey,
@@ -91,6 +91,11 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
   const { pathname } = url;
   try {
     // Referral links unfurl as the player's share card (worker/share). Mode-independent.
+    // Mine links unfurl as the mine's card; the app then sends the visitor's crew to that mine.
+    const mineCardMatch = pathname.match(/^\/api\/share\/mine\/([^/]+)\.png$/);
+    if (request.method === "GET" && mineCardMatch) return await mineCardPng(request, env, ctx, decodeURIComponent(mineCardMatch[1]!));
+    const mineLinkMatch = pathname.match(/^\/m\/([^/]+)\/?$/);
+    if (request.method === "GET" && mineLinkMatch) return await mineLandingPage(request, env, ctx, decodeURIComponent(mineLinkMatch[1]!));
     const shareCardMatch = pathname.match(/^\/api\/share\/([^/]+)\.png$/);
     if (request.method === "GET" && shareCardMatch) return await shareCardPng(request, env, ctx, decodeURIComponent(shareCardMatch[1]!));
     const shareLinkMatch = pathname.match(/^\/r\/([^/]+)\/?$/);

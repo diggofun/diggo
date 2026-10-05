@@ -170,6 +170,12 @@ export async function ensurePlayerMine(context: GameHandlerContext, player: Game
   }
   const store = contextStore(context);
   const current = player.activeMine ? await context.services.coins.getMine(player.activeMine) : null;
+  // A mine link the player opened wins over the current assignment while that mine can be dug.
+  const preferredMint = await store.getPreferredMine(player.wallet);
+  if (preferredMint && preferredMint !== player.activeMine) {
+    const preferred = await context.services.coins.getMine(preferredMint);
+    if (preferred && await isEligibleMine(context, preferred, now)) return switchToMine(context, player, current, preferred, now);
+  }
   if (current && await isEligibleMine(context, current, now)) {
     if (player.activeMiningPower > 0) return player;
     const version = await store.playerVersion(player.wallet);
@@ -192,6 +198,31 @@ export async function ensurePlayerMine(context: GameHandlerContext, player: Game
   const updated = { ...player, activeMine: mine.mint, activeMiningPower: playerCrewPower(player) };
   if (!(await store.savePlayer(updated, version))) return (await store.getPlayer(player.wallet)) ?? player;
   return (await store.getPlayer(player.wallet)) ?? updated;
+}
+
+/**
+ * Moves an active crew to `next` mid-shift. The old mine is settled up to now first, and the new
+ * mine's clock starts now, so no stretch of time is paid twice or on a mine the crew was not on.
+ */
+async function switchToMine(
+  context: GameHandlerContext,
+  player: GamePlayerStateLike,
+  current: GameCoin | null,
+  next: GameCoin,
+  now: number,
+): Promise<GamePlayerStateLike> {
+  const store = contextStore(context);
+  let latest = player;
+  if (current && player.activeMine === current.mint && !current.graduated) {
+    await settleMining(context, player, current);
+    latest = (await store.getPlayer(player.wallet)) ?? player;
+  }
+  const balance = await store.getBalance(latest.wallet, next.mint);
+  if (balance.lastSettledAt < now && !(await store.saveBalance({ ...balance, lastSettledAt: now }, balance.claimable))) return latest;
+  const version = await store.playerVersion(latest.wallet);
+  const updated = { ...latest, activeMine: next.mint, activeMiningPower: playerCrewPower(latest) };
+  if (!(await store.savePlayer(updated, version))) return (await store.getPlayer(latest.wallet)) ?? latest;
+  return (await store.getPlayer(latest.wallet)) ?? updated;
 }
 
 export async function handleActivationChallenge(

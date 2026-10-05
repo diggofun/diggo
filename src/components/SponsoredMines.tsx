@@ -7,6 +7,7 @@ import { getSponsoredMines } from "../api";
 import { compact, countdown, tokenAmount } from "../format";
 import type { SponsoredMineView } from "../../shared/sponsoredMine";
 import { AddCoinModal } from "./AddCoinModal";
+import { MineShare } from "./MineShare";
 import { MiningPeriodEditor } from "./MiningPeriodEditor";
 import { TokenOrb } from "./TokenOrb";
 
@@ -60,6 +61,7 @@ export function SponsoredMines({ now, activeMint, viewer = null }: { now: number
                 <span>{compact(mine.mined)} of {compact(mine.reserve)} mined · {mine.miners} {mine.miners === 1 ? "crew" : "crews"}</span>
                 <span>{ends}</span>
               </div>
+              <MineShare mint={mine.mint} symbol={mine.symbol} location="mine_card" canDig={mine.mint !== activeMint} />
               {viewer && mine.sponsorWallet === viewer && (
                 <MiningPeriodEditor mint={mine.mint} endsAt={mine.endsAt} onChanged={() => reload.current()} />
               )}

@@ -12,6 +12,8 @@
 import type { RuntimeEnv } from "../env";
 import { CARD_WIDTH, cardSvg, previewText } from "./card";
 import { shareStats, walletForShareCode } from "./stats";
+import { mineCardSvg, minePreviewText } from "./mineCard";
+import { mineShareStats } from "./mineStats";
 
 const CARD_CACHE_SECONDS = 600;
 const FALLBACK_CARD = "/og-image-v4.jpg";
@@ -104,6 +106,51 @@ export async function shareLandingPage(request: Request, env: RuntimeEnv, ctx: E
       .on('meta[property="og:image"], meta[property="og:image:secure_url"], meta[name="twitter:image"]', new MetaContent(image))
       .on('meta[property="og:image:type"]', new MetaContent("image/png"))
       .on('meta[property="og:image:alt"], meta[name="twitter:image:alt"]', new MetaContent(alt))
+      .on('meta[property="og:url"]', new MetaContent(link))
+      .transform(page);
+    const headers = new Headers(rewritten.headers);
+    headers.set("cache-control", "public, max-age=300");
+    return new Response(rewritten.body, { status: 200, headers });
+  });
+}
+
+/** GET /api/share/mine/:mint.png */
+export async function mineCardPng(request: Request, env: RuntimeEnv, ctx: ExecutionContext, mint: string): Promise<Response> {
+  const origin = new URL(request.url).origin;
+  return cached(request, ctx, async () => {
+    const stats = await mineShareStats(env, mint).catch(() => null);
+    if (!stats) return Response.redirect(origin + FALLBACK_CARD, 302);
+    const mark = await wordmark(env, origin);
+    const { svgToPng } = await import("./render");
+    const png = await svgToPng(mineCardSvg(stats, mark), CARD_WIDTH);
+    return new Response(new Uint8Array(png), {
+      headers: { "content-type": "image/png", "cache-control": `public, max-age=${CARD_CACHE_SECONDS}` },
+    });
+  });
+}
+
+/**
+ * GET /m/:mint - the app, with this mine's preview tags. The client reads the mint from the path,
+ * remembers it, and sends the player's crew to that mine once they are signed in.
+ */
+export async function mineLandingPage(request: Request, env: RuntimeEnv, ctx: ExecutionContext, mint: string): Promise<Response> {
+  const url = new URL(request.url);
+  const origin = publicOrigin(url);
+  const page = await env.ASSETS.fetch(new Request(url.origin + "/", { headers: request.headers }));
+  if (!page.ok) return page;
+  const stats = await mineShareStats(env, mint).catch(() => null);
+  if (!stats) return page;
+  return cached(request, ctx, async () => {
+    const { title, description } = minePreviewText(stats);
+    const image = `${origin}/api/share/mine/${encodeURIComponent(stats.mint)}.png?h=${Math.floor(Date.now() / 3_600_000)}`;
+    const link = `${origin}/m/${encodeURIComponent(stats.mint)}`;
+    const rewritten = new HTMLRewriter()
+      .on("title", new TitleText(title))
+      .on('meta[property="og:title"], meta[name="twitter:title"]', new MetaContent(title))
+      .on('meta[property="og:description"], meta[name="twitter:description"], meta[name="description"]', new MetaContent(description))
+      .on('meta[property="og:image"], meta[property="og:image:secure_url"], meta[name="twitter:image"]', new MetaContent(image))
+      .on('meta[property="og:image:type"]', new MetaContent("image/png"))
+      .on('meta[property="og:image:alt"], meta[name="twitter:image:alt"]', new MetaContent(`Bots mining $${stats.symbol} on Diggo.fun`))
       .on('meta[property="og:url"]', new MetaContent(link))
       .transform(page);
     const headers = new Headers(rewritten.headers);

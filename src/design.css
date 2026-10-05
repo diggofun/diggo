@@ -651,3 +651,8 @@ details > summary { cursor: pointer; }
 .launch-modal .launch-mode { display: flex; max-width: 100%; margin-top: 40px; }
 .launch-modal .launch-mode button { flex: 1; padding: 0 14px; font-size: 14px; white-space: nowrap; }
 .launch-modal .add-coin-pending + .form-message, .launch-modal form + .form-message { margin-top: 12px; }
+
+/* Mine links (MineShare.tsx). */
+.mine-share { display: grid; gap: 6px; }
+.mine-share-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.mine-share-note { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }

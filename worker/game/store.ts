@@ -57,6 +57,9 @@ export interface GameStore {
   savePlayer(player: GamePlayerState, expectedVersion: number): Promise<boolean>;
   playerVersion(wallet: string): Promise<number>;
   getMine(mint: string): Promise<GameMineLedger | null>;
+  /** The mine this player asked to dig through a mine link, or null. */
+  getPreferredMine(wallet: string): Promise<string | null>;
+  setPreferredMine(wallet: string, mint: string | null, now: number): Promise<void>;
   ensureMine(mint: string, startsAt: number, totalEligiblePower: number, now: number, reserve?: bigint): Promise<GameMineLedger>;
   saveMine(mine: GameMineLedger, expectedVersion: number): Promise<boolean>;
   mineVersion(mint: string): Promise<number>;
@@ -109,6 +112,16 @@ export class MemoryGameStore implements GameStore {
   readonly referrals = new Map<string, ReferralCreditRecord>();
   readonly discoveries = new Map<string, DiscoveryRecord>();
   referralCounters = new Map<string, { count: number; ore: number }>();
+  readonly preferredMines = new Map<string, string>();
+
+  async getPreferredMine(wallet: string): Promise<string | null> {
+    return this.preferredMines.get(wallet) ?? null;
+  }
+
+  async setPreferredMine(wallet: string, mint: string | null): Promise<void> {
+    if (mint) this.preferredMines.set(wallet, mint);
+    else this.preferredMines.delete(wallet);
+  }
 
   private balanceKey(wallet: string, mint: string): string {
     return `${wallet}:${mint}`;

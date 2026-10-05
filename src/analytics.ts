@@ -51,6 +51,9 @@ export interface AnalyticsEvents {
   referral_link_copied: Record<string, never>;
   referral_link_customized: Record<string, never>;
   share_card_shared: { target: "x" | "copy"; location: string };
+  mine_link_shared: { mint: string; location: string; target: "x" };
+  mine_link_copied: { mint: string; location: string };
+  mine_link_applied: { mint: string; location?: string };
   referral_signup: { ref_code: string };
   alerts_enabled: Record<string, never>;
   alerts_disabled: Record<string, never>;

@@ -14,6 +14,7 @@ import { MINING_PERIOD_PRESETS } from "../../shared/miningSchedule";
 import { IconClose } from "../icons";
 import { signPreparedClaim } from "../onchain/preparedClaim";
 import { useDiggoWallet } from "../wallet";
+import { MineShare } from "./MineShare";
 import { useDialog } from "./useDialog";
 
 const PENDING_KEY = "diggo:pending-mine";
@@ -67,6 +68,7 @@ export function AddCoinForm({ onAdded }: { onAdded(): void }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [failed, setFailed] = useState(false);
+  const [added, setAdded] = useState<{ mint: string; symbol: string } | null>(null);
   const set = (key: keyof typeof form) => (event: { target: { value: string } }) => setForm((current) => ({ ...current, [key]: event.target.value }));
 
   async function signIn(): Promise<void> {
@@ -96,7 +98,8 @@ export function AddCoinForm({ onAdded }: { onAdded(): void }) {
         writePending(null);
         setPending(null);
         setFailed(false);
-        setMessage(`$${details.symbol.toUpperCase()} is now a mine. Bots start digging it right away.`);
+        setMessage(`$${details.symbol.toUpperCase()} is now a mine. Bots start digging it right away. Share its link with your community: whoever opens it digs your coin.`);
+        setAdded({ mint: details.mint, symbol: details.symbol.toUpperCase() });
         onAdded();
         return;
       } catch (error) {
@@ -192,6 +195,7 @@ export function AddCoinForm({ onAdded }: { onAdded(): void }) {
           </form>
         )}
         {message && <p className={"form-message" + (failed ? " admin-job-error" : "")} role="status">{message}</p>}
+        {added && <MineShare mint={added.mint} symbol={added.symbol} location="add_coin" />}
     </>
   );
 }

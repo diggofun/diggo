@@ -10,9 +10,12 @@ import { PendingTransactionProvider } from "./onchain";
 import { useDiggoWallet } from "./wallet";
 import { startTheme } from "./preferences";
 import { captureAcquisition } from "./acquisition";
+import { captureMineLink } from "./mineLink";
 
 startTheme();
 captureAcquisition();
+// Before the app reads the path: /m/<mint> becomes the mine page.
+captureMineLink();
 
 function PendingScope() {
   const wallet = useDiggoWallet();
