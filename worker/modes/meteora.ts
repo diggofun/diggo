@@ -16,7 +16,8 @@ import {
   type GameHandlerContext,
   type PlayerGameState,
 } from "../game/service";
-import { gameChainMode, MINING_RESERVE, type GameCoin, type GameCoinSource, type GameEnv, type GamePlayerState, type GamePortfolioSource, type GameServices, type GameWalletSource, type MiningPayout } from "../game/contracts";
+import { activeSponsoredCoins, sponsoredCoinByMint } from "../sponsored";
+import { gameChainMode, isPayableCoin, MINING_RESERVE, type GameCoin, type GameCoinSource, type GameEnv, type GamePlayerState, type GamePortfolioSource, type GameServices, type GameWalletSource, type MiningPayout } from "../game/contracts";
 import { wholeTokens } from "../game/store";
 import { MINING_ALLOCATION_DAYS } from "../game/rules";
 import { getSolUsd } from "../oracle";
@@ -135,17 +136,21 @@ function poolRow(row: Record<string, unknown>): GameCoin {
   };
 }
 
+/** Launches on the Diggo Meteora config, plus the sponsored mines (worker/sponsored.ts). */
 export function meteoraCoinSource(env: GameEnv): GameCoinSource {
   const config = () => String(env.METEORA_DBC_CONFIG || "");
   return {
     async listActiveMines() {
-      if (!config()) return [];
+      const sponsored = await activeSponsoredCoins(env.DB);
+      if (!config()) return sponsored;
       const result = await env.DB.prepare(
         "SELECT base_mint, name, symbol, created_at, is_graduated FROM meteora_pools WHERE config=?1 AND is_graduated=0 ORDER BY created_at DESC",
       ).bind(config()).all<Record<string, unknown>>();
-      return (result.results ?? []).map(poolRow);
+      return [...(result.results ?? []).map(poolRow), ...sponsored];
     },
     async getMine(mint) {
+      const sponsored = await sponsoredCoinByMint(env.DB, mint);
+      if (sponsored) return sponsored;
       if (!config()) return null;
       const row = await env.DB.prepare(
         "SELECT base_mint, name, symbol, created_at, is_graduated FROM meteora_pools WHERE config=?1 AND base_mint=?2",
@@ -385,8 +390,10 @@ export async function meteoraPortfolio(env: RuntimeEnvLike, wallet: string) {
   const result = await readPlayerState(env, wallet);
   const state = result.state;
   const graduated = state.activeMine?.coin?.graduated ?? false;
+  // A sponsored mine pays out without graduating, so nothing of it waits on graduation.
+  const payable = isPayableCoin(state.activeMine?.coin);
   const claimable = state.activeMine?.balance.claimable ?? "0";
-  return json({ portfolio: { wallet, game: { ...state, stale: result.stale }, claimable, pendingUntilGraduation: graduated ? "0" : claimable, graduated, stale: result.stale } }, { headers: staleHeaders(result.stale) });
+  return json({ portfolio: { wallet, game: { ...state, stale: result.stale }, claimable, pendingUntilGraduation: payable ? "0" : claimable, graduated, stale: result.stale } }, { headers: staleHeaders(result.stale) });
 }
 
 export async function meteoraMineInfo(env: RuntimeEnvLike, slug: string, wallet: string | null) {

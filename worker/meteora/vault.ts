@@ -19,6 +19,7 @@ import { sendAndConfirmWithFeePayer } from "../chainV2";
 import {
   buildAssociatedTokenAccountInstruction,
   decodeTokenAccountAmount,
+  decodeTokenMint,
   deriveAssociatedTokenAddress,
   meteoraRpcEnv,
   readAccount,
@@ -175,6 +176,7 @@ export async function buildPreparedMiningClaimTransaction(params: {
   mint: string;
   destination: string;
   amount: bigint;
+  decimals?: number;
 }) {
   return partiallySignTransactionWithSigners(
     [params.vault],
@@ -198,6 +200,7 @@ export async function buildPreparedMiningClaimTransaction(params: {
             destination: params.destination,
             amount: params.amount,
             authority: params.vault.address,
+            decimals: params.decimals,
           }),
         ],
         message,
@@ -320,7 +323,7 @@ export async function buildPreparedClaimBatchTransaction(params: {
   vault: KeyPairSigner;
   player: string;
   blockhash: Parameters<typeof setTransactionMessageLifetimeUsingBlockhash>[0];
-  items: { mint: string; amount: bigint }[];
+  items: { mint: string; amount: bigint; decimals?: number }[];
 }) {
   const instructions = params.items.flatMap((item) => {
     const destination = deriveAssociatedTokenAddress(item.mint, params.player);
@@ -337,6 +340,7 @@ export async function buildPreparedClaimBatchTransaction(params: {
         destination,
         amount: item.amount,
         authority: params.vault.address,
+        decimals: item.decimals,
       }),
     ];
   });
@@ -442,6 +446,18 @@ export async function runVaultSweep(env: MeteoraRpcEnv): Promise<{ checked: numb
   return { checked: (rows.results ?? []).length, withdrawn, failed, balances: withdrawn };
 }
 
+/**
+ * The decimals TransferChecked must carry for this mint, read from the mint account itself. Only
+ * classic SPL Token mints can be paid: the transfer is built for that program, and a Token-2022
+ * mint (transfer fees, hooks) would fail or pay less than the player was promised.
+ */
+export async function payoutMintDecimals(env: MeteoraRpcEnv, mint: string): Promise<number> {
+  const account = await readAccount(env, mint);
+  if (!account) throw new Error("reward mint does not exist");
+  if (account.owner !== undefined && account.owner !== METEORA_TOKEN_PROGRAM_ID) throw new Error("reward mint is not a classic SPL Token mint");
+  return decodeTokenMint(account.data).decimals;
+}
+
 export async function prepareMiningClaim(params: MeteoraClaimParams): Promise<PreparedMiningClaim> {
   const { env, amount } = params;
   if (amount <= 0n || amount > MAX_U64) throw new Error("claim amount must be a positive u64");
@@ -498,9 +514,10 @@ export async function prepareMiningClaim(params: MeteoraClaimParams): Promise<Pr
     const signer = await loadMiningVaultSigner(env);
     const source = deriveAssociatedTokenAddress(mint, signer.address);
     const destination = deriveAssociatedTokenAddress(mint, wallet);
-    const [sourceAccount, blockhash] = await Promise.all([
+    const [sourceAccount, blockhash, decimals] = await Promise.all([
       readAccount(env, source),
       getChainRpc(meteoraRpcEnv(env)).getLatestBlockhash({ commitment: "confirmed" }).send(),
+      payoutMintDecimals(env, mint),
     ]);
     if (!sourceAccount) throw new Error("mining vault token account does not exist");
     const transaction = await buildPreparedMiningClaimTransaction({
@@ -511,6 +528,7 @@ export async function prepareMiningClaim(params: MeteoraClaimParams): Promise<Pr
       mint,
       destination,
       amount,
+      decimals,
     });
     const wireTransaction = getBase64EncodedWireTransaction(transaction);
     const now = nowSeconds();
@@ -608,7 +626,9 @@ export function verifyMiningClaimTransfer(
     }
   })();
   const transfer = readTransferChecked(transferData);
-  if (!transfer || transfer.decimals !== PAYOUT_TOKEN_DECIMALS || transfer.amount !== expected.amount) return false;
+  // TransferChecked makes the token program itself refuse decimals that differ from the mint's, so a
+  // landed transfer already proves them; only the amount is ours to check.
+  if (!transfer || transfer.amount !== expected.amount) return false;
   const sourceOwner = transaction.preTokenBalances.find((row) => transaction.accountKeys[row.accountIndex] === expected.source)?.owner;
   const destinationOwner = transaction.postTokenBalances.find((row) => transaction.accountKeys[row.accountIndex] === expected.destination)?.owner;
   return sourceOwner === expected.vault && destinationOwner === expected.wallet &&
@@ -663,7 +683,7 @@ export function verifyClaimBatchTransfer(
       }
     })();
     const decoded = readTransferChecked(transferData);
-    if (!decoded || decoded.decimals !== PAYOUT_TOKEN_DECIMALS) return false;
+    if (!decoded) return false;
     const amount = decoded.amount;
     const key = `${mint}:${amount.toString()}`;
     if (!remaining.has(key)) return false;
@@ -970,8 +990,10 @@ export async function prepareClaimBatch(params: {
     // Every amount must be covered by the vault's real token account for that mint. This is the
     // funding proof: a reward reserved in game accounting but absent from the vault ATA is not
     // payable, and signing anyway would produce a transaction the network rejects.
+    const decimalsByMint = new Map<string, number>();
     for (const item of items) {
       if (item.amount > perDay) throw new Error("claim batch exceeds MINING_CLAIM_PER_DAY");
+      decimalsByMint.set(item.mint, await payoutMintDecimals(env, item.mint));
       const source = deriveAssociatedTokenAddress(item.mint, signer.address);
       const sourceAccount = await readAccount(env, source);
       if (!sourceAccount) throw new Error("mining vault token account does not exist for this reward");
@@ -998,7 +1020,7 @@ export async function prepareClaimBatch(params: {
       vault: signer,
       player: wallet,
       blockhash: blockhashResponse.value,
-      items: items.map((item) => ({ mint: item.mint, amount: item.amount })).sort((a, b) => a.mint.localeCompare(b.mint)),
+      items: items.map((item) => ({ mint: item.mint, amount: item.amount, decimals: decimalsByMint.get(item.mint) })).sort((a, b) => a.mint.localeCompare(b.mint)),
     });
     const wire = getBase64EncodedWireTransaction(transaction);
     const expiresAt = now + MINING_CLAIM_TRANSACTION_TTL_SECONDS;

@@ -125,11 +125,13 @@ export class D1GameStore implements GameStore {
     return row ? mineFromRow(row) : null;
   }
 
-  async ensureMine(mint: string, startsAt: number, totalEligiblePower: number, now: number): Promise<GameMineLedger> {
+  async ensureMine(mint: string, startsAt: number, totalEligiblePower: number, now: number, reserve: bigint = MINING_RESERVE): Promise<GameMineLedger> {
+    if (reserve <= 0n) throw new Error("A mine needs a positive reserve");
+    // INSERT OR IGNORE: the reserve is fixed by the first insert and never rewritten.
     await this.db.prepare(
       "INSERT OR IGNORE INTO game_mines (mint, mining_starts_at, initial_reserve, remaining, total_eligible_power, updated_at)" +
         " VALUES (?1, ?2, ?3, ?3, ?4, ?5)",
-    ).bind(mint, startsAt, MINING_RESERVE.toString(), String(totalEligiblePower), now).run();
+    ).bind(mint, startsAt, reserve.toString(), String(totalEligiblePower), now).run();
     const mine = await this.getMine(mint);
     if (!mine) throw new Error("Game mine could not be created");
     return mine;
@@ -137,8 +139,8 @@ export class D1GameStore implements GameStore {
 
   async saveMine(mine: GameMineLedger, expectedVersion: number): Promise<boolean> {
     if (
-      mine.initialReserve !== MINING_RESERVE ||
-      mine.remaining !== MINING_RESERVE - mine.committed ||
+      mine.initialReserve <= 0n ||
+      mine.remaining !== mine.initialReserve - mine.committed ||
       mine.released < 0n || mine.released > mine.initialReserve ||
       mine.committed < 0n || mine.committed > mine.released ||
       mine.paid < 0n || mine.paid > mine.committed
@@ -150,7 +152,7 @@ export class D1GameStore implements GameStore {
         " AND CAST(?3 AS INTEGER) <= CAST(?1 AS INTEGER) AND CAST(?4 AS INTEGER) <= CAST(?3 AS INTEGER)",
     ).bind(
       mine.released.toString(), mine.remaining.toString(), mine.committed.toString(), mine.paid.toString(),
-      mine.totalEligiblePower, Math.floor(Date.now() / 1_000), mine.mint, expectedVersion, MINING_RESERVE.toString(),
+      mine.totalEligiblePower, Math.floor(Date.now() / 1_000), mine.mint, expectedVersion, mine.initialReserve.toString(),
     ).run();
     return result.meta.changes === 1;
   }
@@ -211,8 +213,8 @@ export class D1GameStore implements GameStore {
     now: number,
   ): Promise<boolean> {
     if (
-      mine.initialReserve !== MINING_RESERVE ||
-      mine.remaining !== MINING_RESERVE - mine.committed ||
+      mine.initialReserve <= 0n ||
+      mine.remaining !== mine.initialReserve - mine.committed ||
       mine.released < 0n || mine.released > mine.initialReserve ||
       mine.committed < 0n || mine.committed > mine.released
     ) return false;

@@ -11,7 +11,7 @@ import {
 } from "../auth";
 import { apiError, checkRateLimit, checkWalletRateLimit, isBase58Address, isBase58Signature, json, readJson } from "../http";
 import type { GameEnv, GameServices } from "./contracts";
-import { gameChainMode, TOKEN_SCALE, type GameCoin, type GamePlayerState } from "./contracts";
+import { coinDecimals, coinReserve, gameChainMode, isPayableCoin, wholeAmount, type GameCoin, type GamePlayerState } from "./contracts";
 import { d1GameStore } from "./d1-store";
 import {
   accrueMining,
@@ -57,12 +57,12 @@ function contextStore(context: GameHandlerContext): GameStore {
 
 type GamePlayerStateLike = GamePlayerState;
 
-function serializeClaim(claim: GameClaim) {
+function serializeClaim(claim: GameClaim, coin: GameCoin | null = null) {
   return {
     id: claim.id,
     mint: claim.mint,
     amount: claim.amount.toString(),
-    amountWhole: Number(claim.amount) / Number(TOKEN_SCALE),
+    amountWhole: wholeAmount(claim.amount, coin),
     kind: claim.kind,
     status: claim.status,
     signature: claim.signature,
@@ -71,7 +71,7 @@ function serializeClaim(claim: GameClaim) {
 }
 
 function serializeClaimWithCoin(claim: GameClaim, coin: import("./contracts").GameCoin | null) {
-  return { ...serializeClaim(claim), name: coin?.name ?? null, symbol: coin?.symbol ?? null };
+  return { ...serializeClaim(claim, coin), name: coin?.name ?? null, symbol: coin?.symbol ?? null, sponsored: coin?.sponsored === true };
 }
 
 async function authenticatedWallet(context: GameHandlerContext, request: Request, action: string): Promise<string | null> {
@@ -322,11 +322,12 @@ export async function settleMining(
   if (!window) return player;
   const assignedPower = player.activeMiningPower || playerCrewPower(player);
   if (assignedPower <= 0) return player;
-  const mine = await store.ensureMine(coin.mint, coin.miningStartsAt, assignedPower, now);
+  const mine = await store.ensureMine(coin.mint, coin.miningStartsAt, assignedPower, now, coinReserve(coin));
   const visibleEligiblePower = await store.getEligiblePower(coin.mint, now);
   const totalEligiblePower = Math.max(assignedPower, visibleEligiblePower);
-  const releasedBefore = releasedMiningAllocation(window.start, coin.miningStartsAt);
-  const releasedNow = releasedMiningAllocation(window.end, coin.miningStartsAt);
+  // Released against the reserve the mine was created with, not the default launch allocation.
+  const releasedBefore = releasedMiningAllocation(window.start, coin.miningStartsAt, mine.initialReserve, coin.miningSeconds);
+  const releasedNow = releasedMiningAllocation(window.end, coin.miningStartsAt, mine.initialReserve, coin.miningSeconds);
   const next = accrueMining({
     mine: coin,
     wallet: player.wallet,
@@ -401,6 +402,7 @@ interface ClaimableItem {
   claimIds: string[];
   name: string | null;
   symbol: string | null;
+  decimals: number;
 }
 
 /** Why a reward is being held back from this batch. Reported verbatim so the client can explain itself. */
@@ -410,6 +412,7 @@ export interface PendingClaim {
   mint: string;
   name: string | null;
   symbol: string | null;
+  decimals: number;
   amount: bigint;
   claimIds: string[];
   reason: PendingClaimReason;
@@ -452,19 +455,19 @@ export async function collectClaimable(
   // transfers to the same associated token account would be redundant and would trip the vault's
   // one-item-per-mint rule. One transfer settles all of that mint's claims at once.
   const byMint = new Map<string, ClaimableItem>();
-  const add = (mint: string, claimId: string, amount: bigint, name: string | null, symbol: string | null) => {
+  const add = (mint: string, claimId: string, amount: bigint, coin: GameCoin | null) => {
     const existing = byMint.get(mint);
     if (existing) {
       existing.amount += amount;
       existing.claimIds.push(claimId);
       return;
     }
-    byMint.set(mint, { mint, amount, claimIds: [claimId], name, symbol });
+    byMint.set(mint, { mint, amount, claimIds: [claimId], name: coin?.name ?? null, symbol: coin?.symbol ?? null, decimals: coinDecimals(coin) });
   };
   const pending = (await store.listClaimsForWallet(wallet)).filter((claim) => claim.status === "PENDING");
   for (const claim of pending) {
     const coin = await context.services.coins.getMine(claim.mint);
-    add(claim.mint, claim.id, claim.amount, coin?.name ?? null, coin?.symbol ?? null);
+    add(claim.mint, claim.id, claim.amount, coin);
   }
   for (const entry of await store.listBalances(wallet)) {
     if (entry.claimable <= 0n) continue;
@@ -475,7 +478,7 @@ export async function collectClaimable(
       entry.claimable,
     );
     if (created) {
-      add(created.mint, created.id, created.amount, coin?.name ?? null, coin?.symbol ?? null);
+      add(created.mint, created.id, created.amount, coin);
     }
   }
 
@@ -491,7 +494,7 @@ export async function collectClaimable(
       held.push({ ...candidate, reason: "awaiting_graduation" });
       continue;
     }
-    if (!coin.graduated) {
+    if (!isPayableCoin(coin)) {
       held.push({ ...candidate, reason: "awaiting_graduation" });
       continue;
     }
@@ -566,7 +569,7 @@ export async function handleClaimAll(context: GameHandlerContext, request: Reque
     name: entry.name,
     symbol: entry.symbol,
     amount: entry.amount.toString(),
-    amountWhole: (Number(entry.amount) / Number(TOKEN_SCALE)).toString(),
+    amountWhole: wholeAmount(entry.amount, entry).toString(),
     reason: entry.reason,
   }));
   if (items.length === 0) {
@@ -605,7 +608,7 @@ export async function handleClaimAll(context: GameHandlerContext, request: Reque
           name: known?.name ?? null,
           symbol: known?.symbol ?? null,
           amount: item.amount.toString(),
-          amountWhole: (Number(item.amount) / Number(TOKEN_SCALE)).toString(),
+          amountWhole: wholeAmount(item.amount, known).toString(),
         };
       }),
       signatureCount: 1,
@@ -726,6 +729,12 @@ export function discoveryClaimId(wallet: string, epoch: number): string {
  * and the scheduled sweep can both call this and at most one pending reward per wallet per day is
  * ever recorded.
  */
+/** A discovery is worth 0.001 of a whole token, whatever the mint's decimals (1_000_000 raw at 9). */
+export function discoveryAmount(coin: Pick<GameCoin, "decimals">): bigint {
+  const amount = 10n ** BigInt(coinDecimals(coin)) / 1_000n;
+  return amount > 0n ? amount : 1n;
+}
+
 export async function attemptDiscovery(context: GameHandlerContext, player: GamePlayerStateLike): Promise<DiscoveryAttempt> {
   const store = contextStore(context);
   const wallet = player.wallet;
@@ -746,9 +755,9 @@ export async function attemptDiscovery(context: GameHandlerContext, player: Game
   const id = discoveryId({ secret, epoch, wallet });
   const coin = pickDiscoveryMint(id, coins);
   if (!coin) return { ok: false, status: 409, message: "No discovery coin is available" };
-  const mine = await store.ensureMine(coin.mint, coin.miningStartsAt, 1, now);
+  const mine = await store.ensureMine(coin.mint, coin.miningStartsAt, 1, now, coinReserve(coin));
   const claim = await store.createDiscovery(
-    { id, wallet, mint: coin.mint, amount: 1_000_000n, claimId: discoveryClaimId(wallet, epoch), epoch, createdAt: now },
+    { id, wallet, mint: coin.mint, amount: discoveryAmount(coin), claimId: discoveryClaimId(wallet, epoch), epoch, createdAt: now },
     mine.remaining,
   );
   if (!claim) return { ok: true, discovered: false, reason: "already_dispatched_or_reserve_empty" };
@@ -858,7 +867,7 @@ export async function getPlayerGameStateDetail(
       name: metadata?.name ?? null,
       symbol: metadata?.symbol ?? null,
       claimable: entry.claimable.toString(),
-      amountWhole: Number(entry.claimable) / Number(TOKEN_SCALE),
+      amountWhole: wholeAmount(entry.claimable, metadata),
       lastSettledAt: entry.lastSettledAt,
     };
   }));
@@ -873,7 +882,7 @@ export async function getPlayerGameStateDetail(
     claim,
     activeMine: coin ? {
       coin,
-      balance: { claimable: balance?.claimable.toString() ?? "0", amountWhole: Number(balance?.claimable ?? 0n) / Number(TOKEN_SCALE), lastSettledAt: balance?.lastSettledAt ?? 0 },
+      balance: { claimable: balance?.claimable.toString() ?? "0", amountWhole: wholeAmount(balance?.claimable ?? 0n, coin), lastSettledAt: balance?.lastSettledAt ?? 0 },
       reserve: mine ? {
         initial: mine.initialReserve.toString(), released: mine.released.toString(), committed: mine.committed.toString(),
         paid: mine.paid.toString(), remaining: mine.remaining.toString(),
@@ -902,7 +911,7 @@ async function countPayableMints(context: GameHandlerContext, wallet: string): P
   let payable = 0;
   for (const mint of mints) {
     const coin = await context.services.coins.getMine(mint);
-    if (!coin?.graduated) continue;
+    if (!isPayableCoin(coin)) continue;
     const inventory = await context.services.payout.vaultInventory(mint);
     if (inventory && inventory.available > 0n) payable += 1;
   }

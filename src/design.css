@@ -620,3 +620,18 @@ details > summary { cursor: pointer; }
 .share-card-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .share-card-note { margin: 0; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
 .hero h1 .grad-word { white-space: nowrap; }
+
+/* Sponsored mines (SponsoredMines.tsx). */
+.sponsored-mines { display: grid; gap: 4px; }
+.sponsored-mines .section-heading { margin-bottom: 12px; }
+.sponsored-mines .section-heading h2 { margin: 0; font-size: 22px; }
+.sponsored-mines .section-heading small { color: var(--muted); }
+.sponsored-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 12px; }
+.sponsored-card .mine-panel-coin { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.sponsored-card .mine-panel-coin > div:not(.token-orb) { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.sponsored-card .mine-panel-coin small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sponsored-card .mine-panel-coin a { color: inherit; text-decoration: underline; }
+.sponsored-card .payout-amount small { color: var(--muted); font-size: 16px; font-weight: 500; }
+.sponsored-badge { color: #34d399; }
+.sponsored-admin-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 8px; }
+.sponsored-admin-form input { min-width: 0; }

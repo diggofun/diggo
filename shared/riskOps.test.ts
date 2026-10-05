@@ -183,6 +183,8 @@ describe("appeals config", () => {
       "breaker.open",
       "restriction.lift",
       "restriction.set",
+      "sponsor.close",
+      "sponsor.register",
     ]);
     expect(isAdminStepUpAction("breaker.open")).toBe(true);
     expect(isAdminStepUpAction("funds.move")).toBe(false);

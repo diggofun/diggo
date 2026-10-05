@@ -2,6 +2,7 @@ import type { TokenSummary } from "../../shared/types";
 import { crewPower, crewTier, upgradeOreCost } from "../../shared/economics";
 import { CREW_BOTS, CREW_COMPONENTS, CREW_COMPONENT_LABELS, CREW_ROLES } from "../crewLabels";
 import { compact, countdown, oreAmount, shortAddress, tokenAmount } from "../format";
+import { SponsoredMines } from "./SponsoredMines";
 import type { GameCrewComponent, GameState, MeteoraPortfolio } from "../api";
 import { IconCheck } from "../icons";
 import { MineScene } from "./MineScene";
@@ -55,6 +56,8 @@ export function MeteoraMineDashboard({ game, mine, now, connected, activating, e
   const active = game?.activation.active ?? false;
   const crew = validCrew(game);
   const tier = game ? crewTier(crew) : null;
+  // A sponsored mine has no market listing, so its name comes from the game's own coin record.
+  const sponsored = !mine && game?.activeMine?.coin.sponsored ? game.activeMine.coin : null;
   return (
     <section className="screen page-shell" id="mine">
       <header className="screen-head">
@@ -65,10 +68,14 @@ export function MeteoraMineDashboard({ game, mine, now, connected, activating, e
         <MineScene tier={tier?.tier ?? 1} active={active} />
         <div className="mine-panel-bar" role="status">
           <div className="mine-panel-coin">
-            {mine ? <TokenOrb symbol={mine.symbol} imageUrl={mine.imageUrl} /> : null}
+            {mine ? <TokenOrb symbol={mine.symbol} imageUrl={mine.imageUrl} /> : sponsored ? <TokenOrb symbol={sponsored.symbol} imageUrl={null} /> : null}
             <div>
-              <strong>{mine?.name ?? "No mine yet"}</strong>
-              <small>{mine ? "$" + mine.symbol + " · assigned for this shift" : "A mine is assigned when your shift starts"}</small>
+              <strong>{mine?.name ?? sponsored?.name ?? "No mine yet"}</strong>
+              <small>
+                {mine ? "$" + mine.symbol + " · assigned for this shift"
+                  : sponsored ? <><span className="sponsored-badge">Sponsored</span>{" · $" + sponsored.symbol + (sponsored.sponsor ? " by " + sponsored.sponsor : "") + " · pays out now"}</>
+                  : "A mine is assigned when your shift starts"}
+              </small>
             </div>
           </div>
           <span className={"pill " + (active ? "is-on" : "is-off")}>
@@ -86,6 +93,7 @@ export function MeteoraMineDashboard({ game, mine, now, connected, activating, e
         <Stat label="ORE" value={oreAmount(game?.oreBalance ?? 0)} note={"Earned " + oreAmount(game?.oreEarned ?? 0)} />
         <Stat label="Active days" value={String(game?.activeDays ?? 0)} note={(game?.streakFreezes ?? 0) + " freezes"} />
       </div>
+      <SponsoredMines now={now} activeMint={game?.activeMine?.coin.mint ?? null} />
     </section>
   );
 }
@@ -299,7 +307,9 @@ export function MeteoraDiscoveriesScreen({ game, tokens, connected, busy, error,
 export function MeteoraPortfolioScreen({ game, portfolio, tokens }: { game: GameState | null; portfolio: MeteoraPortfolio | null; tokens: TokenSummary[] }) {
   const mine = game?.activeMine ?? null;
   const token = mine ? tokens.find((candidate) => candidate.mint === mine.coin.mint) ?? null : null;
-  const claimable = Number(mine?.balance.claimable ?? portfolio?.claimable ?? 0);
+  // Whole tokens: the raw claimable string is in the mint's smallest units.
+  const claimable = mine ? mine.balance.amountWhole : Number(portfolio?.claimable ?? 0) / 1e9;
+  const sponsored = mine?.coin.sponsored === true;
   const threshold = Number(token?.migrationQuoteThreshold ?? 0);
   const quoteReserve = Number(token?.quoteReserve ?? 0);
   const reserve = threshold > 0 && quoteReserve > 0 ? Math.max(0, Math.min(1, quoteReserve / threshold)) : 0;
@@ -327,13 +337,13 @@ export function MeteoraPortfolioScreen({ game, portfolio, tokens }: { game: Game
             {token && <TokenOrb symbol={token.symbol} imageUrl={token.imageUrl} large />}
             <div>
               <strong>{mine.coin.name}</strong>
-              <small>{graduated ? "Ready to collect" : "Payouts may stay pending until the coin graduates"}</small>
+              <small>{graduated || sponsored ? "Ready to collect" : "Payouts may stay pending until the coin graduates"}</small>
             </div>
           </div>
-          <strong className="payout-amount">{tokenAmount(claimable)} {token ? "$" + token.symbol : "tokens"}</strong>
-          <div className="progress" aria-label="Progress to graduation"><i style={{ width: Math.round(reserve * 100) + "%" }} /></div>
+          <strong className="payout-amount">{tokenAmount(claimable)} {"$" + (token?.symbol ?? mine.coin.symbol)}</strong>
+          {!sponsored && <div className="progress" aria-label="Progress to graduation"><i style={{ width: Math.round(reserve * 100) + "%" }} /></div>}
           <div className="payout-foot">
-            <span>{Math.round(reserve * 100)}% of the graduation target</span>
+            <span>{sponsored ? "Sponsored mine · pays out now" : Math.round(reserve * 100) + "% of the graduation target"}</span>
             <a className="btn btn-primary" href="/discoveries">Open Discoveries</a>
           </div>
         </article>

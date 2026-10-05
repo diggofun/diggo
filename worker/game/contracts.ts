@@ -16,6 +16,45 @@ export interface GameCoin {
   /** Unix seconds at which off-chain mining becomes available for this launch. */
   miningStartsAt: number;
   graduated: boolean;
+  /**
+   * A sponsored mine: a project deposited tokens of an existing mint into the mining vault. It has
+   * no bonding curve to graduate from, so it pays out as soon as the vault holds the deposit.
+   */
+  sponsored?: boolean;
+  /**
+   * The raw amount this mine releases over the mining period, as a decimal string so the coin stays
+   * JSON-safe in API responses. Defaults to MINING_RESERVE.
+   */
+  reserve?: string;
+  /** The mint's decimals. Defaults to TOKEN_DECIMALS. */
+  decimals?: number;
+  /** How long the reserve takes to release, in seconds. Defaults to the launch allocation period. */
+  miningSeconds?: number;
+  /** Who funded a sponsored mine, for display. */
+  sponsor?: string;
+}
+
+export function coinReserve(coin: Pick<GameCoin, "reserve">): bigint {
+  if (coin.reserve === undefined || !/^[1-9][0-9]{0,30}$/.test(coin.reserve)) return MINING_RESERVE;
+  return BigInt(coin.reserve);
+}
+
+export function coinDecimals(coin: Pick<GameCoin, "decimals"> | null | undefined): number {
+  const decimals = coin?.decimals;
+  return decimals !== undefined && Number.isInteger(decimals) && decimals >= 0 && decimals <= 18 ? decimals : TOKEN_DECIMALS;
+}
+
+/** Raw units to whole tokens for display. */
+export function wholeAmount(raw: bigint, coin: Pick<GameCoin, "decimals"> | null | undefined): number {
+  return Number(raw) / 10 ** coinDecimals(coin);
+}
+
+/**
+ * Whether rewards of this coin can be transferred. A launch pays out after it graduates; a
+ * sponsored mine pays out from the start, since its tokens already trade and sit in the vault.
+ */
+export function isPayableCoin(coin: Pick<GameCoin, "graduated" | "sponsored"> | null | undefined): boolean {
+  return Boolean(coin && (coin.graduated || coin.sponsored));
 }
 
 /** Integration seam implemented by worker/meteora in the routing integration step. */

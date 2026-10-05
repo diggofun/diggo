@@ -403,11 +403,8 @@ describe("Meteora vault instructions", () => {
       ...base,
       instructions: [base.instructions[0], { ...base.instructions[1], data: bs58.encode(Uint8Array.of(12, 9, 0, 0, 0, 0, 0, 0, 0, 9)) }],
     }, expected)).toBe(false);
-    // Wrong decimals, and the plain Transfer opcode with this account order, are both refused.
-    expect(verifyMiningClaimTransfer({
-      ...base,
-      instructions: [base.instructions[0], { ...base.instructions[1], data: bs58.encode(Uint8Array.of(12, 10, 0, 0, 0, 0, 0, 0, 0, 6)) }],
-    }, expected)).toBe(false);
+    // The plain Transfer opcode with this account order is refused. (Decimals are not compared: the
+    // token program rejects a TransferChecked whose decimals differ from the mint's.)
     expect(verifyMiningClaimTransfer({
       ...base,
       instructions: [base.instructions[0], { ...base.instructions[1], data: bs58.encode(Uint8Array.of(3, 10, 0, 0, 0, 0, 0, 0, 0)) }],

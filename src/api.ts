@@ -41,6 +41,7 @@ import { normalizeMineInfo, normalizeTokenSummaries, normalizeTokenSummary } fro
 import { officialMintFromEnv } from "../shared/officialMint";
 import type { AdminDashboardPayload } from "../shared/adminDashboard";
 import type { ProfileBot } from "../shared/profileBot";
+import type { SponsoredMineView } from "../shared/sponsoredMine";
 
 /** An HTTP failure carrying the Worker's status and machine-readable code. */
 export class ApiError extends Error {
@@ -831,6 +832,10 @@ export interface GameCoin {
   createdAt: number;
   miningStartsAt: number;
   graduated: boolean;
+  /** A sponsored mine: a project's deposited tokens, paid out without graduation. */
+  sponsored?: boolean;
+  sponsor?: string;
+  decimals?: number;
 }
 
 export interface GameClaim {
@@ -1044,6 +1049,36 @@ export async function adminSignedRequest<T>(
   const signature = bs58.encode(await signMessage(new TextEncoder().encode(issued.message)));
   const stepUp: AdminStepUpProof = { nonce: issued.nonce, signature };
   return adminRequest<T>(path, { body: { ...payload, stepUp } });
+}
+
+export async function getSponsoredMines(): Promise<SponsoredMineView[]> {
+  return (await getJson<{ mines: SponsoredMineView[] }>("/api/sponsored-mines")).mines ?? [];
+}
+
+export interface SponsoredMineRegistration {
+  mint: string;
+  symbol: string;
+  name: string;
+  sponsor: string;
+  sponsorUrl?: string;
+  reserve: string;
+  days: number;
+}
+
+/** Registers a deposit in the mining vault as a sponsored mine; signed by the admin wallet. */
+export function registerSponsoredMine(
+  input: SponsoredMineRegistration,
+  signMessage: (message: Uint8Array) => Promise<Uint8Array>,
+): Promise<{ mint: string; decimals: number; reserve: string; startsAt: number; endsAt: number }> {
+  return adminSignedRequest("/api/admin/sponsored-mines", "sponsor.register", { ...input }, signMessage);
+}
+
+/** Stops new mining on a sponsored mine; what players already earned stays payable. */
+export function closeSponsoredMine(
+  mint: string,
+  signMessage: (message: Uint8Array) => Promise<Uint8Array>,
+): Promise<{ mint: string; closed: boolean }> {
+  return adminSignedRequest("/api/admin/sponsored-mines/close", "sponsor.close", { mint }, signMessage);
 }
 
 export async function setBreaker(input: {

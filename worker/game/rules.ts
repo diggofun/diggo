@@ -41,10 +41,12 @@ export function releasedMiningAllocation(
   now: number,
   startsAt: number,
   total: bigint = RESERVE,
+  seconds: number = MINING_SECONDS,
 ): bigint {
   if (total <= 0n || now <= startsAt) return 0n;
-  const elapsed = BigInt(Math.min(MINING_SECONDS, Math.max(0, Math.floor(now - startsAt))));
-  return (total * elapsed) / BigInt(MINING_SECONDS);
+  const period = Number.isSafeInteger(seconds) && seconds > 0 ? seconds : MINING_SECONDS;
+  const elapsed = BigInt(Math.min(period, Math.max(0, Math.floor(now - startsAt))));
+  return (total * elapsed) / BigInt(period);
 }
 
 export interface MiningAccrualInput {

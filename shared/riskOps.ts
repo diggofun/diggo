@@ -187,7 +187,9 @@ export type AdminStepUpAction =
   | "restriction.lift"
   | "breaker.open"
   | "breaker.close"
-  | "appeal.resolve";
+  | "appeal.resolve"
+  | "sponsor.register"
+  | "sponsor.close";
 
 export const ADMIN_STEP_UP_ACTIONS: readonly AdminStepUpAction[] = [
   "restriction.set",
@@ -195,6 +197,8 @@ export const ADMIN_STEP_UP_ACTIONS: readonly AdminStepUpAction[] = [
   "breaker.open",
   "breaker.close",
   "appeal.resolve",
+  "sponsor.register",
+  "sponsor.close",
 ];
 
 /**

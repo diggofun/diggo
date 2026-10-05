@@ -57,7 +57,7 @@ export interface GameStore {
   savePlayer(player: GamePlayerState, expectedVersion: number): Promise<boolean>;
   playerVersion(wallet: string): Promise<number>;
   getMine(mint: string): Promise<GameMineLedger | null>;
-  ensureMine(mint: string, startsAt: number, totalEligiblePower: number, now: number): Promise<GameMineLedger>;
+  ensureMine(mint: string, startsAt: number, totalEligiblePower: number, now: number, reserve?: bigint): Promise<GameMineLedger>;
   saveMine(mine: GameMineLedger, expectedVersion: number): Promise<boolean>;
   mineVersion(mint: string): Promise<number>;
   getBalance(wallet: string, mint: string): Promise<GameBalance>;
@@ -162,14 +162,15 @@ export class MemoryGameStore implements GameStore {
     return mine ? { ...mine } : null;
   }
 
-  async ensureMine(mint: string, _startsAt: number, totalEligiblePower: number, _now: number): Promise<GameMineLedger> {
+  async ensureMine(mint: string, _startsAt: number, totalEligiblePower: number, _now: number, reserve: bigint = MINING_RESERVE): Promise<GameMineLedger> {
     const existing = await this.getMine(mint);
     if (existing) return existing;
+    if (reserve <= 0n) throw new Error("A mine needs a positive reserve");
     const mine: GameMineLedger = {
       mint,
-      initialReserve: MINING_RESERVE,
+      initialReserve: reserve,
       released: 0n,
-      remaining: MINING_RESERVE,
+      remaining: reserve,
       committed: 0n,
       paid: 0n,
       totalEligiblePower,
@@ -184,7 +185,8 @@ export class MemoryGameStore implements GameStore {
     const version = this.mineVersions.get(mine.mint) ?? 0;
     if (
       version !== expectedVersion ||
-      mine.initialReserve !== MINING_RESERVE ||
+      // The reserve is fixed when the mine is created; nothing may grow or shrink it later.
+      mine.initialReserve !== this.mines.get(mine.mint)?.initialReserve ||
       mine.released > mine.initialReserve ||
       mine.committed < 0n ||
       mine.committed > mine.released ||
@@ -254,6 +256,7 @@ export class MemoryGameStore implements GameStore {
     if (mineVersion !== expectedMineVersion) return false;
     const currentBalance = await this.getBalance(balance.wallet, balance.mint);
     if (currentBalance.claimable !== expectedClaimable) return false;
+    if (mine.initialReserve !== this.mines.get(mine.mint)?.initialReserve) return false;
     if (mine.remaining !== mine.initialReserve - mine.committed) return false;
     this.mines.set(mine.mint, { ...mine, version: mineVersion + 1 });
     this.mineVersions.set(mine.mint, mineVersion + 1);
@@ -386,7 +389,7 @@ export class MemoryGameStore implements GameStore {
 
 export function mineConservation(mine: GameMineLedger, claimableOutstanding: bigint, paid: bigint): boolean {
   return (
-    mine.initialReserve === MINING_RESERVE &&
+    mine.initialReserve > 0n &&
     mine.released <= mine.initialReserve &&
     mine.remaining === mine.initialReserve - mine.committed &&
     mine.committed <= mine.released &&
