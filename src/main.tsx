@@ -11,11 +11,14 @@ import { useDiggoWallet } from "./wallet";
 import { startTheme } from "./preferences";
 import { captureAcquisition } from "./acquisition";
 import { captureMineLink } from "./mineLink";
+import { startTelegram } from "./telegram";
 
 startTheme();
 captureAcquisition();
 // Before the app reads the path: /m/<mint> becomes the mine page.
 captureMineLink();
+// Inside Telegram: its WebApp script, and ?startapp=m_<mint> / r_<code> launch parameters.
+startTelegram();
 
 function PendingScope() {
   const wallet = useDiggoWallet();

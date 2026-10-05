@@ -713,6 +713,8 @@ export async function sendTelegramMessage(
   env: RuntimeEnv,
   chatId: string,
   text: string,
+  /** A button that opens Diggo inside Telegram as a Mini App. */
+  play?: { label: string; url: string },
 ): Promise<TelegramSendResult> {
   const config = telegramConfig(env);
   if (config === null) return { ok: false, status: 0, finished: false };
@@ -725,6 +727,7 @@ export async function sendTelegramMessage(
         chat_id: chatId,
         text: text.slice(0, MAX_TELEGRAM_TEXT_LENGTH),
         disable_web_page_preview: true,
+        ...(play ? { reply_markup: { inline_keyboard: [[{ text: play.label, web_app: { url: play.url } }]] } } : {}),
       }),
       signal: AbortSignal.timeout(TELEGRAM_TIMEOUT_MS),
     });
@@ -1003,6 +1006,17 @@ export async function startTelegramLink(request: Request, env: RuntimeEnv): Prom
   });
 }
 
+const PLAY_URL = "https://diggo.fun";
+
+/** What a /start argument opens in the Mini App: a mine (m_<mint>) or a referral (r_<code>). */
+export function telegramPlayTarget(argument: string): { url: string; text: string } | null {
+  const mine = /^m_([1-9A-HJ-NP-Za-km-z]{32,44})$/.exec(argument);
+  if (mine) return { url: PLAY_URL + "/m/" + mine[1], text: "Tap Play and your bots start digging this coin." };
+  const referral = /^r_([A-Za-z0-9_-]{2,32})$/.exec(argument);
+  if (referral) return { url: PLAY_URL + "/r/" + referral[1], text: "A friend invited you to Diggo. Tap Play to start mining memecoins." };
+  return null;
+}
+
 /**
  * POST /webhooks/telegram: the bot side of the link flow. Fails closed when no webhook secret is
  * configured or the secret header does not match, because this endpoint is reachable from the
@@ -1034,12 +1048,20 @@ export async function telegramWebhook(request: Request, env: RuntimeEnv): Promis
     return json({ ok: true, action: "unlinked" });
   }
   if (trimmed === "/start" || trimmed.startsWith("/start ")) {
-    const code = trimmed.slice("/start".length).trim().toUpperCase();
+    const argument = trimmed.slice("/start".length).trim();
+    // t.me/<bot>?start=m_<mint> and ?start=r_<code>: open the mine or the referral inside Telegram.
+    const target = telegramPlayTarget(argument);
+    if (target) {
+      await sendTelegramMessage(env, chat, target.text, { label: "⛏️ Play Diggo", url: target.url });
+      return json({ ok: true, action: "play" });
+    }
+    const code = argument.toUpperCase();
     if (code.length === 0) {
       await sendTelegramMessage(
         env,
         chat,
-        "Open Diggo.fun, sign in and turn on Telegram alerts to get a one-time code, then send it here as /start CODE.",
+        "Diggo: your bots mine Solana memecoins for you. Tap Play to start. To get alerts here, turn on Telegram alerts in the app and send the code as /start CODE.",
+        { label: "⛏️ Play Diggo", url: PLAY_URL + "/mine" },
       );
       return json({ ok: true, action: "help" });
     }
@@ -1072,6 +1094,6 @@ export async function telegramWebhook(request: Request, env: RuntimeEnv): Promis
     await sendTelegramMessage(env, chat, "Alerts are on for this chat. Send /stop to turn them off.");
     return json({ ok: true, action: "linked" });
   }
-  await sendTelegramMessage(env, chat, "Send /start CODE to link alerts, or /stop to turn them off.");
+  await sendTelegramMessage(env, chat, "Send /start CODE to link alerts, or /stop to turn them off.", { label: "⛏️ Play Diggo", url: PLAY_URL + "/mine" });
   return json({ ok: true, action: "help" });
 }
