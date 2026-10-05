@@ -824,7 +824,12 @@ export async function registerMeteoraPool(pool: string, miningDays?: number): Pr
 }
 
 /** An unsigned transaction moving `amount` whole tokens of `mint` from the signed-in wallet into the mining vault. */
-export async function prepareMineDeposit(mint: string, amount: string): Promise<{ transaction: string; expiresAt: number; amount: string; decimals: number }> {
+/** The platform fee on coins added as mines, in basis points (200 = 2%). */
+export async function getMineFee(): Promise<{ bps: number }> {
+  return getJson("/api/mines/fee");
+}
+
+export async function prepareMineDeposit(mint: string, amount: string): Promise<{ transaction: string; expiresAt: number; amount: string; reserve: string; fee: string; feeBps: number; decimals: number }> {
   return postJson("/api/mines/deposit", { mint, amount });
 }
 

@@ -6,11 +6,12 @@
  * 3. The Worker reads the confirmed transfer and opens the mine with exactly that reserve.
  * A sent deposit is remembered in this browser, so a closed tab can still finish step 3.
  */
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import bs58 from "bs58";
-import { ApiError, createProjectMine, getChallenge, prepareMineDeposit, verifyWallet, type PreparedClaimBatch, type ProjectMineDetails } from "../api";
+import { ApiError, createProjectMine, getChallenge, getMineFee, prepareMineDeposit, verifyWallet, type PreparedClaimBatch, type ProjectMineDetails } from "../api";
 import { MINING_PERIOD_PRESETS } from "../../shared/miningSchedule";
+import { feeLabel, PROJECT_MINE_FEE_BPS, splitDeposit } from "../../shared/projectMineFee";
 import { IconClose } from "../icons";
 import { signPreparedClaim } from "../onchain/preparedClaim";
 import { useDiggoWallet } from "../wallet";
@@ -41,7 +42,7 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** What putting a coin into a mine means, in one paragraph. */
 export const ADD_COIN_INTRO =
-  "Put tokens of a coin you already hold into a mine. Diggo bots dig it and players get paid out in your coin, which brings your coin new holders. The tokens you deposit are what gets mined; you can't take them back.";
+  "Put tokens of a coin you already hold into a mine. Diggo bots dig it and players get paid out in your coin, which brings your coin new holders. The tokens you deposit are what gets mined, minus a small platform fee; you can't take them back.";
 
 export function AddCoinModal({ onClose, onAdded }: { onClose(): void; onAdded(): void }) {
   const dialogRef = useDialog<HTMLElement>(onClose);
@@ -69,6 +70,13 @@ export function AddCoinForm({ onAdded }: { onAdded(): void }) {
   const [message, setMessage] = useState("");
   const [failed, setFailed] = useState(false);
   const [added, setAdded] = useState<{ mint: string; symbol: string } | null>(null);
+  const [feeBps, setFeeBps] = useState(PROJECT_MINE_FEE_BPS);
+  useEffect(() => {
+    let live = true;
+    getMineFee().then((fee) => { if (live && Number.isInteger(fee.bps)) setFeeBps(fee.bps); }).catch(() => undefined);
+    return () => { live = false; };
+  }, []);
+  const split = /^[1-9][0-9]{0,17}$/.test(form.amount) ? splitDeposit(BigInt(form.amount), feeBps) : null;
   const set = (key: keyof typeof form) => (event: { target: { value: string } }) => setForm((current) => ({ ...current, [key]: event.target.value }));
 
   async function signIn(): Promise<void> {
@@ -179,18 +187,24 @@ export function AddCoinForm({ onAdded }: { onAdded(): void }) {
               <label>Name<input required maxLength={40} value={form.name} onChange={set("name")} placeholder="Bonk" /></label>
             </div>
             <div className="form-grid">
-              <label>Tokens to put in the mine<input required inputMode="numeric" value={form.amount} onChange={(event) => setForm((current) => ({ ...current, amount: event.target.value.replace(/[^0-9]/g, "") }))} placeholder="1000000" /></label>
+              <label>Tokens to deposit<input required inputMode="numeric" value={form.amount} onChange={(event) => setForm((current) => ({ ...current, amount: event.target.value.replace(/[^0-9]/g, "") }))} placeholder="1000000" /></label>
               <label>Mining period
                 <select value={form.days} onChange={(event) => setForm((current) => ({ ...current, days: Number(event.target.value) }))}>
                   {MINING_PERIOD_PRESETS.map((preset) => <option key={preset.days} value={preset.days}>{preset.label}</option>)}
                 </select>
               </label>
             </div>
+            {split && feeBps > 0 && (
+              <p className="deposit-split" aria-live="polite">
+                <span>Mine gets <strong>{split.reserve.toLocaleString("en-US")}</strong></span>
+                <span>{feeLabel(feeBps)} platform fee: {split.fee.toLocaleString("en-US")}</span>
+              </p>
+            )}
             <div className="form-grid">
               <label>Created by<input maxLength={40} value={form.sponsor} onChange={set("sponsor")} placeholder="Your project (optional)" /></label>
               <label>Link<input value={form.sponsorUrl} onChange={set("sponsorUrl")} placeholder="https://x.com/… (optional)" /></label>
             </div>
-            <p className="form-hint">Classic SPL tokens only (pump.fun coins work). One mine per coin. You pay only the network fee.</p>
+            <p className="form-hint">Classic SPL tokens only (pump.fun coins work). One mine per coin. {feeBps > 0 ? `A ${feeLabel(feeBps)} platform fee in the same coin is part of the deposit; you also pay the network fee.` : "You pay only the network fee."}</p>
             <button className="btn btn-primary btn-lg" type="submit" disabled={busy || !connected}>{busy ? "Working…" : connected ? "Deposit and create mine" : "Connect your wallet first"}</button>
           </form>
         )}

@@ -656,3 +656,5 @@ details > summary { cursor: pointer; }
 .mine-share { display: grid; gap: 6px; }
 .mine-share-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .mine-share-note { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.deposit-split { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; margin: -4px 0 0; padding: 12px 14px; border-radius: 14px; background: var(--control); font-size: 14px; }
+.deposit-split span:last-child { color: var(--muted); }

@@ -35,7 +35,7 @@ export const GOVERNING_LAW_PLACEHOLDER = "[GOVERNING LAW AND COURTS - to be conf
 
 export const UPDATED = "3 October 2026";
 /** The Terms were revised on their own date; the other documents were not revised with them. */
-export const TERMS_UPDATED = "3 October 2026";
+export const TERMS_UPDATED = "5 October 2026";
 /** The operator fills this in with the jurisdictions its counsel has cleared or excluded. */
 export const RESTRICTED_JURISDICTIONS_PLACEHOLDER = "[RESTRICTED JURISDICTIONS LIST]";
 
@@ -126,6 +126,7 @@ const TERMS: LegalDocument = {
       paragraphs: [
         "Every mine has a reward reserve that its creator committed at launch. That reserve is finite and its size is public. Rewards are paid only out of it, and the reserve leaves it only through a valid mining report or discovery claim that passes the checks described below. There is no other path.",
         "Reward rates step down as the reserve is depleted, according to the published schedule. A larger reserve does not mean a promised return, and a reward rate is not a yield, an interest rate or a forecast. In most mines the reserve will be mined out, and the mine will then be finished.",
+        "Anyone may add an existing coin as a mine by depositing its tokens into the mining vault. A platform fee of 2% of each such deposit, in the deposited coin, is transferred in the same transaction to Diggo's fee wallet; the remaining 98% becomes the mine's reserve. The split is shown before you sign. Deposited tokens, including the fee, are not refundable; once a mine is closed, tokens left unmined stay in the vault.",
         "A claim is idempotent and replay-safe: each eligible earnings event can be claimed at most once. A claim that has already been paid, a duplicated claim, a claim for a period that has not matured, or a claim whose accounting does not reconcile with the on-chain mine pays nothing. We may pause claims for a mine whose accounting does not reconcile until it does.",
       ],
     },

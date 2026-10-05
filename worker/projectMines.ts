@@ -4,6 +4,10 @@
  * POST /api/mines/deposit { mint, amount }   an unsigned transaction moving `amount` whole tokens from
  *                                            the signed-in wallet into the mining vault
  * POST /api/mines/create  { signature, mint, symbol, name, sponsor?, sponsorUrl?, days }
+ * GET  /api/mines/fee                         the platform fee rate
+ *
+ * A platform fee (shared/projectMineFee.ts, 2% by default) goes in the same transaction straight to
+ * the fee wallet; the mine is opened only when the chain shows it was paid.
  *
  * The mine's reserve is never taken from the request: it is what the deposit transaction, signed by
  * this same wallet, actually moved into the vault's account for this mint (depositFromTransaction).
@@ -29,6 +33,7 @@ import { buildAssociatedTokenAccountInstruction, decodeTokenAccountAmount, deriv
 import type { MeteoraRpcEnv } from "./meteora/types";
 import { buildSplTokenTransferInstruction } from "./meteora/vault";
 import { inspectSponsoredMint } from "./sponsored";
+import { feeFor, PROJECT_MINE_FEE_BPS, PROJECT_MINE_FEE_WALLET, PROJECT_MINE_MAX_FEE_BPS, splitDeposit } from "../shared/projectMineFee";
 import { parseSponsoredMineInput, wholeToRaw } from "../shared/sponsoredMine";
 
 /** How many coins one wallet may add per day. Mines share players' bots, so spam has a cost to everyone. */
@@ -60,8 +65,8 @@ async function mintTaken(env: RuntimeEnv, mint: string): Promise<boolean> {
  */
 export function depositFromTransaction(
   transaction: MeteoraTransaction,
-  expected: { mint: string; wallet: string; vaultAccount: string },
-): bigint | null {
+  expected: { mint: string; wallet: string; vaultAccount: string; feeAccount?: string | null; feeBps?: number },
+): { reserve: bigint; fee: bigint } | null {
   if (transaction.failed) return null;
   const delta = (owner: (row: { accountIndex: number; owner: string | null }) => boolean): bigint => {
     let total = 0n;
@@ -73,10 +78,31 @@ export function depositFromTransaction(
     for (const index of indexes) total += amountAt(transaction.postTokenBalances, index) - amountAt(transaction.preTokenBalances, index);
     return total;
   };
-  const received = delta((row) => transaction.accountKeys[row.accountIndex] === expected.vaultAccount);
-  const sent = -delta((row) => row.owner === expected.wallet && transaction.accountKeys[row.accountIndex] !== expected.vaultAccount);
-  if (received <= 0n || sent < received) return null;
-  return received;
+  const keyOf = (row: { accountIndex: number }) => transaction.accountKeys[row.accountIndex];
+  const received = delta((row) => keyOf(row) === expected.vaultAccount);
+  const feeAccount = expected.feeAccount ?? null;
+  const fee = feeAccount ? delta((row) => keyOf(row) === feeAccount) : 0n;
+  const sent = -delta((row) => row.owner === expected.wallet && keyOf(row) !== expected.vaultAccount && keyOf(row) !== feeAccount);
+  if (received <= 0n || fee < 0n || sent < received + fee) return null;
+  // The platform fee is a share of the whole deposit (mine + fee), rounded down like splitDeposit.
+  if (fee < feeFor(received + fee, expected.feeBps ?? 0)) return null;
+  return { reserve: received, fee };
+}
+
+/** The fee rate and wallet in force: PROJECT_MINE_FEE_BPS / PROJECT_MINE_FEE_WALLET, else the defaults. */
+export function mineFee(env: RuntimeEnv): { bps: number; wallet: string } {
+  const vars = env as RuntimeEnv & { PROJECT_MINE_FEE_BPS?: string; PROJECT_MINE_FEE_WALLET?: string };
+  const raw = String(vars.PROJECT_MINE_FEE_BPS ?? "").trim();
+  const parsed = raw === "" ? PROJECT_MINE_FEE_BPS : Number(raw);
+  const bps = Number.isInteger(parsed) && parsed >= 0 && parsed <= PROJECT_MINE_MAX_FEE_BPS ? parsed : PROJECT_MINE_FEE_BPS;
+  const wallet = String(vars.PROJECT_MINE_FEE_WALLET ?? "").trim();
+  return { bps, wallet: isBase58Address(wallet) ? wallet : PROJECT_MINE_FEE_WALLET };
+}
+
+/** GET /api/mines/fee */
+export function mineFeeInfo(env: RuntimeEnv): Response {
+  const { bps } = mineFee(env);
+  return json({ bps }, { headers: { "cache-control": "public, max-age=300" } });
 }
 
 /** POST /api/mines/deposit */
@@ -107,11 +133,14 @@ export async function prepareProjectMineDeposit(request: Request, env: RuntimeEn
     return apiError(error instanceof Error ? error.message : "That coin could not be read", 400);
   }
   const amount = wholeToRaw(whole, decimals);
+  const { bps, wallet: feeWallet } = mineFee(env);
+  const { fee, reserve } = splitDeposit(amount, bps);
   const source = deriveAssociatedTokenAddress(mint, wallet);
   const sourceAccount = await readAccount(chain, source);
   const balance = sourceAccount ? decodeTokenAccountAmount(sourceAccount.data) : 0n;
   if (balance < amount) return apiError("Your wallet does not hold that many tokens of this coin", 400);
   const destination = deriveAssociatedTokenAddress(mint, vault);
+  const feeDestination = deriveAssociatedTokenAddress(mint, feeWallet);
   const blockhash = await getChainRpc(meteoraRpcEnv(chain)).getLatestBlockhash({ commitment: "confirmed" }).send();
   // The player pays the fee and, the first time, the vault's token account rent. Nothing is signed
   // here: the only signature this transaction needs is the depositor's own.
@@ -121,13 +150,21 @@ export async function prepareProjectMineDeposit(request: Request, env: RuntimeEn
     (message) => setTransactionMessageLifetimeUsingBlockhash(blockhash.value, message),
     (message) => appendTransactionMessageInstructions([
       buildAssociatedTokenAccountInstruction({ payer: wallet, owner: vault, mint, associatedToken: destination }),
-      buildSplTokenTransferInstruction({ source, mint, destination, amount, authority: wallet, decimals }),
+      buildSplTokenTransferInstruction({ source, mint, destination, amount: reserve, authority: wallet, decimals }),
+      // The platform fee, in the same transaction, straight to the fee wallet.
+      ...(fee > 0n ? [
+        buildAssociatedTokenAccountInstruction({ payer: wallet, owner: feeWallet, mint, associatedToken: feeDestination }),
+        buildSplTokenTransferInstruction({ source, mint, destination: feeDestination, amount: fee, authority: wallet, decimals }),
+      ] : []),
     ], message),
   ));
   return json({
     transaction: getBase64EncodedWireTransaction(transaction),
     expiresAt: Math.floor(Date.now() / 1_000) + 60,
     amount: amount.toString(),
+    reserve: reserve.toString(),
+    fee: fee.toString(),
+    feeBps: bps,
     decimals,
   }, { headers: { "cache-control": "no-store" } });
 }
@@ -179,8 +216,16 @@ export async function createProjectMine(request: Request, env: RuntimeEnv): Prom
   const transaction = await readTransaction(chain, signature).catch(() => null);
   // Not visible yet is normal right after sending; the client retries.
   if (!transaction) return apiError("The deposit is not confirmed yet", 425);
-  const reserve = depositFromTransaction(transaction, { mint: input.mint, wallet, vaultAccount: deriveAssociatedTokenAddress(input.mint, vault) });
-  if (reserve === null) return apiError("That transaction is not a deposit of this coin from your wallet into the mining vault", 400);
+  const fee = mineFee(env);
+  const deposit = depositFromTransaction(transaction, {
+    mint: input.mint,
+    wallet,
+    vaultAccount: deriveAssociatedTokenAddress(input.mint, vault),
+    feeAccount: fee.bps > 0 ? deriveAssociatedTokenAddress(input.mint, fee.wallet) : null,
+    feeBps: fee.bps,
+  });
+  if (deposit === null) return apiError("That transaction is not a deposit of this coin from your wallet into the mining vault, with the platform fee", 400);
+  const reserve = deposit.reserve;
 
   const now = Math.floor(Date.now() / 1_000);
   try {
