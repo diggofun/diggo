@@ -648,3 +648,6 @@ details > summary { cursor: pointer; }
 .sponsored-empty { margin: 0; padding: 18px 20px; border-radius: 20px; background: var(--card); color: var(--muted); }
 .add-coin-pending { display: grid; gap: 12px; }
 .form-hint { margin: 0; color: var(--muted); font-size: 13px; }
+.launch-modal .launch-mode { display: flex; max-width: 100%; margin-top: 40px; }
+.launch-modal .launch-mode button { flex: 1; padding: 0 14px; font-size: 14px; white-space: nowrap; }
+.launch-modal .add-coin-pending + .form-message, .launch-modal form + .form-message { margin-top: 12px; }

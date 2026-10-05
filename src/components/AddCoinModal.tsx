@@ -38,8 +38,29 @@ function writePending(value: ProjectMineDetails | null): void {
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** What putting a coin into a mine means, in one paragraph. */
+export const ADD_COIN_INTRO =
+  "Put tokens of a coin you already hold into a mine. Diggo bots dig it and players get paid out in your coin, which brings your coin new holders. The tokens you deposit are what gets mined; you can't take them back.";
+
 export function AddCoinModal({ onClose, onAdded }: { onClose(): void; onAdded(): void }) {
   const dialogRef = useDialog<HTMLElement>(onClose);
+  // Portalled to <body>: the button lives inside a page section whose stacking context would
+  // otherwise paint the page over the dialog.
+  return createPortal(
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section ref={dialogRef} className="launch-modal" role="dialog" aria-modal="true" aria-labelledby="add-coin-title" onMouseDown={(event) => event.stopPropagation()}>
+        <button className="modal-close" onClick={onClose} aria-label="Close"><IconClose size={20} /></button>
+        <h2 id="add-coin-title">Add your coin</h2>
+        <p className="modal-intro">{ADD_COIN_INTRO}</p>
+        <AddCoinForm onAdded={onAdded} />
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
+/** The deposit form itself, shared by this dialog and the "Add existing coin" tab of the launch form. */
+export function AddCoinForm({ onAdded }: { onAdded(): void }) {
   const connected = useDiggoWallet();
   const [pending, setPending] = useState<ProjectMineDetails | null>(readPending);
   const [form, setForm] = useState({ mint: "", symbol: "", name: "", amount: "", days: 30, sponsor: "", sponsorUrl: "" });
@@ -140,17 +161,8 @@ export function AddCoinModal({ onClose, onAdded }: { onClose(): void; onAdded():
     }
   }
 
-  // Portalled to <body>: the button lives inside a page section whose stacking context would
-  // otherwise paint the page over the dialog.
-  return createPortal(
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section ref={dialogRef} className="launch-modal" role="dialog" aria-modal="true" aria-labelledby="add-coin-title" onMouseDown={(event) => event.stopPropagation()}>
-        <button className="modal-close" onClick={onClose} aria-label="Close"><IconClose size={20} /></button>
-        <h2 id="add-coin-title">Add your coin</h2>
-        <p className="modal-intro">
-          Put tokens of a coin you already hold into a mine. Diggo bots dig it and players get paid out in your coin,
-          which brings your coin new holders. The tokens you deposit are what gets mined; you can't take them back.
-        </p>
+  return (
+    <>
         {pending ? (
           <div className="add-coin-pending">
             <p>Your deposit of <strong>${pending.symbol.toUpperCase()}</strong> was sent. Finish opening the mine:</p>
@@ -180,8 +192,6 @@ export function AddCoinModal({ onClose, onAdded }: { onClose(): void; onAdded():
           </form>
         )}
         {message && <p className={"form-message" + (failed ? " admin-job-error" : "")} role="status">{message}</p>}
-      </section>
-    </div>,
-    document.body,
+    </>
   );
 }

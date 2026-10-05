@@ -48,6 +48,7 @@ import {
 import { useDiggoWallet } from "../wallet";
 import { TurnstileBox } from "./TurnstileBox";
 import { useDialog } from "./useDialog";
+import { ADD_COIN_INTRO, AddCoinForm } from "./AddCoinModal";
 import { usePendingTransaction } from "../onchain";
 import { launchMeteoraCoin } from "../meteora";
 import { isMeteoraConfigPubkey } from "../../shared/meteora";
@@ -71,6 +72,9 @@ export function LaunchModal({
   const [description, setDescription] = useState("");
   const [initialBuy, setInitialBuy] = useState("0");
   const [miningDays, setMiningDays] = useState(MINING_PERIOD_DEFAULT_DAYS);
+  // "existing" turns a coin that already trades into a mine instead of launching a new one.
+  const [mode, setMode] = useState<"new" | "existing">("new");
+  const canAddExisting = config.chainMode === "meteora";
   const [file, setFile] = useState<File | null>(null);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [state, setState] = useState<"idle" | "working" | "done">("idle");
@@ -272,6 +276,20 @@ export function LaunchModal({
       <section ref={dialogRef} className="launch-modal" role="dialog" aria-modal="true" aria-labelledby="launch-title" onMouseDown={(event) => event.stopPropagation()}>
         <button className="modal-close" onClick={onClose} aria-label="Close"><IconClose size={20} /></button>
         <div className="eyebrow">Launch on Diggo</div>
+        {canAddExisting && state !== "done" && (
+          <div className="segmented launch-mode" role="radiogroup" aria-label="Coin">
+            <button type="button" role="radio" aria-checked={mode === "new"} className={mode === "new" ? "active" : ""} onClick={() => setMode("new")}>Create a new coin</button>
+            <button type="button" role="radio" aria-checked={mode === "existing"} className={mode === "existing" ? "active" : ""} onClick={() => setMode("existing")}>Add existing coin</button>
+          </div>
+        )}
+        {mode === "existing" && canAddExisting ? (
+          <>
+            <h2 id="launch-title">Add a coin<br />players can mine.</h2>
+            <p className="modal-intro">{ADD_COIN_INTRO}</p>
+            <AddCoinForm onAdded={() => undefined} />
+          </>
+        ) : (
+        <>
         <h2 id="launch-title">Launch a coin<br />players can mine.</h2>
         <p className="modal-intro">
           {config.chainMode === "meteora"
@@ -323,6 +341,8 @@ export function LaunchModal({
             {recoveryMessage && <p className="form-message">{recoveryMessage}</p>}
           </details>
           </>
+        )}
+        </>
         )}
       </section>
     </div>
