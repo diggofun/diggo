@@ -667,3 +667,6 @@ details > summary { cursor: pointer; }
 .boost-tier span { color: var(--muted); font-size: 14px; }
 .boost-tier.active { border-color: #ff6a00; }
 .boosted-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: rgba(255, 106, 0, .16); color: #ff8a3d; font-size: 12px; font-weight: 700; }
+.wars-name { display: grid; gap: 2px; min-width: 0; }
+.wars-name small { color: var(--muted); font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wars-rank { display: block; color: #ff8a3d; font-weight: 700; text-decoration: none; }

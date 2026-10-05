@@ -3,7 +3,7 @@
  * how much is left, so players see the reserve shrink and sponsors see their deposit at work.
  */
 import { useEffect, useRef, useState } from "react";
-import { getSponsoredMines } from "../api";
+import { getMineWars, getSponsoredMines } from "../api";
 import { compact, countdown, tokenAmount } from "../format";
 import type { SponsoredMineView } from "../../shared/sponsoredMine";
 import { AddCoinModal } from "./AddCoinModal";
@@ -14,10 +14,12 @@ import { TokenOrb } from "./TokenOrb";
 export function SponsoredMines({ now, activeMint, viewer = null }: { now: number; activeMint: string | null; viewer?: string | null }) {
   const [mines, setMines] = useState<SponsoredMineView[] | null>(null);
   const reload = useRef<() => void>(() => undefined);
+  const [ranks, setRanks] = useState<Map<string, number>>(new Map());
   useEffect(() => {
     let live = true;
     const load = () => getSponsoredMines().then((list) => { if (live) setMines(list); }).catch(() => { if (live) setMines((current) => current ?? []); });
     void load();
+    getMineWars().then((wars) => { if (live) setRanks(new Map(wars.mines.map((entry) => [entry.mint, entry.rank]))); }).catch(() => undefined);
     reload.current = load;
     const timer = window.setInterval(load, 60_000);
     return () => { live = false; window.clearInterval(timer); };
@@ -59,7 +61,10 @@ export function SponsoredMines({ now, activeMint, viewer = null }: { now: number
                 <i style={{ width: Math.round(left * 100) + "%" }} />
               </div>
               <div className="payout-foot">
-                <span>{compact(mine.mined)} of {compact(mine.reserve)} mined · {mine.miners} {mine.miners === 1 ? "crew" : "crews"}</span>
+                <span>
+                  {ranks.has(mine.mint) && <a className="wars-rank" href="/leaderboards?tab=wars">#{ranks.get(mine.mint)} in Mine Wars</a>}
+                  {compact(mine.mined)} of {compact(mine.reserve)} mined · {mine.miners} {mine.miners === 1 ? "crew" : "crews"}
+                </span>
                 <span>{ends}</span>
               </div>
               <MineShare mint={mine.mint} symbol={mine.symbol} location="mine_card" canDig={mine.mint !== activeMint} onBoosted={() => reload.current()} />

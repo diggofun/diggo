@@ -42,6 +42,7 @@ import { officialMintFromEnv } from "../shared/officialMint";
 import type { AdminDashboardPayload } from "../shared/adminDashboard";
 import type { ProfileBot } from "../shared/profileBot";
 import type { SponsoredMineView } from "../shared/sponsoredMine";
+import type { MineWarsEntry } from "../shared/mineWars";
 
 /** An HTTP failure carrying the Worker's status and machine-readable code. */
 export class ApiError extends Error {
@@ -824,6 +825,10 @@ export async function registerMeteoraPool(pool: string, miningDays?: number): Pr
 }
 
 /** An unsigned transaction moving `amount` whole tokens of `mint` from the signed-in wallet into the mining vault. */
+export async function getMineWars(): Promise<{ mines: MineWarsEntry[] }> {
+  return getJson("/api/mines/wars");
+}
+
 /** An unsigned SOL payment for a boost of `mint`. */
 export async function prepareBoost(mint: string, tier: string): Promise<{ transaction: string; expiresAt: number; lamports: string }> {
   return postJson("/api/mines/boost/prepare", { mint, tier });

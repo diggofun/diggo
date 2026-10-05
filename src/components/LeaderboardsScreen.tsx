@@ -10,7 +10,8 @@
 import { useEffect, useState } from "react";
 import { IconLeaderboards } from "../icons";
 import type { TokenSummary } from "../../shared/types";
-import { getLeaderboards, type LeaderboardEntry, type LeaderboardsView } from "../api";
+import { getLeaderboards, getMineWars, type LeaderboardEntry, type LeaderboardsView } from "../api";
+import type { MineWarsEntry } from "../../shared/mineWars";
 import { compact, oreAmount } from "../format";
 import { describeMineStatus } from "../mineView";
 import { lookOf, defaultBot } from "../preferences";
@@ -51,8 +52,15 @@ function mineSymbol(symbol: string): string {
 
 export function LeaderboardsScreen({ tokens, onSelectMine }: LeaderboardsScreenProps) {
   const [data, setData] = useState<LeaderboardsView | null>(null);
-  const [tab, setTab] = useState<string>("power");
+  // ?tab=wars opens Mine Wars directly (linked from mine cards).
+  const [tab, setTab] = useState<string>(() => new URLSearchParams(window.location.search).get("tab") ?? "power");
   const [error, setError] = useState("");
+  const [wars, setWars] = useState<MineWarsEntry[] | null>(null);
+
+  useEffect(() => {
+    if (tab !== "wars" || wars !== null) return;
+    getMineWars().then((result) => setWars(result.mines)).catch(() => setWars([]));
+  }, [tab, wars]);
 
   useEffect(() => {
     getLeaderboards()
@@ -63,13 +71,17 @@ export function LeaderboardsScreen({ tokens, onSelectMine }: LeaderboardsScreenP
       .catch(() => setError("Leaderboards are unavailable right now."));
   }, []);
 
+  // Mine Wars ranks the mines the game is digging, so it only exists where the game boards do.
+  const hasGameBoards = Boolean(data?.boards.some((board) => board.key === "power"));
   const tabs = [
+    ...(hasGameBoards ? [{ key: "wars", label: "Mine Wars" }] : []),
     ...BOARD_TABS.filter((entry) => data?.boards.some((board) => board.key === entry.key)),
     { key: "mines", label: "Mines" },
   ];
   const entries = data?.boards.find((board) => board.key === tab)?.entries ?? [];
   const mines = tokens;
-  const rows = tab === "mines" ? mines.length : entries.length;
+  const rows = tab === "mines" ? mines.length : tab === "wars" ? (wars?.length ?? 1) : entries.length;
+  const listed = new Set(tokens.map((token) => token.mint));
 
   return (
     <section className="leaderboards page-shell" id="leaderboards">
@@ -103,10 +115,35 @@ export function LeaderboardsScreen({ tokens, onSelectMine }: LeaderboardsScreenP
       <div className="leaderboard-table">
         <div className="leaderboard-row leaderboard-head">
           <span>#</span>
-          <span>{tab === "mines" ? "Mine" : "Miner"}</span>
-          <span>{tab === "mines" ? "Network power" : "Score"}</span>
-          <span>{tab === "mines" ? "Status" : "Detail"}</span>
+          <span>{tab === "mines" || tab === "wars" ? "Mine" : "Miner"}</span>
+          <span>{tab === "mines" ? "Network power" : tab === "wars" ? "Crews now" : "Score"}</span>
+          <span>{tab === "mines" ? "Status" : tab === "wars" ? "This week" : "Detail"}</span>
         </div>
+
+        {tab === "wars" &&
+          (wars ?? []).map((mine) => {
+            const name = (
+              <span className="leaderboard-name">
+                <TokenOrb symbol={mine.symbol} imageUrl={tokens.find((token) => token.mint === mine.mint)?.imageUrl ?? null} />
+                <span className="wars-name">
+                  {mineSymbol(mine.symbol)} {mine.boosted && <span className="boosted-badge">🚀</span>}
+                  {mine.createdBy && <small>by {mine.createdBy}</small>}
+                </span>
+              </span>
+            );
+            const cells = (
+              <>
+                <b>{mine.rank}</b>
+                {name}
+                <strong>{mine.crews} {mine.crews === 1 ? "crew" : "crews"}</strong>
+                <em>{mine.minersThisWeek} {mine.minersThisWeek === 1 ? "miner" : "miners"}</em>
+              </>
+            );
+            return listed.has(mine.mint)
+              ? <button className="leaderboard-row is-clickable" key={"wars-" + mine.mint} onClick={() => onSelectMine(mine.mint)}>{cells}</button>
+              : <a className="leaderboard-row is-clickable" key={"wars-" + mine.mint} href={"/m/" + encodeURIComponent(mine.mint)} title="Send your crew to this mine">{cells}</a>;
+          })}
+        {tab === "wars" && wars === null && <div className="leaderboard-empty">Counting crews…</div>}
 
         {tab === "mines" &&
           mines.map((mine, index) => (
@@ -120,7 +157,7 @@ export function LeaderboardsScreen({ tokens, onSelectMine }: LeaderboardsScreenP
             </button>
           ))}
 
-        {tab !== "mines" &&
+        {tab !== "mines" && tab !== "wars" &&
           entries.map((entry) => (
             <div className="leaderboard-row" key={tab + "-" + entry.wallet}>
               <b>{entry.rank}</b>
