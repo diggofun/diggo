@@ -220,3 +220,17 @@ The former native program deployment, account migration, crank, and upgrade-auth
 are retained in [ONCHAIN.md](./ONCHAIN.md) and [ONCHAIN_V2_DESIGN.md](./ONCHAIN_V2_DESIGN.md) as
 architecture history and possible future work. They are not instructions for the current
 `CHAIN_MODE=meteora` mainnet launch.
+
+## Deploying from Git (Workers Builds)
+
+The production Worker `diggo-fun` is connected to this repository in the Cloudflare dashboard
+(Workers & Pages -> diggo-fun -> Settings -> Builds). A push to `main` builds and deploys it:
+
+- Build command: `npm run build`
+- Deploy command: `npx wrangler deploy`
+
+Secrets and variables live on the Worker in Cloudflare and are not touched by a deploy. D1
+migrations are not part of the build: apply new ones first (`wrangler d1 migrations apply diggo-db
+--remote`, or the SQL through the Cloudflare dashboard) and record them in `d1_migrations`. The
+code tolerates a missing newer table until its migration is applied, but the feature it backs
+(for example boosts) stays off until then. Build history and logs are in the same Builds tab.
