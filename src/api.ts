@@ -823,6 +823,26 @@ export async function registerMeteoraPool(pool: string, miningDays?: number): Pr
   return postJson<MeteoraPoolRegistration>("/api/meteora/pools/register", miningDays ? { pool, miningDays } : { pool });
 }
 
+/** An unsigned transaction moving `amount` whole tokens of `mint` from the signed-in wallet into the mining vault. */
+export async function prepareMineDeposit(mint: string, amount: string): Promise<{ transaction: string; expiresAt: number; amount: string; decimals: number }> {
+  return postJson("/api/mines/deposit", { mint, amount });
+}
+
+export interface ProjectMineDetails {
+  signature: string;
+  mint: string;
+  symbol: string;
+  name: string;
+  sponsor?: string;
+  sponsorUrl?: string;
+  days: number;
+}
+
+/** Turns a confirmed deposit into a mine. Answers 425 while the deposit is not visible yet. */
+export async function createProjectMine(details: ProjectMineDetails): Promise<{ mint: string; created: boolean; endsAt?: number }> {
+  return postJson("/api/mines/create", details);
+}
+
 /** Changes how long a mine takes to release its reserve. Only its creator or sponsor may. */
 export async function setMiningPeriod(mint: string, days: number): Promise<{ mint: string; days: number; endsAt: number }> {
   return postJson("/api/mines/period", { mint, days });

@@ -7,7 +7,7 @@
  */
 
 export const SPONSORED_MIN_DAYS = 1;
-export const SPONSORED_MAX_DAYS = 365;
+export const SPONSORED_MAX_DAYS = 3_650;
 export const SPONSORED_DEFAULT_DAYS = 30;
 
 export interface SponsoredMineInput {

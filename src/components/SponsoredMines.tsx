@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { getSponsoredMines } from "../api";
 import { compact, countdown, tokenAmount } from "../format";
 import type { SponsoredMineView } from "../../shared/sponsoredMine";
+import { AddCoinModal } from "./AddCoinModal";
 import { MiningPeriodEditor } from "./MiningPeriodEditor";
 import { TokenOrb } from "./TokenOrb";
 
@@ -20,14 +21,20 @@ export function SponsoredMines({ now, activeMint, viewer = null }: { now: number
     const timer = window.setInterval(load, 60_000);
     return () => { live = false; window.clearInterval(timer); };
   }, []);
+  const [adding, setAdding] = useState(false);
   const active = (mines ?? []).filter((mine) => mine.status === "ACTIVE" && mine.remaining > 0);
-  if (active.length === 0) return null;
+  if (mines === null) return null;
   return (
     <section className="sponsored-mines" aria-labelledby="sponsored-mines-title">
       <div className="section-heading">
-        <h2 id="sponsored-mines-title">More mines</h2>
-        <small>Created by other projects. Rewards pay out right away.</small>
+        <div>
+          <h2 id="sponsored-mines-title">More mines</h2>
+          <small>Created by coin communities. Rewards pay out right away.</small>
+        </div>
+        <button className="btn btn-primary btn-sm" type="button" onClick={() => setAdding(true)}>Add your coin</button>
       </div>
+      {adding && <AddCoinModal onClose={() => setAdding(false)} onAdded={() => reload.current()} />}
+      {active.length === 0 && <p className="sponsored-empty">Hold a Solana coin? Put some of it in a mine and Diggo players will dig it.</p>}
       <div className="sponsored-grid">
         {active.map((mine) => {
           const left = mine.reserve > 0 ? Math.max(0, Math.min(1, mine.remaining / mine.reserve)) : 0;

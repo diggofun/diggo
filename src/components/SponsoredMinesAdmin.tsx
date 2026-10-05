@@ -82,7 +82,7 @@ export function SponsoredMinesAdmin({ sign, vault }: { sign: Sign | null; vault:
         <input placeholder="Project link (https://…, optional)" {...field("sponsorUrl")} />
         <input placeholder="Project wallet (can change the period, optional)" {...field("sponsorWallet")} />
         <input placeholder="Reserve (whole tokens)" inputMode="numeric" required {...field("reserve")} />
-        <input placeholder="Days" type="number" min={1} max={365} required {...field("days")} />
+        <input placeholder="Days" type="number" min={1} max={3650} required {...field("days")} />
         <button className="btn btn-primary" type="submit" disabled={busy || !sign}>{busy ? "Signing…" : "Register mine"}</button>
       </form>
       {message && <p className={failed ? "form-message admin-job-error" : "form-message admin-notice"} role="status">{message}</p>}

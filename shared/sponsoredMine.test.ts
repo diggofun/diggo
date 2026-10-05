@@ -25,7 +25,7 @@ describe("parseSponsoredMineInput", () => {
     ["a fractional reserve", { reserve: "1.5" }],
     ["a negative reserve", { reserve: -5 }],
     ["zero days", { days: 0 }],
-    ["too many days", { days: 366 }],
+    ["too many days", { days: 3651 }],
     ["fractional days", { days: 1.5 }],
     ["an http link", { sponsorUrl: "http://example.com" }],
     ["a script link", { sponsorUrl: "javascript:alert(1)" }],
