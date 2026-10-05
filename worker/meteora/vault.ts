@@ -14,6 +14,7 @@ import {
   type KeyPairSigner,
 } from "@solana/kit";
 import bs58 from "bs58";
+import { METEORA_TOKEN } from "../../shared/meteora/config";
 import { sendAndConfirmWithFeePayer } from "../chainV2";
 import {
   buildAssociatedTokenAccountInstruction,
@@ -44,7 +45,15 @@ import {
 
 export const METEORA_EVENT_AUTHORITY = "8Ks12pbrD6PXxfty1hVQiE9sc289zgU1zHkvXhrSdriF";
 export const WITHDRAW_LEFTOVER_DISCRIMINATOR = Uint8Array.of(20, 198, 202, 237, 235, 243, 183, 66);
-export const SPL_TRANSFER_INSTRUCTION = 3;
+/**
+ * SPL Token TransferChecked. The payout instructions list the accounts as source, mint, destination,
+ * authority, which is TransferChecked's layout; the plain Transfer (3) reads only source,
+ * destination, authority, so with the mint in second place it would treat the mint as the
+ * destination and every payout would fail on chain.
+ */
+export const SPL_TRANSFER_CHECKED_INSTRUCTION = 12;
+/** Every coin launched through the Diggo DBC config has this many decimals. */
+export const PAYOUT_TOKEN_DECIMALS = METEORA_TOKEN.decimals;
 export const CREATE_ASSOCIATED_TOKEN_ACCOUNT_IDEMPOTENT_INSTRUCTION = 1;
 
 const MAX_U64 = (1n << 64n) - 1n;
@@ -124,12 +133,17 @@ export function buildSplTokenTransferInstruction(params: {
   destination: string;
   amount: bigint;
   authority: string;
+  /** The mint's decimals; TransferChecked fails on chain when they do not match the mint. */
+  decimals?: number;
   tokenProgram?: string;
 }): Instruction {
+  const decimals = params.decimals ?? PAYOUT_TOKEN_DECIMALS;
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) throw new Error("decimals are out of range");
   const amount = u64Le(params.amount);
-  const data = new Uint8Array(amount.length + 1);
-  data[0] = SPL_TRANSFER_INSTRUCTION;
+  const data = new Uint8Array(amount.length + 2);
+  data[0] = SPL_TRANSFER_CHECKED_INSTRUCTION;
   data.set(amount, 1);
+  data[amount.length + 1] = decimals;
   return {
     programAddress: address(params.tokenProgram ?? METEORA_TOKEN_PROGRAM_ID),
     accounts: [
@@ -140,6 +154,17 @@ export function buildSplTokenTransferInstruction(params: {
     ],
     data,
   };
+}
+
+/**
+ * Reads a TransferChecked payload (opcode, little-endian u64 amount, decimals) exactly as
+ * buildSplTokenTransferInstruction writes it, or null for anything else.
+ */
+export function readTransferChecked(data: Uint8Array): { amount: bigint; decimals: number } | null {
+  if (data.length !== 10 || data[0] !== SPL_TRANSFER_CHECKED_INSTRUCTION) return null;
+  let amount = 0n;
+  for (let index = 0; index < 8; index += 1) amount |= BigInt(data[1 + index]!) << BigInt(index * 8);
+  return { amount, decimals: data[9]! };
 }
 
 export async function buildPreparedMiningClaimTransaction(params: {
@@ -582,10 +607,8 @@ export function verifyMiningClaimTransfer(
       return new Uint8Array();
     }
   })();
-  if (transferData.length !== 9 || transferData[0] !== SPL_TRANSFER_INSTRUCTION) return false;
-  let transferAmount = 0n;
-  for (let index = 1; index < transferData.length; index += 1) transferAmount |= BigInt(transferData[index]) << BigInt((8 - index) * 8);
-  if (transferAmount !== expected.amount) return false;
+  const transfer = readTransferChecked(transferData);
+  if (!transfer || transfer.decimals !== PAYOUT_TOKEN_DECIMALS || transfer.amount !== expected.amount) return false;
   const sourceOwner = transaction.preTokenBalances.find((row) => transaction.accountKeys[row.accountIndex] === expected.source)?.owner;
   const destinationOwner = transaction.postTokenBalances.find((row) => transaction.accountKeys[row.accountIndex] === expected.destination)?.owner;
   return sourceOwner === expected.vault && destinationOwner === expected.wallet &&
@@ -639,11 +662,9 @@ export function verifyClaimBatchTransfer(
         return new Uint8Array();
       }
     })();
-    if (transferData.length !== 9 || transferData[0] !== SPL_TRANSFER_INSTRUCTION) return false;
-    let amount = 0n;
-    for (let byte = 1; byte < transferData.length; byte += 1) {
-      amount |= BigInt(transferData[byte]) << BigInt((8 - byte) * 8);
-    }
+    const decoded = readTransferChecked(transferData);
+    if (!decoded || decoded.decimals !== PAYOUT_TOKEN_DECIMALS) return false;
+    const amount = decoded.amount;
     const key = `${mint}:${amount.toString()}`;
     if (!remaining.has(key)) return false;
     remaining.delete(key);

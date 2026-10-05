@@ -311,7 +311,7 @@ describe("claim-all batch security", () => {
             {
               programId: tokenProgram,
               accounts: [source, MINT, destination, vault],
-              data: bs58.encode(Uint8Array.of(3, 0, 0, 0, 0, 0, 0, 0, 10)),
+              data: bs58.encode(Uint8Array.of(12, 10, 0, 0, 0, 0, 0, 0, 0, 9)),
             },
           ],
         },
@@ -363,7 +363,7 @@ describe("claim-all batch security", () => {
           accountKeys: [WALLET, source, destination, vault, MINT, systemProgram, tokenProgram],
           instructions: [
             { programId: associatedTokenProgram, accounts: [WALLET, destination, WALLET, MINT, systemProgram, tokenProgram], data: bs58.encode(Uint8Array.of(1)) },
-            { programId: tokenProgram, accounts: [source, MINT, destination, vault], data: bs58.encode(Uint8Array.of(3, 0, 0, 0, 0, 0, 0, 0, 10)) },
+            { programId: tokenProgram, accounts: [source, MINT, destination, vault], data: bs58.encode(Uint8Array.of(12, 10, 0, 0, 0, 0, 0, 0, 0, 9)) },
           ],
         },
       },

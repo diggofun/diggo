@@ -36,7 +36,9 @@ export {
 } from "./rpc";
 export {
   METEORA_EVENT_AUTHORITY,
-  SPL_TRANSFER_INSTRUCTION,
+  SPL_TRANSFER_CHECKED_INSTRUCTION,
+  PAYOUT_TOKEN_DECIMALS,
+  readTransferChecked,
   WITHDRAW_LEFTOVER_DISCRIMINATOR,
 } from "./vault";
 export * from "./types";

@@ -27,6 +27,8 @@ import {
 } from "./rpc";
 import {
   buildSplTokenTransferInstruction,
+  readTransferChecked,
+  SPL_TRANSFER_CHECKED_INSTRUCTION,
   buildPreparedMiningClaimTransaction,
   buildWithdrawLeftoverInstruction,
   METEORA_EVENT_AUTHORITY,
@@ -278,7 +280,7 @@ describe("Meteora vault instructions", () => {
     expect(accounts[2]?.role).toBe(AccountRole.WRITABLE);
   });
 
-  it("encodes the SPL Transfer opcode and raw amount", () => {
+  it("encodes TransferChecked: opcode 12, little-endian amount, the mint's decimals", () => {
     const instruction = buildSplTokenTransferInstruction({
       source: keys.baseVault,
       mint: keys.mint,
@@ -287,9 +289,21 @@ describe("Meteora vault instructions", () => {
       authority: keys.receiver,
     });
     const data = instruction.data ?? new Uint8Array();
-    expect(data).toHaveLength(9);
-    expect(data[0]).toBe(3);
-    expect(BigInt("0x" + Array.from(data.slice(1)).map((byte) => byte.toString(16).padStart(2, "0")).reverse().join(""))).toBe(1_000_000_001n);
+    expect(data).toHaveLength(10);
+    expect(data[0]).toBe(SPL_TRANSFER_CHECKED_INSTRUCTION);
+    expect(BigInt("0x" + Array.from(data.slice(1, 9)).map((byte) => byte.toString(16).padStart(2, "0")).reverse().join(""))).toBe(1_000_000_001n);
+    expect(data[9]).toBe(9);
+    // TransferChecked's account order: source, mint, destination, authority.
+    expect(Array.from(instruction.accounts ?? []).map((account) => account.address)).toEqual([keys.baseVault, keys.mint, keys.quoteVault, keys.receiver]);
+  });
+
+  it("reads back exactly what it writes, for any amount and decimals", () => {
+    for (const [amount, decimals] of [[1n, 9], [10n, 9], [1_000_000_001n, 9], [(1n << 64n) - 1n, 6], [256n, 0]] as const) {
+      const data = buildSplTokenTransferInstruction({ source: keys.baseVault, mint: keys.mint, destination: keys.quoteVault, amount, authority: keys.receiver, decimals }).data!;
+      expect(readTransferChecked(Uint8Array.from(data))).toEqual({ amount, decimals });
+    }
+    expect(readTransferChecked(Uint8Array.of(3, 10, 0, 0, 0, 0, 0, 0, 0))).toBeNull();
+    expect(readTransferChecked(Uint8Array.of(12, 10, 0, 0, 0, 0, 0, 0, 0))).toBeNull();
   });
 
   it("prepares a player-paid legacy claim signed by the vault", async () => {
@@ -330,7 +344,7 @@ describe("Meteora vault instructions", () => {
       destination,
       vault.address,
     ]);
-    expect(transfer?.data).toEqual(Uint8Array.of(3, 10, 0, 0, 0, 0, 0, 0, 0));
+    expect(transfer?.data).toEqual(Uint8Array.of(12, 10, 0, 0, 0, 0, 0, 0, 0, 9));
     expect(prepared.signatures[keys.trader as never]).toBeNull();
     expect(prepared.signatures[vault.address as never]).toBeDefined();
   });
@@ -358,7 +372,8 @@ describe("Meteora vault instructions", () => {
         {
           programId: METEORA_TOKEN_PROGRAM_ID,
           accounts: [source, keys.mint, destination, vault],
-          data: bs58.encode(Uint8Array.of(3, 0, 0, 0, 0, 0, 0, 0, 10)),
+          // Exactly what the payout builder signs, so the verifier is checked against the real encoding.
+          data: bs58.encode(Uint8Array.from(buildSplTokenTransferInstruction({ source, mint: keys.mint, destination, amount: 10n, authority: vault }).data!)),
         },
       ],
       logs: [],
@@ -386,7 +401,16 @@ describe("Meteora vault instructions", () => {
     }, expected)).toBe(false);
     expect(verifyMiningClaimTransfer({
       ...base,
-      instructions: [base.instructions[0], { ...base.instructions[1], data: bs58.encode(Uint8Array.of(3, 0, 0, 0, 0, 0, 0, 0, 9)) }],
+      instructions: [base.instructions[0], { ...base.instructions[1], data: bs58.encode(Uint8Array.of(12, 9, 0, 0, 0, 0, 0, 0, 0, 9)) }],
+    }, expected)).toBe(false);
+    // Wrong decimals, and the plain Transfer opcode with this account order, are both refused.
+    expect(verifyMiningClaimTransfer({
+      ...base,
+      instructions: [base.instructions[0], { ...base.instructions[1], data: bs58.encode(Uint8Array.of(12, 10, 0, 0, 0, 0, 0, 0, 0, 6)) }],
+    }, expected)).toBe(false);
+    expect(verifyMiningClaimTransfer({
+      ...base,
+      instructions: [base.instructions[0], { ...base.instructions[1], data: bs58.encode(Uint8Array.of(3, 10, 0, 0, 0, 0, 0, 0, 0)) }],
     }, expected)).toBe(false);
     expect(verifyMiningClaimTransfer({
       ...base,
