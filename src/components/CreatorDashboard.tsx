@@ -14,8 +14,10 @@ import { TokenOrb } from "./TokenOrb";
 export function CreatorDashboard({ wallet }: { wallet: string }) {
   const [mines, setMines] = useState<CreatorMineView[] | null>(null);
   const [adding, setAdding] = useState(false);
+  // Read when the list loads, not during render, so a boost badge reflects the time of the fetch.
+  const [loadedAt, setLoadedAt] = useState(0);
   const load = useCallback(() => {
-    getCreatorMines().then((result) => setMines(result.mines)).catch(() => setMines([]));
+    getCreatorMines().then((result) => { setMines(result.mines); setLoadedAt(Date.now()); }).catch(() => setMines([]));
   }, []);
   useEffect(() => { load(); }, [load, wallet]);
   if (mines === null) return null;
@@ -31,7 +33,7 @@ export function CreatorDashboard({ wallet }: { wallet: string }) {
       {adding && <AddCoinModal onClose={() => setAdding(false)} onAdded={load} />}
       {mines.map((mine) => {
         const left = mine.reserve > 0 ? Math.max(0, Math.min(1, mine.remaining / mine.reserve)) : 0;
-        const boosted = mine.boostedUntil !== null && mine.boostedUntil * 1000 > Date.now();
+        const boosted = mine.boostedUntil !== null && mine.boostedUntil * 1000 > loadedAt;
         return (
           <article className="payout-card creator-mine" key={mine.mint}>
             <div className="mine-panel-coin">
