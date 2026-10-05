@@ -44,6 +44,7 @@ import type { ProfileBot } from "../shared/profileBot";
 import type { SponsoredMineView } from "../shared/sponsoredMine";
 import type { MineWarsEntry } from "../shared/mineWars";
 import type { CreatorMineView } from "../shared/creatorMines";
+import type { MarketToken } from "../shared/marketToken";
 
 /** An HTTP failure carrying the Worker's status and machine-readable code. */
 export class ApiError extends Error {
@@ -835,15 +836,32 @@ export interface SwapQuoteView {
   quote: Record<string, unknown>;
   inAmount: string;
   decimals: number;
-  balance: string;
-  outLamports: string;
+  balance?: string;
+  outLamports?: string;
+  /** What the swap returns, raw: lamports for a sell, the coin's units for a buy. */
+  outAmount: string;
+  side?: "buy" | "sell";
   priceImpactPct: number;
   feeBps: number;
 }
 
-/** A Jupiter quote for selling `amount` whole tokens (or "max") of `mint` for SOL. */
-export async function getSwapQuote(mint: string, amount: string): Promise<SwapQuoteView> {
-  return postJson("/api/swap/quote", { mint, amount });
+/** A Jupiter quote: sell `amount` whole tokens (or "max") of `mint` for SOL, or buy it with `amount` SOL. */
+export async function getSwapQuote(mint: string, amount: string, side: "buy" | "sell" = "sell", slippageBps?: number): Promise<SwapQuoteView> {
+  return postJson("/api/swap/quote", { mint, amount, side, ...(slippageBps ? { slippageBps } : {}) });
+}
+
+/** The signed-in wallet's balance of `mint` (raw units) and of SOL (lamports). */
+export async function getSwapBalance(mint: string): Promise<{ balance: string; decimals: number; lamports: string }> {
+  return postJson("/api/swap/balance", { mint });
+}
+
+export async function getMarketTokens(mints: string[]): Promise<MarketToken[]> {
+  if (mints.length === 0) return [];
+  return (await getJson<{ tokens: MarketToken[] }>("/api/market/tokens?mints=" + mints.slice(0, 30).map(encodeURIComponent).join(","))).tokens ?? [];
+}
+
+export async function searchMarket(query: string): Promise<MarketToken[]> {
+  return (await getJson<{ tokens: MarketToken[] }>("/api/market/search?q=" + encodeURIComponent(query))).tokens ?? [];
 }
 
 export async function buildSwap(quote: Record<string, unknown>): Promise<{ transaction: string; expiresAt: number }> {

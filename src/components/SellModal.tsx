@@ -54,7 +54,7 @@ export function SellModal({ mint, symbol, onClose }: { mint: string; symbol: str
       const sent = await signPreparedClaim({ wallet: connected.wallet, payout, nowSeconds: Math.floor(Date.now() / 1_000) });
       setSignature(sent.signature);
       track("coin_sold", { mint });
-      setMessage(sent.confirmed ? `Sold. ≈ ${sol(quote.outLamports)} SOL is in your wallet.` : "Sent. It can take a few seconds to show in your wallet.");
+      setMessage(sent.confirmed ? `Sold. ≈ ${sol(quote.outAmount)} SOL is in your wallet.` : "Sent. It can take a few seconds to show in your wallet.");
       setQuote(null);
     } catch (error) {
       setFailed(true);
@@ -65,7 +65,7 @@ export function SellModal({ mint, symbol, onClose }: { mint: string; symbol: str
     }
   }
 
-  const held = quote ? Number(quote.balance) / 10 ** quote.decimals : null;
+  const held = quote?.balance ? Number(quote.balance) / 10 ** quote.decimals : null;
   return createPortal(
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section ref={dialogRef} className="launch-modal sell-modal" role="dialog" aria-modal="true" aria-labelledby="sell-title" onMouseDown={(event) => event.stopPropagation()}>
@@ -83,7 +83,7 @@ export function SellModal({ mint, symbol, onClose }: { mint: string; symbol: str
         {quote && (
           <div className="sell-quote">
             <div><span>You sell</span><strong>{(Number(quote.inAmount) / 10 ** quote.decimals).toLocaleString("en-US", { maximumFractionDigits: 4 })} ${symbol}</strong></div>
-            <div><span>You get about</span><strong>{sol(quote.outLamports)} SOL</strong></div>
+            <div><span>You get about</span><strong>{sol(quote.outAmount)} SOL</strong></div>
             <small>
               {quote.feeBps > 0 ? `Includes a ${feeLabel(quote.feeBps)} Diggo fee. ` : ""}
               {quote.priceImpactPct > 0.01 ? `Price impact ${(quote.priceImpactPct * 100).toFixed(2)}%. ` : ""}

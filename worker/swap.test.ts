@@ -70,3 +70,14 @@ describe("swap fee", () => {
     expect(sent.feeAccount).toBeUndefined();
   });
 });
+
+describe("amounts", async () => {
+  const { toRaw } = await import("./swap");
+  it("parses decimal amounts into raw units", () => {
+    expect(toRaw("1", 9)).toBe(1_000_000_000n);
+    expect(toRaw("0.5", 9)).toBe(500_000_000n);
+    expect(toRaw("1.234567891", 6)).toBe(1_234_567n);
+    expect(toRaw("abc", 9)).toBeNull();
+    expect(toRaw("-1", 9)).toBeNull();
+  });
+});

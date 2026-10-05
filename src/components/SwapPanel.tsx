@@ -161,16 +161,7 @@ function MeteoraSwapPanel({
   );
 }
 
-export function SwapPanel({
-  token,
-  programAddress,
-  cluster = "mainnet-beta",
-  chainMode = "native",
-  meteoraConfigPubkey = "",
-  isOfficialDiggo = false,
-  signer,
-  onTraded,
-}: {
+export interface SwapPanelProps {
   token: TokenSummary;
   programAddress: string;
   cluster?: string;
@@ -180,7 +171,18 @@ export function SwapPanel({
   isOfficialDiggo?: boolean;
   signer: DiggoWallet | null;
   onTraded(): void;
-}) {
+}
+
+export function SwapPanel({
+  token,
+  programAddress,
+  cluster = "mainnet-beta",
+  chainMode = "native",
+  meteoraConfigPubkey = "",
+  isOfficialDiggo = false,
+  signer,
+  onTraded,
+}: SwapPanelProps) {
   if (chainMode === "meteora") {
     return <MeteoraSwapPanel token={token} cluster={cluster} configPubkey={meteoraConfigPubkey} isOfficialDiggo={isOfficialDiggo} signer={signer} onTraded={onTraded} />;
   }

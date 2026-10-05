@@ -18,7 +18,9 @@ import {
   IconMenu,
   IconMine,
   IconOre,
+  IconMines,
   IconPlus,
+  IconTrade,
   IconSearch,
   IconSettings,
   IconStreak,
@@ -69,6 +71,7 @@ const PLAY_ITEMS: NavItem[] = [
   { page: "crew", href: "/crew", label: "Crew", icon: IconCrew },
   { page: "discoveries", href: "/discoveries", label: "Discoveries", icon: IconDiscoveries },
   { page: "explore", href: "/explore", label: "Explore coins", icon: IconSearch },
+  { page: "trade", href: "/trade", label: "Trade", icon: IconTrade },
   { page: "leaderboards", href: "/leaderboards", label: "Leaderboards", icon: IconLeaderboards },
   { page: "diggo", href: "/diggo", label: "$DIGGO", image: "/assets/brand/diggo-logo-256.png" },
 ];
@@ -114,10 +117,12 @@ interface AppHeaderProps {
   game: GameState | null;
   solBalance: number | null;
   onLaunch(): void;
+  /** Opens "Add an existing coin"; absent where coins cannot be added (native mode). */
+  onAddCoin?(): void;
   onAuthenticated(wallet: string): void;
 }
 
-export function AppHeader({ page, session, signedIn, isAdmin = false, summary, game, solBalance, onLaunch, onAuthenticated }: AppHeaderProps) {
+export function AppHeader({ page, session, signedIn, isAdmin = false, summary, game, solBalance, onLaunch, onAddCoin, onAuthenticated }: AppHeaderProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   /*
    * SOL/USD for the balance chip. Fetched here rather than lifted into App because it is purely a
@@ -181,6 +186,11 @@ export function AppHeader({ page, session, signedIn, isAdmin = false, summary, g
               </span>
             </div>
           )}
+          {onAddCoin && (
+            <button type="button" className="btn btn-ghost header-add-coin" onClick={onAddCoin}>
+              <IconMines size={18} /> <span>Add coin</span>
+            </button>
+          )}
           <button type="button" className="btn btn-dark header-launch" onClick={onLaunch}>
             <IconPlus size={18} /> <span>Launch</span>
           </button>
@@ -212,6 +222,11 @@ export function AppHeader({ page, session, signedIn, isAdmin = false, summary, g
           <button type="button" className="sidebar-link" onClick={() => { setSidebarOpen(false); onLaunch(); }}>
             <IconPlus size={22} /> Create coin
           </button>
+          {onAddCoin && (
+            <button type="button" className="sidebar-link" onClick={() => { setSidebarOpen(false); onAddCoin(); }}>
+              <IconMines size={22} /> Add an existing coin
+            </button>
+          )}
         </nav>
 
         <div className="sidebar-shortcuts">

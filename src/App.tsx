@@ -87,6 +87,8 @@ const LeaderboardsScreen = lazy(() => import("./components/LeaderboardsScreen").
 const MineInfoPanel = lazy(() => import("./components/MineInfoPanel").then((module) => ({ default: module.MineInfoPanel })));
 const MiningReportModal = lazy(() => import("./components/MiningReportModal").then((module) => ({ default: module.MiningReportModal })));
 const SwapPanel = lazy(() => import("./components/SwapPanel").then((module) => ({ default: module.SwapPanel })));
+const AddCoinModal = lazy(() => import("./components/AddCoinModal").then((module) => ({ default: module.AddCoinModal })));
+const TradeScreen = lazy(() => import("./components/TradeScreen").then((module) => ({ default: module.TradeScreen })));
 /** The official coin's trade page. Lazy for the same reason: it pulls in the swap terminal. */
 const DiggoTradePage = lazy(() => import("./components/DiggoTradePage").then((module) => ({ default: module.DiggoTradePage })));
 const RentReclaimPanel = lazy(() => import("./components/RentReclaimPanel").then((module) => ({ default: module.RentReclaimPanel })));
@@ -138,6 +140,7 @@ export default function App() {
   const [activating, setActivating] = useState(false);
   const [activateError, setActivateError] = useState("");
   const [launchOpen, setLaunchOpen] = useState(false);
+  const [addCoinOpen, setAddCoinOpen] = useState(false);
   const [session, setSession] = useState<string | null>(null);
   /** The wallet the Worker confirmed as an admin (ADMIN_WALLETS), or null. Only shows the link. */
   const [adminWallet, setAdminWallet] = useState<string | null>(null);
@@ -933,6 +936,7 @@ export default function App() {
         game={config.chainMode === "meteora" ? game : null}
         solBalance={solBalance}
         onLaunch={openLaunch}
+        onAddCoin={config.chainMode === "meteora" ? () => setAddCoinOpen(true) : undefined}
         onAuthenticated={setSession}
       />
 
@@ -1122,7 +1126,9 @@ export default function App() {
             <section className="page-shell"><EmptyState title="No mine selected">Pick a mine from the board to see its reserve, power and market.</EmptyState></section>
           ))}
 
-          {page === "trade" && (featured && (config.chainMode === "meteora" || config.programId) ? (
+          {page === "trade" && config.chainMode === "meteora" ? (
+            <TradeScreen tokens={tokens} programAddress={config.programId} cluster={config.cluster} chainMode={config.chainMode} meteoraConfigPubkey={config.meteoraConfigPubkey} signer={connected?.wallet ?? null} onTraded={() => void fetchBootstrap()} />
+          ) : page === "trade" && (featured && config.programId ? (
             <SwapPanel token={featured} programAddress={config.programId} cluster={config.cluster} chainMode={config.chainMode} meteoraConfigPubkey={config.meteoraConfigPubkey} isOfficialDiggo={featured.mint === config.officialMint} signer={connected?.wallet ?? null} onTraded={() => void refreshFeaturedToken()} />
           ) : (
             <section className="page-shell">
@@ -1195,6 +1201,11 @@ export default function App() {
       <SiteFooter />
 
       <Suspense fallback={null}>
+        {addCoinOpen && (
+          <Suspense fallback={null}>
+            <AddCoinModal onClose={() => setAddCoinOpen(false)} onAdded={() => undefined} />
+          </Suspense>
+        )}
         {launchOpen && (
           <LaunchModal
             onClose={() => setLaunchOpen(false)}
