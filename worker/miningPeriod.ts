@@ -54,7 +54,7 @@ export async function applyMiningPeriod(
   if (!owner) return { ok: false, status: 404, error: "Mine not found" };
   const admin = isAdminWallet(env, input.actor);
   if (!admin && (owner.owner === null || owner.owner !== input.actor)) {
-    return { ok: false, status: 403, error: "Only the coin's creator or the mine's sponsor can change its mining period" };
+    return { ok: false, status: 403, error: "Only the creator of this coin or mine can change its mining period" };
   }
   if (!owner.open) return { ok: false, status: 409, error: "This mine is closed" };
 

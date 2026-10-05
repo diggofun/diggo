@@ -69,18 +69,18 @@ export function SponsoredMinesAdmin({ sign, vault }: { sign: Sign | null; vault:
 
   return (
     <div className="admin-block">
-      <div className="admin-block-head"><span>SPONSORED MINES</span><small>{mines.filter((mine) => mine.status === "ACTIVE").length} active</small></div>
+      <div className="admin-block-head"><span>MINES CREATED BY PROJECTS</span><small>{mines.filter((mine) => mine.status === "ACTIVE").length} active</small></div>
       <p className="admin-empty">
-        1. The sponsor sends the tokens to the mining vault{vault ? <> (<code>{vault}</code>)</> : null}. 2. Register the
+        1. The project sends the tokens to the mining vault{vault ? <> (<code>{vault}</code>)</> : null}. 2. Register the
         amount here. Classic SPL tokens only; the reserve is released evenly over the duration.
       </p>
       <form className="admin-restriction-form sponsored-admin-form" onSubmit={(event) => void submit(event)}>
         <input placeholder="Mint address" required {...field("mint")} />
         <input placeholder="Symbol" required maxLength={13} {...field("symbol")} />
         <input placeholder="Name" required maxLength={40} {...field("name")} />
-        <input placeholder="Sponsor" required maxLength={40} {...field("sponsor")} />
-        <input placeholder="Sponsor link (https://…, optional)" {...field("sponsorUrl")} />
-        <input placeholder="Sponsor wallet (can change the period, optional)" {...field("sponsorWallet")} />
+        <input placeholder="Created by (project name)" required maxLength={40} {...field("sponsor")} />
+        <input placeholder="Project link (https://…, optional)" {...field("sponsorUrl")} />
+        <input placeholder="Project wallet (can change the period, optional)" {...field("sponsorWallet")} />
         <input placeholder="Reserve (whole tokens)" inputMode="numeric" required {...field("reserve")} />
         <input placeholder="Days" type="number" min={1} max={365} required {...field("days")} />
         <button className="btn btn-primary" type="submit" disabled={busy || !sign}>{busy ? "Signing…" : "Register mine"}</button>

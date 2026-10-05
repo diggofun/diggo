@@ -73,7 +73,7 @@ export function MeteoraMineDashboard({ game, mine, now, connected, activating, e
               <strong>{mine?.name ?? sponsored?.name ?? "No mine yet"}</strong>
               <small>
                 {mine ? "$" + mine.symbol + " · assigned for this shift"
-                  : sponsored ? <><span className="sponsored-badge">Sponsored</span>{" · $" + sponsored.symbol + (sponsored.sponsor ? " by " + sponsored.sponsor : "") + " · pays out now"}</>
+                  : sponsored ? <>{"$" + sponsored.symbol + " · "}<span className="sponsored-badge">{sponsored.sponsor ? "mine created by " + sponsored.sponsor : "community mine"}</span>{" · pays out now"}</>
                   : "A mine is assigned when your shift starts"}
               </small>
             </div>
@@ -343,7 +343,7 @@ export function MeteoraPortfolioScreen({ game, portfolio, tokens }: { game: Game
           <strong className="payout-amount">{tokenAmount(claimable)} {"$" + (token?.symbol ?? mine.coin.symbol)}</strong>
           {!sponsored && <div className="progress" aria-label="Progress to graduation"><i style={{ width: Math.round(reserve * 100) + "%" }} /></div>}
           <div className="payout-foot">
-            <span>{sponsored ? "Sponsored mine · pays out now" : Math.round(reserve * 100) + "% of the graduation target"}</span>
+            <span>{sponsored ? (mine.coin.sponsor ? "Mine created by " + mine.coin.sponsor : "Community mine") + " · pays out now" : Math.round(reserve * 100) + "% of the graduation target"}</span>
             <a className="btn btn-primary" href="/discoveries">Open Discoveries</a>
           </div>
         </article>

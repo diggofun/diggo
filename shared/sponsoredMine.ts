@@ -39,7 +39,7 @@ export function parseSponsoredMineInput(body: Record<string, unknown>): Sponsore
   const name = text(body.name, 40);
   if (name.length < 1 || name.length > 40) return { ok: false, error: "Name must be 1-40 characters" };
   const sponsor = text(body.sponsor, 40);
-  if (sponsor.length < 1 || sponsor.length > 40) return { ok: false, error: "Sponsor must be 1-40 characters" };
+  if (sponsor.length < 1 || sponsor.length > 40) return { ok: false, error: "Creator name must be 1-40 characters" };
   const rawUrl = text(body.sponsorUrl, 200);
   let sponsorUrl: string | null = null;
   if (rawUrl) {
@@ -48,11 +48,11 @@ export function parseSponsoredMineInput(body: Record<string, unknown>): Sponsore
       if (url.protocol !== "https:" || rawUrl.length > 200) throw new Error("not https");
       sponsorUrl = url.toString();
     } catch {
-      return { ok: false, error: "Sponsor link must be an https:// URL" };
+      return { ok: false, error: "Project link must be an https:// URL" };
     }
   }
   const sponsorWallet = text(body.sponsorWallet, 44) || null;
-  if (sponsorWallet !== null && !BASE58.test(sponsorWallet)) return { ok: false, error: "Sponsor wallet must be a Solana address" };
+  if (sponsorWallet !== null && !BASE58.test(sponsorWallet)) return { ok: false, error: "Project wallet must be a Solana address" };
   const reserveWhole = typeof body.reserve === "number" && Number.isSafeInteger(body.reserve)
     ? String(body.reserve)
     : text(body.reserve, 20).replace(/[,_ ]/g, "");

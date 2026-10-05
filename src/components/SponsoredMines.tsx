@@ -25,8 +25,8 @@ export function SponsoredMines({ now, activeMint, viewer = null }: { now: number
   return (
     <section className="sponsored-mines" aria-labelledby="sponsored-mines-title">
       <div className="section-heading">
-        <h2 id="sponsored-mines-title">Sponsored mines</h2>
-        <small>Projects fund these. Rewards pay out right away.</small>
+        <h2 id="sponsored-mines-title">More mines</h2>
+        <small>Created by other projects. Rewards pay out right away.</small>
       </div>
       <div className="sponsored-grid">
         {active.map((mine) => {
@@ -39,7 +39,7 @@ export function SponsoredMines({ now, activeMint, viewer = null }: { now: number
                 <div>
                   <strong>${mine.symbol}</strong>
                   <small>
-                    Sponsored by{" "}
+                    Mine created by{" "}
                     {mine.sponsorUrl ? <a href={mine.sponsorUrl} target="_blank" rel="noopener noreferrer nofollow">{mine.sponsor}</a> : mine.sponsor}
                   </small>
                 </div>
