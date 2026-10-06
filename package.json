@@ -7,7 +7,7 @@
     "dev": "vite",
     "dev:worker": "wrangler dev",
     "dev:local": "npm run db:local && node scripts/dev-local.mjs",
-    "build": "tsc -b && vite build",
+    "build": "wrangler types && tsc -b && vite build",
     "check": "npm run types && npm run typecheck && npm run lint && npm run test && npm run build && wrangler deploy --dry-run",
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint src worker shared",
