@@ -18,7 +18,7 @@
 
 ## Coding Style & Naming Conventions
 
-Use TypeScript with two-space indentation, semicolons, double quotes, and trailing commas where supported. Name React components and classes in `PascalCase`, functions and variables in `camelCase`, and constants in `UPPER_SNAKE_CASE`. Keep route handlers small and verb-led, such as `createLaunch()` or `listTokens()`. Name migrations sequentially, for example `0003_add_trade_index.sql`. No formatter or linter is configured; preserve surrounding style and use TypeScript as the static-quality gate. Do not hand-edit generated `worker-configuration.d.ts`.
+Use TypeScript with two-space indentation, semicolons, double quotes, and trailing commas where supported. Name React components and classes in `PascalCase`, functions and variables in `camelCase`, and constants in `UPPER_SNAKE_CASE`. Keep route handlers small and verb-led, such as `createLaunch()` or `listTokens()`. Name migrations sequentially, for example `0003_add_trade_index.sql`. ESLint and TypeScript are the static-quality gate (`npm run check`); preserve surrounding style. Do not hand-edit generated `worker-configuration.d.ts`.
 
 ## Testing Guidelines
 
@@ -26,7 +26,7 @@ Vitest discovers `*.test.ts` files; existing economic invariant tests are in `sh
 
 ## Commit & Pull Request Guidelines
 
-This checkout has no Git history, so no established commit convention can be inferred. Use concise Conventional Commit messages, for example `feat(worker): add trade webhook` or `fix(ui): reject invalid symbol`. Pull requests should explain user impact, list verification commands, link relevant issues, and include screenshots for visual changes. Call out new D1 migrations, bindings, environment variables, or deployment steps explicitly.
+Use concise Conventional Commit messages, for example `feat(worker): add trade webhook` or `fix(ui): reject invalid symbol`. Pull requests should explain user impact, list verification commands, link relevant issues, and include screenshots for visual changes. Call out new D1 migrations, bindings, environment variables, or deployment steps explicitly.
 
 ## Security & Configuration
 

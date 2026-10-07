@@ -34,3 +34,4 @@ _tmp_icons/
 qa/
 qa-artifacts/
 __pycache__/
+.claude/
