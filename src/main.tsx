@@ -29,7 +29,16 @@ function PendingScope() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
+// /embed/mine/<mint>: only the live mine, for iframes (the X player card). No wallet stack, no app.
+const embedMint = window.location.pathname.startsWith("/embed/mine/")
+  ? (await import("./components/EmbedMine")).embedMintFromPath(window.location.pathname)
+  : null;
+
+if (embedMint) {
+  document.documentElement.dataset.embed = "1";
+  const { EmbedMine } = await import("./components/EmbedMine");
+  ReactDOM.createRoot(document.getElementById("root")!).render(<EmbedMine mint={embedMint} />);
+} else ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ClientProvider client={solanaClient}>
       <PendingScope />

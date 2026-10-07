@@ -15,7 +15,7 @@
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/media/*", "/webhooks/*", "/ARCHITECTURE.md", "/ph", "/ph/*", "/r/*", "/m/*"]
+    "run_worker_first": ["/api/*", "/media/*", "/webhooks/*", "/ARCHITECTURE.md", "/ph", "/ph/*", "/r/*", "/m/*", "/embed/*"]
   },
   "routes": [
     {
@@ -175,7 +175,7 @@
         "directory": "./dist",
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/api/*", "/media/*", "/webhooks/*", "/ARCHITECTURE.md", "/ph", "/ph/*", "/r/*", "/m/*"]
+        "run_worker_first": ["/api/*", "/media/*", "/webhooks/*", "/ARCHITECTURE.md", "/ph", "/ph/*", "/r/*", "/m/*", "/embed/*"]
       },
       "vars": {
         "ENVIRONMENT": "staging",

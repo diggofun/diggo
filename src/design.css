@@ -758,3 +758,22 @@ details > summary { cursor: pointer; }
   .external-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .external-chart { height: 360px; }
 }
+
+/* The embeddable live mine (EmbedMine.tsx): fills a 16:9 frame, no chrome. */
+html[data-embed], html[data-embed] body { margin: 0; height: 100%; overflow: hidden; background: #141414; }
+.embed-mine { box-sizing: border-box; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; gap: 10px; width: 100vw; height: 100vh; padding: 14px 16px 16px; background: #141414; color: #f4f4f5; font-family: var(--font-sans, system-ui, sans-serif); }
+.embed-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.embed-head > div { display: grid; flex: 1; min-width: 0; }
+.embed-head strong { font-size: 22px; }
+.embed-head small { color: #a1a1aa; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.embed-scene.bot-mine { aspect-ratio: auto; height: 100%; min-height: 0; border-radius: 22px; }
+@media (max-aspect-ratio: 1/1) { .embed-scene.bot-mine { align-self: center; height: auto; aspect-ratio: 16 / 10; max-height: 100%; } }
+.embed-stats { display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 8px 22px; }
+.embed-stats > div:not(.embed-bar) { display: grid; }
+.embed-stats strong { font-size: 20px; line-height: 1.1; }
+.embed-stats span { color: #a1a1aa; font-size: 12px; }
+.embed-bar { height: 10px; border-radius: 999px; background: #2a2a2a; overflow: hidden; }
+.embed-bar i { display: block; height: 100%; border-radius: 999px; background: #ff6a00; transition: width .6s ease; }
+.embed-cta { display: grid; place-items: center; min-height: 44px; border-radius: 999px; background: #f4f4f5; color: #141414; font-weight: 800; text-decoration: none; }
+.embed-note { align-self: center; justify-self: center; color: #a1a1aa; }
+@media (max-width: 460px) { .embed-stats { grid-template-columns: auto auto; } .embed-bar { grid-column: 1 / -1; } }

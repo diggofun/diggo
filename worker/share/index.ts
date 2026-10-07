@@ -14,8 +14,12 @@ import { CARD_WIDTH, cardSvg, previewText } from "./card";
 import { shareStats, walletForShareCode } from "./stats";
 import { mineCardSvg, minePreviewText } from "./mineCard";
 import { mineShareStats } from "./mineStats";
+import { isBase58Address } from "../http";
 
 const CARD_CACHE_SECONDS = 600;
+/** The player's size on X: 16:9, the shape a post can show without cropping. */
+export const EMBED_WIDTH = 800;
+export const EMBED_HEIGHT = 450;
 const FALLBACK_CARD = "/og-image-v4.jpg";
 
 let wordmarkUri: Promise<string> | null = null;
@@ -144,17 +148,54 @@ export async function mineLandingPage(request: Request, env: RuntimeEnv, ctx: Ex
     const { title, description } = minePreviewText(stats);
     const image = `${origin}/api/share/mine/${encodeURIComponent(stats.mint)}.png?h=${Math.floor(Date.now() / 3_600_000)}`;
     const link = `${origin}/m/${encodeURIComponent(stats.mint)}`;
-    const rewritten = new HTMLRewriter()
+    let rewriter = new HTMLRewriter()
       .on("title", new TitleText(title))
       .on('meta[property="og:title"], meta[name="twitter:title"]', new MetaContent(title))
       .on('meta[property="og:description"], meta[name="twitter:description"], meta[name="description"]', new MetaContent(description))
       .on('meta[property="og:image"], meta[property="og:image:secure_url"], meta[name="twitter:image"]', new MetaContent(image))
       .on('meta[property="og:image:type"]', new MetaContent("image/png"))
       .on('meta[property="og:image:alt"], meta[name="twitter:image:alt"]', new MetaContent(`Bots mining $${stats.symbol} on Diggo.fun`))
-      .on('meta[property="og:url"]', new MetaContent(link))
-      .transform(page);
+      .on('meta[property="og:url"]', new MetaContent(link));
+    // The playable card: X shows the live mine inside the post instead of the still image. X only
+    // renders a player card for an approved domain, and drops the preview entirely for one that is
+    // not, so it stays off (the still card above) until X_PLAYER_CARD is set to "1".
+    if (String((env as RuntimeEnv & { X_PLAYER_CARD?: string }).X_PLAYER_CARD ?? "") === "1") {
+      const player = `${origin}/embed/mine/${encodeURIComponent(stats.mint)}`;
+      rewriter = rewriter
+        .on('meta[name="twitter:card"]', new MetaContent("player"))
+        .on("head", {
+          element(head) {
+            head.append(
+              `<meta name="twitter:player" content="${player}" />` +
+                `<meta name="twitter:player:width" content="${EMBED_WIDTH}" />` +
+                `<meta name="twitter:player:height" content="${EMBED_HEIGHT}" />`,
+              { html: true },
+            );
+          },
+        });
+    }
+    const rewritten = rewriter.transform(page);
     const headers = new Headers(rewritten.headers);
     headers.set("cache-control", "public, max-age=300");
     return new Response(rewritten.body, { status: 200, headers });
   });
+}
+
+/**
+ * GET /embed/mine/:mint - the live mine as a page meant for an iframe (the X player card, a blog, a
+ * Telegram message). It is the app's own shell; the client draws the mine only, with no wallet and
+ * no account. Framing is allowed from anywhere for this path alone, since it holds nothing a visitor
+ * could be tricked into signing, and it stays out of search results.
+ */
+export async function embedMinePage(request: Request, env: RuntimeEnv, mint: string): Promise<Response> {
+  const url = new URL(request.url);
+  const page = await env.ASSETS.fetch(new Request(url.origin + "/", { headers: request.headers }));
+  if (!page.ok || !isBase58Address(mint)) return page;
+  const headers = new Headers(page.headers);
+  const csp = headers.get("content-security-policy");
+  if (csp) headers.set("content-security-policy", csp.replace(/frame-ancestors[^;]*/, "frame-ancestors *"));
+  headers.delete("x-frame-options");
+  headers.set("x-robots-tag", "noindex");
+  headers.set("cache-control", "public, max-age=60");
+  return new Response(page.body, { status: 200, headers });
 }

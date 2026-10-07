@@ -39,7 +39,8 @@ import { getSolUsd } from "./oracle";
 import { playerProfile } from "./player";
 import { portfolioForWallet } from "./portfolio";
 import { publicProfile, setProfileBot, setUsername } from "./profile";
-import { mineCardPng, mineLandingPage, shareCardPng, shareLandingPage } from "./share";
+import { embedMinePage, mineCardPng, mineLandingPage, shareCardPng, shareLandingPage } from "./share";
+import { liveMineResponse } from "./share/live";
 import {
   deletePushSubscription,
   pushPublicKey,
@@ -99,6 +100,10 @@ async function handleFetch(request: Request, env: RuntimeEnv, ctx: ExecutionCont
     // Mine links unfurl as the mine's card; the app then sends the visitor's crew to that mine.
     const mineCardMatch = pathname.match(/^\/api\/share\/mine\/([^/]+)\.png$/);
     if (request.method === "GET" && mineCardMatch) return await mineCardPng(request, env, ctx, decodeURIComponent(mineCardMatch[1]!));
+    const liveMineMatch = pathname.match(/^\/api\/live\/mine\/([^/]+)$/);
+    if (request.method === "GET" && liveMineMatch) return await liveMineResponse(env, decodeURIComponent(liveMineMatch[1]!));
+    const embedMineMatch = pathname.match(/^\/embed\/mine\/([^/]+)\/?$/);
+    if (request.method === "GET" && embedMineMatch) return await embedMinePage(request, env, decodeURIComponent(embedMineMatch[1]!));
     const mineLinkMatch = pathname.match(/^\/m\/([^/]+)\/?$/);
     if (request.method === "GET" && mineLinkMatch) return await mineLandingPage(request, env, ctx, decodeURIComponent(mineLinkMatch[1]!));
     const shareCardMatch = pathname.match(/^\/api\/share\/([^/]+)\.png$/);
